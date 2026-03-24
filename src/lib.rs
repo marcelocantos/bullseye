@@ -3,6 +3,7 @@
 
 pub mod graph;
 pub mod handler;
+pub mod render;
 pub mod schema;
 pub mod store;
 pub mod tools;

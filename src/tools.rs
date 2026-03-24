@@ -165,6 +165,17 @@ pub struct GraphTool {
     pub cwd: String,
 }
 
+/// Render targets.md from the YAML source.
+#[mcp_tool(
+    name = "targets_render",
+    description = "Render docs/targets.md from docs/targets.yaml. The YAML is the source of truth; the markdown is a human-readable view. Mutation tools (add, update, retire) auto-render, so this is only needed for manual re-rendering."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct RenderTool {
+    /// Working directory to discover targets.yaml from.
+    pub cwd: String,
+}
+
 fn default_filter() -> String {
     "active".to_string()
 }
@@ -181,5 +192,6 @@ tool_box!(TargetTools, [
     RetireTool,
     RankTool,
     ValidateTool,
-    GraphTool
+    GraphTool,
+    RenderTool
 ]);

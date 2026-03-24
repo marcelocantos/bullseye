@@ -14,6 +14,7 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::McpServer;
 
 use crate::graph;
+use crate::render;
 use crate::schema::{Status, Target};
 use crate::store;
 use crate::tools::TargetTools;
@@ -51,6 +52,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::RankTool(t) => handle_rank(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
+            TargetTools::RenderTool(t) => handle_render(t),
         }
     }
 }
@@ -75,6 +77,16 @@ fn load_file(cwd: &str) -> Result<(std::path::PathBuf, crate::schema::TargetsFil
         .ok_or_else(|| tool_err("no targets.yaml found"))?;
     let file = store::load(&path).map_err(|e| tool_err(e))?;
     Ok((path, file))
+}
+
+/// Save the YAML and re-render the markdown view.
+fn save_and_render(
+    path: &Path,
+    file: &crate::schema::TargetsFile,
+) -> Result<(), CallToolError> {
+    store::save(path, file).map_err(|e| tool_err(e))?;
+    render::render_to_file(path, file).map_err(|e| tool_err(e))?;
+    Ok(())
 }
 
 fn handle_list(t: crate::tools::ListTool) -> ToolResult {
@@ -174,7 +186,7 @@ fn handle_add(t: crate::tools::AddTool) -> ToolResult {
     };
 
     file.targets.insert(next_id.clone(), target);
-    store::save(&path, &file).map_err(|e| tool_err(e))?;
+    save_and_render(&path, &file)?;
 
     text_result(format!(
         "Created 🎯{next_id} \"{name}\"\nWeight: {w:.0} (value {v} / cost {c})\nFile: {path}",
@@ -240,7 +252,7 @@ fn handle_update(t: crate::tools::UpdateTool) -> ToolResult {
         return text_result(format!("🎯{}: no changes", t.id));
     }
 
-    store::save(&path, &file).map_err(|e| tool_err(e))?;
+    save_and_render(&path, &file)?;
 
     text_result(format!(
         "Updated 🎯{}:\n{}",
@@ -281,7 +293,7 @@ fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     let name = target.name.clone();
     let cost = target.cost;
 
-    store::save(&path, &file).map_err(|e| tool_err(e))?;
+    save_and_render(&path, &file)?;
 
     let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
     if let Some(actual) = t.actual_cost {
@@ -385,4 +397,11 @@ fn handle_graph(t: crate::tools::GraphTool) -> ToolResult {
     let (_path, file) = load_file(&t.cwd)?;
     let mermaid = graph::mermaid(&file);
     text_result(format!("```mermaid\n{mermaid}\n```"))
+}
+
+fn handle_render(t: crate::tools::RenderTool) -> ToolResult {
+    let (path, file) = load_file(&t.cwd)?;
+    render::render_to_file(&path, &file).map_err(|e| tool_err(e))?;
+    let md_path = render::markdown_path(&path);
+    text_result(format!("Rendered {}", md_path.display()))
 }

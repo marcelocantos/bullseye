@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use targets::graph;
+use targets::render;
 use targets::schema::TargetsFile;
 use targets::store;
 
@@ -119,4 +120,43 @@ fn blocked_detection() {
     let t2 = ranked.iter().find(|r| r.id == "T2").unwrap();
     assert!(!t2.blocked_by.is_empty());
     assert_eq!(t2.blocked_by[0], "T1");
+}
+
+#[test]
+fn renders_markdown() {
+    let file = load_fixture();
+    let md = render::render_markdown(&file);
+
+    // Has structure.
+    assert!(md.contains("# Targets"));
+    assert!(md.contains("## Active"));
+    assert!(md.contains("## Achieved"));
+
+    // Has target entries with 🎯 prefix.
+    assert!(md.contains("### 🎯T1 All tests pass on CI"));
+    assert!(md.contains("### 🎯T4 Documentation covers all public APIs"));
+
+    // Has weight line.
+    assert!(md.contains("- **Weight**:"));
+
+    // Has acceptance criteria.
+    assert!(md.contains("- **Acceptance**:"));
+
+    // Has gates.
+    assert!(md.contains("- **Gates**: 🎯T1 (80%)"));
+
+    // Achieved target has achieved date.
+    assert!(md.contains("- **Achieved**: 2026-03-10"));
+
+    // Has mermaid graph (active targets exist).
+    assert!(md.contains("```mermaid"));
+    assert!(md.contains("graph TD"));
+}
+
+#[test]
+fn markdown_path_derivation() {
+    use std::path::Path;
+    let yaml = Path::new("/foo/docs/targets.yaml");
+    let md = render::markdown_path(yaml);
+    assert_eq!(md, Path::new("/foo/docs/targets.md"));
 }
