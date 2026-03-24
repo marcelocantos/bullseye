@@ -1,0 +1,49 @@
+last_evaluated: abc1234
+
+targets:
+  T1:
+    name: All tests pass on CI
+    status: converging
+    value: 8
+    cost: 3
+    acceptance:
+      - CI green on all platforms
+      - No test skips without documented reason
+    context: Cross-platform CI is a project goal.
+    discovered: 2026-03-01
+
+  T2:
+    name: Logging uses spdlog macros everywhere
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - No printf/fprintf in non-vendor code
+      - All diagnostic output uses SPDLOG_* macros
+    context: Consistent logging improves debuggability.
+    discovered: 2026-03-05
+
+  T3:
+    name: Platform code is isolated behind interfaces
+    status: identified
+    value: 5
+    cost: 5
+    acceptance:
+      - No platform #ifdefs outside src/platform/
+      - Each platform has a dedicated compilation unit
+    context: Keeps business logic portable.
+    gates:
+      - target: T1
+        criticality: 0.8
+    discovered: 2026-03-05
+
+  T4:
+    name: Documentation covers all public APIs
+    status: achieved
+    value: 3
+    cost: 2
+    acceptance:
+      - Every public function has a doc comment
+    context: Improve onboarding.
+    discovered: 2026-03-01
+    achieved: 2026-03-10
