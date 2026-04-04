@@ -66,6 +66,21 @@ pub struct Target {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verifies: Vec<String>,
 
+    /// For verify targets: the upstream target to re-enter on failure.
+    /// When verification fails, the rework target is reset to converging
+    /// and the verify target carries forward a diagnosis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rework: Option<String>,
+
+    /// Maximum number of rework cycles before escalation.
+    /// Only meaningful on targets that are rework destinations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_budget: Option<u32>,
+
+    /// Current retry count (incremented each time rework re-enters this target).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retries: u32,
+
     /// Freeform tags (e.g., "visual").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -111,6 +126,10 @@ impl Default for Kind {
     fn default() -> Self {
         Kind::Work
     }
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 fn is_work(kind: &Kind) -> bool {

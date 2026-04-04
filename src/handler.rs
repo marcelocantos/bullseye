@@ -50,6 +50,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::UpdateTool(t) => handle_update(t),
             TargetTools::RetireTool(t) => handle_retire(t),
             TargetTools::FrontierTool(t) => handle_frontier(t),
+            TargetTools::ReworkTool(t) => handle_rework(t),
             TargetTools::RankTool(t) => handle_rank(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
@@ -188,6 +189,9 @@ fn handle_add(t: crate::tools::AddTool) -> ToolResult {
         gates: Vec::new(),
         depends_on: Vec::new(),
         verifies: t.verifies,
+        rework: None,
+        retry_budget: None,
+        retries: 0,
         tags: t.tags,
         origin: t.origin,
         discovered: Local::now().date_naive(),
@@ -354,6 +358,66 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
         out.push('\n');
     }
     out.push_str(&format!("{} target(s) ready for work", targets.len()));
+
+    text_result(out)
+}
+
+fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
+    let (path, mut file) = load_file(&t.cwd)?;
+
+    // Validate the verify target.
+    let verify = file
+        .targets
+        .get(&t.id)
+        .ok_or_else(|| tool_err(format!("target {} not found", t.id)))?;
+
+    if verify.kind != crate::schema::Kind::Verify {
+        return err(format!("🎯{} is not a verify target", t.id));
+    }
+
+    let rework_id = verify
+        .rework
+        .clone()
+        .ok_or_else(|| tool_err(format!("🎯{} has no rework target", t.id)))?;
+
+    // Check the rework destination exists.
+    if !file.targets.contains_key(&rework_id) {
+        return err(format!("rework target {} does not exist", rework_id));
+    }
+
+    // Reset the verify target to identified.
+    file.targets.get_mut(&t.id).unwrap().status = Status::Identified;
+
+    // Reset the rework target to converging and increment retries.
+    let rework_target = file.targets.get_mut(&rework_id).unwrap();
+    rework_target.status = Status::Converging;
+    rework_target.retries += 1;
+    let retries = rework_target.retries;
+    let budget = rework_target.retry_budget;
+    let rework_name = rework_target.name.clone();
+
+    // Append diagnosis to rework target's context if provided.
+    if !t.diagnosis.is_empty() {
+        let ctx = &mut file.targets.get_mut(&rework_id).unwrap().context;
+        if !ctx.is_empty() {
+            ctx.push_str("\n\n");
+        }
+        ctx.push_str(&format!("Rework #{retries}: {}", t.diagnosis));
+    }
+
+    save_and_render(&path, &file)?;
+
+    let mut out = format!(
+        "Rework triggered: 🎯{} → 🎯{rework_id} \"{rework_name}\"\n\
+         Retry {retries}",
+        t.id,
+    );
+    if let Some(budget) = budget {
+        out.push_str(&format!(" of {budget}"));
+        if retries >= budget {
+            out.push_str("\n\n⚠ RETRY BUDGET EXHAUSTED — escalate to human review");
+        }
+    }
 
     text_result(out)
 }

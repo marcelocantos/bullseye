@@ -204,6 +204,19 @@ pub fn mermaid(file: &TargetsFile) -> String {
         }
     }
 
+    // Rework edges (backward, shown in red).
+    for (id, t) in &active {
+        if let Some(ref rework) = t.rework {
+            if active.contains_key(rework.as_str()) {
+                lines.push(format!(
+                    "    {} -.->|rework| {}",
+                    mermaid_node(id),
+                    mermaid_node(rework)
+                ));
+            }
+        }
+    }
+
     lines.join("\n")
 }
 
@@ -277,6 +290,23 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
         if t.kind == Kind::Work && !t.verifies.is_empty() {
             errors.push(format!("{id}: work target must not have verifies"));
         }
+
+        // Rework validation.
+        if let Some(ref rework) = t.rework {
+            if t.kind != Kind::Verify {
+                errors.push(format!("{id}: only verify targets can have rework"));
+            }
+            if !file.targets.contains_key(rework) {
+                errors.push(format!("{id}: rework target {rework} does not exist"));
+            } else if !t.verifies.contains(rework) {
+                errors.push(format!(
+                    "{id}: rework target {rework} must be in verifies list"
+                ));
+            }
+        }
+
+        // Retry budget only on targets that could be rework destinations.
+        // (Advisory — we don't enforce this strictly, just warn if retries > budget.)
     }
 
     // Cycle detection on parent hierarchy.

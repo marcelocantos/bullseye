@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use targets::graph;
 use targets::render;
-use targets::schema::{Kind, TargetsFile};
+use targets::schema::{Kind, Status, TargetsFile};
 use targets::store;
 
 fn fixture_path() -> PathBuf {
@@ -190,7 +190,6 @@ fn validate_work_with_verifies_is_error() {
 fn frontier_includes_verify_when_unblocked() {
     let mut file = load_fixture();
     // Achieve T1 and T3 so T5 becomes unblocked.
-    use targets::schema::Status;
     file.targets.get_mut("T1").unwrap().status = Status::Achieved;
     file.targets.get_mut("T3").unwrap().status = Status::Achieved;
     let front = graph::frontier(&file);
@@ -215,6 +214,54 @@ fn render_shows_verify_target() {
     // T5 should have the ✓ marker and Verifies line.
     assert!(md.contains("### 🎯T5 ✓ CI and platform isolation verified"));
     assert!(md.contains("- **Verifies**: 🎯T1, 🎯T3"));
+    assert!(md.contains("- **Rework**: 🎯T1"));
+}
+
+#[test]
+fn render_shows_retry_budget() {
+    let file = load_fixture();
+    let md = render::render_markdown(&file);
+    assert!(md.contains("- **Retry budget**: 3"));
+}
+
+#[test]
+fn rework_field_parsed() {
+    let file = load_fixture();
+    let t5 = &file.targets["T5"];
+    assert_eq!(t5.rework.as_deref(), Some("T1"));
+}
+
+#[test]
+fn retry_budget_parsed() {
+    let file = load_fixture();
+    assert_eq!(file.targets["T1"].retry_budget, Some(3));
+    assert_eq!(file.targets["T1"].retries, 0);
+}
+
+#[test]
+fn validate_rework_must_be_in_verifies() {
+    let mut file = load_fixture();
+    // Point rework at T3 which is not in verifies... wait, T3 IS in verifies.
+    // Point rework at T2 which is NOT in verifies.
+    file.targets.get_mut("T5").unwrap().rework = Some("T2".to_string());
+    let errors = graph::validate(&file);
+    assert!(errors.iter().any(|e| e.contains("T5") && e.contains("must be in verifies")));
+}
+
+#[test]
+fn validate_rework_only_on_verify() {
+    let mut file = load_fixture();
+    // Give T1 (work target) a rework field.
+    file.targets.get_mut("T1").unwrap().rework = Some("T2".to_string());
+    let errors = graph::validate(&file);
+    assert!(errors.iter().any(|e| e.contains("T1") && e.contains("only verify")));
+}
+
+#[test]
+fn mermaid_shows_rework_edge() {
+    let file = load_fixture();
+    let diagram = graph::mermaid(&file);
+    assert!(diagram.contains("rework"));
 }
 
 #[test]

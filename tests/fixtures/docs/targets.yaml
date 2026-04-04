@@ -10,6 +10,7 @@ targets:
       - CI green on all platforms
       - No test skips without documented reason
     context: Cross-platform CI is a project goal.
+    retry_budget: 3
     discovered: 2026-03-01
 
   T2:
@@ -61,6 +62,7 @@ targets:
     verifies:
       - T1
       - T3
+    rework: T1
     depends_on:
       - T1
       - T3

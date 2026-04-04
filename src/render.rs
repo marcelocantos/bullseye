@@ -108,6 +108,18 @@ fn render_target(out: &mut String, id: &str, t: &Target) {
         writeln!(out, "- **Verifies**: {}", vs.join(", ")).unwrap();
     }
 
+    if let Some(ref rework) = t.rework {
+        writeln!(out, "- **Rework**: 🎯{rework}").unwrap();
+    }
+
+    if let Some(budget) = t.retry_budget {
+        writeln!(out, "- **Retry budget**: {budget}").unwrap();
+    }
+
+    if t.retries > 0 {
+        writeln!(out, "- **Retries**: {}", t.retries).unwrap();
+    }
+
     if !t.tags.is_empty() {
         writeln!(out, "- **Tags**: {}", t.tags.join(", ")).unwrap();
     }

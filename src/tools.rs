@@ -151,6 +151,24 @@ pub struct FrontierTool {
     pub cwd: String,
 }
 
+/// Trigger a rework cycle from a verify target.
+#[mcp_tool(
+    name = "targets_rework",
+    description = "Trigger rework from a failed verification. Resets the rework target to converging, increments its retry count, and resets the verify target to identified. Returns an escalation warning if the retry budget is exhausted."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ReworkTool {
+    /// Working directory to discover targets.yaml from.
+    pub cwd: String,
+
+    /// The verify target ID that failed.
+    pub id: String,
+
+    /// Diagnosis: what went wrong (carried forward as context).
+    #[serde(default)]
+    pub diagnosis: String,
+}
+
 /// Compute WSJF ranking with blocking analysis.
 #[mcp_tool(
     name = "targets_rank",
@@ -210,6 +228,7 @@ tool_box!(TargetTools, [
     UpdateTool,
     RetireTool,
     FrontierTool,
+    ReworkTool,
     RankTool,
     ValidateTool,
     GraphTool,
