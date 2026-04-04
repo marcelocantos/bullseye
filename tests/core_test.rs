@@ -265,6 +265,98 @@ fn mermaid_shows_rework_edge() {
 }
 
 #[test]
+fn tunnel_detects_uncovered_work() {
+    let file = load_fixture();
+    let warnings = graph::tunnels(&file, 2);
+    // T2 has no verify target covering it — should be flagged.
+    let t2_warning = warnings.iter().find(|w| w.target_id == "T2");
+    assert!(t2_warning.is_some(), "T2 should be flagged as a tunnel");
+    assert!(t2_warning.unwrap().depth.is_none(), "T2 has no verify reachable");
+}
+
+#[test]
+fn tunnel_no_warning_for_covered_work() {
+    let file = load_fixture();
+    let warnings = graph::tunnels(&file, 2);
+    // T1 and T3 are covered by T5 (1 hop) — should NOT be flagged.
+    assert!(
+        !warnings.iter().any(|w| w.target_id == "T1"),
+        "T1 should not be flagged (covered by T5)"
+    );
+    assert!(
+        !warnings.iter().any(|w| w.target_id == "T3"),
+        "T3 should not be flagged (covered by T5)"
+    );
+}
+
+#[test]
+fn tunnel_detects_deep_chain() {
+    use chrono::NaiveDate;
+    use targets::schema::{Kind as K, Target};
+
+    let mut file = load_fixture();
+    let date = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+
+    // Build a chain: T10 → T11 → T12 → T13(verify covers T10)
+    // T10 is 3 hops from verification — should be flagged at max_depth=2.
+    for (id, deps) in [("T10", vec![]), ("T11", vec!["T10"]), ("T12", vec!["T11"])] {
+        file.targets.insert(id.to_string(), Target {
+            name: format!("Work {id}"),
+            kind: K::Work,
+            status: Status::Identified,
+            value: 1.0,
+            cost: 1.0,
+            actual_cost: None,
+            acceptance: vec!["done".to_string()],
+            context: String::new(),
+            parent: None,
+            gates: vec![],
+            depends_on: deps.into_iter().map(String::from).collect(),
+            verifies: vec![],
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        });
+    }
+    // T13 is a verify target covering T10, depending on T12.
+    file.targets.insert("T13".to_string(), Target {
+        name: "Verify chain".to_string(),
+        kind: K::Verify,
+        status: Status::Identified,
+        value: 1.0,
+        cost: 1.0,
+        actual_cost: None,
+        acceptance: vec!["verified".to_string()],
+        context: String::new(),
+        parent: None,
+        gates: vec![],
+        depends_on: vec!["T12".to_string()],
+        verifies: vec!["T10".to_string()],
+        rework: None,
+        retry_budget: None,
+        retries: 0,
+        tags: vec![],
+        origin: "test".to_string(),
+        discovered: date,
+        achieved: None,
+    });
+
+    // At max_depth=2 these are all within range. Test with max_depth=0
+    // where distance 1 is already too far.
+    let warnings_strict = graph::tunnels(&file, 0);
+    // At max_depth=0, any target that is not itself a verify target and doesn't
+    // have a verify target at distance 0 is flagged. Distance 1 = too far.
+    // T10 → T13 at distance 1: flagged.
+    let t10 = warnings_strict.iter().find(|w| w.target_id == "T10");
+    assert!(t10.is_some(), "T10 should be flagged at max_depth=0");
+    assert_eq!(t10.unwrap().depth, Some(1));
+}
+
+#[test]
 fn blocked_detection() {
     let mut file = load_fixture();
     // Make T2 depend on T1 (which is converging, not achieved).

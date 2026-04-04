@@ -169,6 +169,21 @@ pub struct ReworkTool {
     pub diagnosis: String,
 }
 
+/// Detect tunnels: work targets far from verification.
+#[mcp_tool(
+    name = "targets_tunnels",
+    description = "Detect tunnels: active work targets that have no verification checkpoint within 2 hops. Suggests where to insert verify targets to prevent agent drift."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct TunnelsTool {
+    /// Working directory to discover targets.yaml from.
+    pub cwd: String,
+
+    /// Maximum hops before flagging (default: 2).
+    #[serde(default)]
+    pub max_depth: Option<u32>,
+}
+
 /// Compute WSJF ranking with blocking analysis.
 #[mcp_tool(
     name = "targets_rank",
@@ -229,6 +244,7 @@ tool_box!(TargetTools, [
     RetireTool,
     FrontierTool,
     ReworkTool,
+    TunnelsTool,
     RankTool,
     ValidateTool,
     GraphTool,

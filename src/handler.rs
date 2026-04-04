@@ -51,6 +51,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::RetireTool(t) => handle_retire(t),
             TargetTools::FrontierTool(t) => handle_frontier(t),
             TargetTools::ReworkTool(t) => handle_rework(t),
+            TargetTools::TunnelsTool(t) => handle_tunnels(t),
             TargetTools::RankTool(t) => handle_rank(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
@@ -417,6 +418,45 @@ fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
         if retries >= budget {
             out.push_str("\n\n⚠ RETRY BUDGET EXHAUSTED — escalate to human review");
         }
+    }
+
+    text_result(out)
+}
+
+fn handle_tunnels(t: crate::tools::TunnelsTool) -> ToolResult {
+    let (path, file) = load_file(&t.cwd)?;
+
+    let max_depth = t.max_depth.unwrap_or(2) as usize;
+    let warnings = graph::tunnels(&file, max_depth);
+
+    let mut out = format!(
+        "# Tunnel Detection\nFile: {}\nMax depth: {max_depth}\n\n",
+        path.display()
+    );
+
+    if warnings.is_empty() {
+        out.push_str("No tunnels detected — all work targets have verification within range.\n");
+    } else {
+        for w in &warnings {
+            match (&w.depth, &w.nearest_verify) {
+                (None, _) => {
+                    out.push_str(&format!(
+                        "⚠ 🎯{} \"{}\" — no verification target covers this work\n\
+                         \x20\x20Suggestion: add a verify target that checks this work\n\n",
+                        w.target_id, w.target_name,
+                    ));
+                }
+                (Some(depth), Some(verify)) => {
+                    out.push_str(&format!(
+                        "⚠ 🎯{} \"{}\" — nearest verification is 🎯{} ({depth} hops, max {max_depth})\n\
+                         \x20\x20Suggestion: insert a verification checkpoint closer to this work\n\n",
+                        w.target_id, w.target_name, verify,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        out.push_str(&format!("{} tunnel(s) detected", warnings.len()));
     }
 
     text_result(out)
