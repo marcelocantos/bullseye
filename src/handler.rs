@@ -169,8 +169,15 @@ fn handle_add(t: crate::tools::AddTool) -> ToolResult {
         }
     };
 
+    let kind = match t.kind.as_deref() {
+        Some("verify") => crate::schema::Kind::Verify,
+        Some("work") | None => crate::schema::Kind::Work,
+        Some(other) => return err(format!("unknown kind: {other} (use work or verify)")),
+    };
+
     let target = Target {
         name: t.name.clone(),
+        kind,
         status: Status::Identified,
         value: t.value,
         cost: t.cost,
@@ -180,6 +187,7 @@ fn handle_add(t: crate::tools::AddTool) -> ToolResult {
         parent: t.parent,
         gates: Vec::new(),
         depends_on: Vec::new(),
+        verifies: t.verifies,
         tags: t.tags,
         origin: t.origin,
         discovered: Local::now().date_naive(),
@@ -325,12 +333,21 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
         out.push_str("(no targets ready for work)\n");
     }
     for ft in &targets {
+        let kind_label = match ft.kind {
+            crate::schema::Kind::Work => "",
+            crate::schema::Kind::Verify => " [verify]",
+        };
         out.push_str(&format!(
-            "🎯{id} {name}\n  status: {status:?}\n",
+            "🎯{id} {name}{kind}\n  status: {status:?}\n",
             id = ft.id,
             name = ft.name,
+            kind = kind_label,
             status = ft.status,
         ));
+        if !ft.verifies.is_empty() {
+            let vs: Vec<String> = ft.verifies.iter().map(|v| format!("🎯{v}")).collect();
+            out.push_str(&format!("  verifies: {}\n", vs.join(", ")));
+        }
         if !ft.tags.is_empty() {
             out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
         }

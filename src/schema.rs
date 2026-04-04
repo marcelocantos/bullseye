@@ -24,6 +24,10 @@ pub struct Target {
     /// Short assertion describing the desired state.
     pub name: String,
 
+    /// Target kind: work (default) or verify.
+    #[serde(default, skip_serializing_if = "is_work")]
+    pub kind: Kind,
+
     /// Current status.
     pub status: Status,
 
@@ -58,6 +62,10 @@ pub struct Target {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
 
+    /// For verify targets: which upstream targets this verifies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verifies: Vec<String>,
+
     /// Freeform tags (e.g., "visual").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -90,6 +98,23 @@ pub enum Status {
     Identified,
     Converging,
     Achieved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Work,
+    Verify,
+}
+
+impl Default for Kind {
+    fn default() -> Self {
+        Kind::Work
+    }
+}
+
+fn is_work(kind: &Kind) -> bool {
+    *kind == Kind::Work
 }
 
 fn default_criticality() -> f64 {

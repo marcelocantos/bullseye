@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use targets::graph;
 use targets::render;
-use targets::schema::TargetsFile;
+use targets::schema::{Kind, TargetsFile};
 use targets::store;
 
 fn fixture_path() -> PathBuf {
@@ -20,15 +20,15 @@ fn load_fixture() -> TargetsFile {
 #[test]
 fn loads_and_counts_targets() {
     let file = load_fixture();
-    assert_eq!(file.targets.len(), 4);
+    assert_eq!(file.targets.len(), 5);
 }
 
 #[test]
 fn active_filter() {
     let file = load_fixture();
     let active = file.active();
-    assert_eq!(active.len(), 3);
-    assert!(!active.contains_key("T4")); // T4 is achieved
+    assert_eq!(active.len(), 4); // T1, T2, T3, T5 (T4 is achieved)
+    assert!(!active.contains_key("T4"));
 }
 
 #[test]
@@ -62,8 +62,9 @@ fn ranking_order() {
     for w in ranked.windows(2) {
         assert!(w[0].weight >= w[1].weight);
     }
-    // T1 (weight ~2.67) should be first, T3 (weight 1.0) and T2 (weight 1.5) after.
-    assert_eq!(ranked[0].id, "T1");
+    // T5 (weight 3.0) should be first, then T1 (weight ~2.67).
+    assert_eq!(ranked[0].id, "T5");
+    assert_eq!(ranked[1].id, "T1");
 }
 
 #[test]
@@ -118,11 +119,12 @@ fn frontier_returns_unblocked_leaves() {
     let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
     // T1 (converging, no deps), T2 (identified, no deps), T3 (identified, no deps)
     // are all active leaves with no unachieved dependencies.
-    // T4 is achieved so excluded.
+    // T4 is achieved so excluded. T5 depends on T1+T3 so blocked.
     assert_eq!(ids.len(), 3);
     assert!(ids.contains(&"T1"));
     assert!(ids.contains(&"T2"));
     assert!(ids.contains(&"T3"));
+    assert!(!ids.contains(&"T5"), "T5 should be blocked by T1 and T3");
 }
 
 #[test]
@@ -148,6 +150,71 @@ fn frontier_excludes_parents_with_active_children() {
     assert!(!ids.contains(&"T1"), "T1 should be excluded (has active child T2)");
     assert!(ids.contains(&"T2"));
     assert!(ids.contains(&"T3"));
+}
+
+#[test]
+fn verify_target_kind() {
+    let file = load_fixture();
+    let t5 = &file.targets["T5"];
+    assert_eq!(t5.kind, Kind::Verify);
+    assert_eq!(t5.verifies, vec!["T1", "T3"]);
+}
+
+#[test]
+fn work_target_default_kind() {
+    let file = load_fixture();
+    let t1 = &file.targets["T1"];
+    assert_eq!(t1.kind, Kind::Work);
+    assert!(t1.verifies.is_empty());
+}
+
+#[test]
+fn validate_verify_without_verifies_is_error() {
+    let mut file = load_fixture();
+    // Make T5 a verify target but clear its verifies list.
+    file.targets.get_mut("T5").unwrap().verifies.clear();
+    let errors = graph::validate(&file);
+    assert!(errors.iter().any(|e| e.contains("T5") && e.contains("non-empty verifies")));
+}
+
+#[test]
+fn validate_work_with_verifies_is_error() {
+    let mut file = load_fixture();
+    // Give T1 (work) a verifies list.
+    file.targets.get_mut("T1").unwrap().verifies = vec!["T2".to_string()];
+    let errors = graph::validate(&file);
+    assert!(errors.iter().any(|e| e.contains("T1") && e.contains("must not have verifies")));
+}
+
+#[test]
+fn frontier_includes_verify_when_unblocked() {
+    let mut file = load_fixture();
+    // Achieve T1 and T3 so T5 becomes unblocked.
+    use targets::schema::Status;
+    file.targets.get_mut("T1").unwrap().status = Status::Achieved;
+    file.targets.get_mut("T3").unwrap().status = Status::Achieved;
+    let front = graph::frontier(&file);
+    let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
+    assert!(ids.contains(&"T5"), "T5 should be in frontier when T1+T3 achieved");
+    let t5 = front.iter().find(|f| f.id == "T5").unwrap();
+    assert_eq!(t5.kind, Kind::Verify);
+    assert_eq!(t5.verifies, vec!["T1", "T3"]);
+}
+
+#[test]
+fn mermaid_shows_verifies_edges() {
+    let file = load_fixture();
+    let diagram = graph::mermaid(&file);
+    assert!(diagram.contains("verifies"));
+}
+
+#[test]
+fn render_shows_verify_target() {
+    let file = load_fixture();
+    let md = render::render_markdown(&file);
+    // T5 should have the ✓ marker and Verifies line.
+    assert!(md.contains("### 🎯T5 ✓ CI and platform isolation verified"));
+    assert!(md.contains("- **Verifies**: 🎯T1, 🎯T3"));
 }
 
 #[test]

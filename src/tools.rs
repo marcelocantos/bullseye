@@ -63,6 +63,14 @@ pub struct AddTool {
     #[serde(default)]
     pub parent: Option<String>,
 
+    /// Target kind: "work" (default) or "verify".
+    #[serde(default)]
+    pub kind: Option<String>,
+
+    /// For verify targets: IDs of upstream targets this verifies.
+    #[serde(default)]
+    pub verifies: Vec<String>,
+
     /// Origin description (default: "manual").
     #[serde(default = "default_origin")]
     pub origin: String,

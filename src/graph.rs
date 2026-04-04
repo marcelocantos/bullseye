@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use crate::schema::{Status, TargetsFile};
+use crate::schema::{Kind, Status, TargetsFile};
 
 /// Ranked target with computed effective weight and blocking info.
 #[derive(Debug, Clone)]
@@ -25,7 +25,9 @@ pub struct RankedTarget {
 pub struct FrontierTarget {
     pub id: String,
     pub name: String,
+    pub kind: Kind,
     pub status: Status,
+    pub verifies: Vec<String>,
     pub tags: Vec<String>,
 }
 
@@ -65,7 +67,9 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
         .map(|(id, t)| FrontierTarget {
             id: id.to_string(),
             name: t.name.clone(),
+            kind: t.kind,
             status: t.status,
+            verifies: t.verifies.clone(),
             tags: t.tags.clone(),
         })
         .collect()
@@ -187,6 +191,19 @@ pub fn mermaid(file: &TargetsFile) -> String {
         }
     }
 
+    // Verifies edges.
+    for (id, t) in &active {
+        for v in &t.verifies {
+            if active.contains_key(v.as_str()) {
+                lines.push(format!(
+                    "    {} -.->|verifies| {}",
+                    mermaid_node(id),
+                    mermaid_node(v)
+                ));
+            }
+        }
+    }
+
     lines.join("\n")
 }
 
@@ -244,6 +261,21 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
             if !file.targets.contains_key(dep) {
                 errors.push(format!("{id}: depends_on target {dep} does not exist"));
             }
+        }
+
+        // Verifies references must exist.
+        for v in &t.verifies {
+            if !file.targets.contains_key(v) {
+                errors.push(format!("{id}: verifies target {v} does not exist"));
+            }
+        }
+
+        // Verify targets must have verifies non-empty; work targets must not.
+        if t.kind == Kind::Verify && t.verifies.is_empty() {
+            errors.push(format!("{id}: verify target must have non-empty verifies"));
+        }
+        if t.kind == Kind::Work && !t.verifies.is_empty() {
+            errors.push(format!("{id}: work target must not have verifies"));
         }
     }
 

@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use crate::graph;
-use crate::schema::{Target, TargetsFile};
+use crate::schema::{Kind, Target, TargetsFile};
 
 /// Render a TargetsFile to the standard targets.md markdown format.
 pub fn render_markdown(file: &TargetsFile) -> String {
@@ -58,7 +58,11 @@ pub fn render_markdown(file: &TargetsFile) -> String {
 
 fn render_target(out: &mut String, id: &str, t: &Target) {
     let w = t.weight();
-    writeln!(out, "\n### 🎯{id} {}", t.name).unwrap();
+    let kind_suffix = match t.kind {
+        Kind::Verify => " ✓",
+        Kind::Work => "",
+    };
+    writeln!(out, "\n### 🎯{id}{kind_suffix} {}", t.name).unwrap();
     writeln!(out, "- **Weight**: {w:.0} (value {} / cost {})", t.value, t.cost).unwrap();
     writeln!(out, "- **Estimated-cost**: {}", t.cost).unwrap();
 
@@ -97,6 +101,11 @@ fn render_target(out: &mut String, id: &str, t: &Target) {
     if !t.depends_on.is_empty() {
         let deps: Vec<String> = t.depends_on.iter().map(|d| format!("🎯{d}")).collect();
         writeln!(out, "- **Depends on**: {}", deps.join(", ")).unwrap();
+    }
+
+    if !t.verifies.is_empty() {
+        let vs: Vec<String> = t.verifies.iter().map(|v| format!("🎯{v}")).collect();
+        writeln!(out, "- **Verifies**: {}", vs.join(", ")).unwrap();
     }
 
     if !t.tags.is_empty() {
