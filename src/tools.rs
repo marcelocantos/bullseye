@@ -132,6 +132,17 @@ pub struct RetireTool {
     pub actual_cost: Option<f64>,
 }
 
+/// Compute the frontier: unblocked targets ready for work.
+#[mcp_tool(
+    name = "targets_frontier",
+    description = "Compute the frontier: active leaf targets with all dependencies satisfied. These are the targets that can be worked on right now, in parallel."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct FrontierTool {
+    /// Working directory to discover targets.yaml from.
+    pub cwd: String,
+}
+
 /// Compute WSJF ranking with blocking analysis.
 #[mcp_tool(
     name = "targets_rank",
@@ -190,6 +201,7 @@ tool_box!(TargetTools, [
     AddTool,
     UpdateTool,
     RetireTool,
+    FrontierTool,
     RankTool,
     ValidateTool,
     GraphTool,

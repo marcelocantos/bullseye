@@ -20,6 +20,57 @@ pub struct RankedTarget {
     pub tags: Vec<String>,
 }
 
+/// A target in the frontier: unblocked and ready for work.
+#[derive(Debug, Clone)]
+pub struct FrontierTarget {
+    pub id: String,
+    pub name: String,
+    pub status: Status,
+    pub tags: Vec<String>,
+}
+
+/// Compute the frontier: active leaf targets with all dependencies satisfied.
+///
+/// A target is in the frontier if:
+/// - It is active (not achieved).
+/// - It has no unachieved dependencies (depends_on all achieved or absent).
+/// - It has no active children (it's a leaf in the active graph).
+pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
+    let active = file.active();
+
+    // Build set of targets that have active children.
+    let mut has_active_children: HashSet<&str> = HashSet::new();
+    for (_, t) in &active {
+        if let Some(ref parent) = t.parent {
+            if active.contains_key(parent.as_str()) {
+                has_active_children.insert(parent.as_str());
+            }
+        }
+    }
+
+    active
+        .iter()
+        .filter(|(id, t)| {
+            // Must be a leaf (no active children).
+            if has_active_children.contains(*id) {
+                return false;
+            }
+            // All dependencies must be achieved.
+            t.depends_on.iter().all(|dep| {
+                file.targets
+                    .get(dep.as_str())
+                    .is_some_and(|d| d.status == Status::Achieved)
+            })
+        })
+        .map(|(id, t)| FrontierTarget {
+            id: id.to_string(),
+            name: t.name.clone(),
+            status: t.status,
+            tags: t.tags.clone(),
+        })
+        .collect()
+}
+
 /// Compute rankings for all active targets.
 pub fn rank(file: &TargetsFile) -> Vec<RankedTarget> {
     let active: BTreeMap<&str, _> = file.active();

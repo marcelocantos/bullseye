@@ -112,6 +112,45 @@ fn yaml_roundtrip() {
 }
 
 #[test]
+fn frontier_returns_unblocked_leaves() {
+    let file = load_fixture();
+    let front = graph::frontier(&file);
+    let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
+    // T1 (converging, no deps), T2 (identified, no deps), T3 (identified, no deps)
+    // are all active leaves with no unachieved dependencies.
+    // T4 is achieved so excluded.
+    assert_eq!(ids.len(), 3);
+    assert!(ids.contains(&"T1"));
+    assert!(ids.contains(&"T2"));
+    assert!(ids.contains(&"T3"));
+}
+
+#[test]
+fn frontier_excludes_blocked() {
+    let mut file = load_fixture();
+    // Make T2 depend on T1 (which is converging, not achieved).
+    file.targets.get_mut("T2").unwrap().depends_on = vec!["T1".to_string()];
+    let front = graph::frontier(&file);
+    let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
+    assert!(!ids.contains(&"T2"), "T2 should be blocked by T1");
+    assert!(ids.contains(&"T1"));
+    assert!(ids.contains(&"T3"));
+}
+
+#[test]
+fn frontier_excludes_parents_with_active_children() {
+    let mut file = load_fixture();
+    // Make T2 a child of T1.
+    file.targets.get_mut("T2").unwrap().parent = Some("T1".to_string());
+    let front = graph::frontier(&file);
+    let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
+    // T1 now has an active child (T2), so T1 is not a leaf.
+    assert!(!ids.contains(&"T1"), "T1 should be excluded (has active child T2)");
+    assert!(ids.contains(&"T2"));
+    assert!(ids.contains(&"T3"));
+}
+
+#[test]
 fn blocked_detection() {
     let mut file = load_fixture();
     // Make T2 depend on T1 (which is converging, not achieved).

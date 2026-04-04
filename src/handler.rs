@@ -49,6 +49,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::AddTool(t) => handle_add(t),
             TargetTools::UpdateTool(t) => handle_update(t),
             TargetTools::RetireTool(t) => handle_retire(t),
+            TargetTools::FrontierTool(t) => handle_frontier(t),
             TargetTools::RankTool(t) => handle_rank(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
@@ -305,6 +306,37 @@ fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             unachieved_children.join(", ")
         ));
     }
+
+    text_result(out)
+}
+
+fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
+    let (path, file) = load_file(&t.cwd)?;
+
+    let errors = graph::validate(&file);
+    if !errors.is_empty() {
+        return text_result(format!("# Validation errors\n\n{}", errors.join("\n")));
+    }
+
+    let targets = graph::frontier(&file);
+
+    let mut out = format!("# Frontier\nFile: {}\n\n", path.display());
+    if targets.is_empty() {
+        out.push_str("(no targets ready for work)\n");
+    }
+    for ft in &targets {
+        out.push_str(&format!(
+            "🎯{id} {name}\n  status: {status:?}\n",
+            id = ft.id,
+            name = ft.name,
+            status = ft.status,
+        ));
+        if !ft.tags.is_empty() {
+            out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
+        }
+        out.push('\n');
+    }
+    out.push_str(&format!("{} target(s) ready for work", targets.len()));
 
     text_result(out)
 }
