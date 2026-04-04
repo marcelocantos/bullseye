@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use targets::graph;
+use targets::ops;
 use targets::render;
 use targets::schema::{Kind, Status, TargetsFile};
 use targets::store;
@@ -354,6 +355,151 @@ fn tunnel_detects_deep_chain() {
     let t10 = warnings_strict.iter().find(|w| w.target_id == "T10");
     assert!(t10.is_some(), "T10 should be flagged at max_depth=0");
     assert_eq!(t10.unwrap().depth, Some(1));
+}
+
+// --- ops::rework tests ---
+
+#[test]
+fn rework_resets_statuses() {
+    let mut file = load_fixture();
+    // Achieve T1 and T3 so T5 is actionable, then mark T5 as converging
+    // (simulating a verification in progress that fails).
+    file.targets.get_mut("T1").unwrap().status = Status::Achieved;
+    file.targets.get_mut("T3").unwrap().status = Status::Achieved;
+    file.targets.get_mut("T5").unwrap().status = Status::Converging;
+
+    let result = ops::rework(&mut file, "T5", "tests failed on Linux").unwrap();
+
+    assert_eq!(result.rework_id, "T1");
+    assert_eq!(result.retries, 1);
+    assert!(!result.budget_exhausted);
+
+    // Verify target reset to identified.
+    assert_eq!(file.targets["T5"].status, Status::Identified);
+    // Rework destination reset to converging.
+    assert_eq!(file.targets["T1"].status, Status::Converging);
+    assert_eq!(file.targets["T1"].retries, 1);
+}
+
+#[test]
+fn rework_appends_diagnosis() {
+    let mut file = load_fixture();
+    let original_context = file.targets["T1"].context.clone();
+
+    ops::rework(&mut file, "T5", "linker error on arm64").unwrap();
+
+    let ctx = &file.targets["T1"].context;
+    assert!(ctx.contains(&original_context));
+    assert!(ctx.contains("Rework #1: linker error on arm64"));
+}
+
+#[test]
+fn rework_empty_diagnosis_preserves_context() {
+    let mut file = load_fixture();
+    let original_context = file.targets["T1"].context.clone();
+
+    ops::rework(&mut file, "T5", "").unwrap();
+
+    assert_eq!(file.targets["T1"].context, original_context);
+}
+
+#[test]
+fn rework_increments_retries() {
+    let mut file = load_fixture();
+
+    // First rework.
+    let r1 = ops::rework(&mut file, "T5", "attempt 1").unwrap();
+    assert_eq!(r1.retries, 1);
+    assert!(!r1.budget_exhausted);
+
+    // Second rework.
+    let r2 = ops::rework(&mut file, "T5", "attempt 2").unwrap();
+    assert_eq!(r2.retries, 2);
+    assert!(!r2.budget_exhausted);
+
+    // Third rework — hits budget (T1 has retry_budget: 3).
+    let r3 = ops::rework(&mut file, "T5", "attempt 3").unwrap();
+    assert_eq!(r3.retries, 3);
+    assert!(r3.budget_exhausted);
+    assert_eq!(r3.budget, Some(3));
+}
+
+#[test]
+fn rework_exceeds_budget() {
+    let mut file = load_fixture();
+
+    // Burn through the budget.
+    for i in 1..=3 {
+        let r = ops::rework(&mut file, "T5", &format!("attempt {i}")).unwrap();
+        assert_eq!(r.retries, i);
+    }
+
+    // Fourth rework — past budget. Still works (budget is advisory),
+    // but budget_exhausted remains true.
+    let r4 = ops::rework(&mut file, "T5", "attempt 4").unwrap();
+    assert_eq!(r4.retries, 4);
+    assert!(r4.budget_exhausted);
+}
+
+#[test]
+fn rework_no_budget_never_exhausted() {
+    let mut file = load_fixture();
+    // Remove T1's retry budget.
+    file.targets.get_mut("T1").unwrap().retry_budget = None;
+
+    for i in 1..=5 {
+        let r = ops::rework(&mut file, "T5", &format!("attempt {i}")).unwrap();
+        assert_eq!(r.retries, i);
+        assert!(!r.budget_exhausted);
+        assert_eq!(r.budget, None);
+    }
+}
+
+#[test]
+fn rework_multiple_diagnoses_separated() {
+    let mut file = load_fixture();
+
+    ops::rework(&mut file, "T5", "first issue").unwrap();
+    ops::rework(&mut file, "T5", "second issue").unwrap();
+
+    let ctx = &file.targets["T1"].context;
+    assert!(ctx.contains("Rework #1: first issue"));
+    assert!(ctx.contains("Rework #2: second issue"));
+    // Separated by blank line.
+    assert!(ctx.contains("first issue\n\nRework #2"));
+}
+
+#[test]
+fn rework_error_not_found() {
+    let mut file = load_fixture();
+    let err = ops::rework(&mut file, "T99", "").unwrap_err();
+    assert_eq!(err, ops::ReworkError::TargetNotFound("T99".to_string()));
+}
+
+#[test]
+fn rework_error_not_verify() {
+    let mut file = load_fixture();
+    let err = ops::rework(&mut file, "T1", "").unwrap_err();
+    assert_eq!(err, ops::ReworkError::NotVerifyTarget("T1".to_string()));
+}
+
+#[test]
+fn rework_error_no_rework_target() {
+    let mut file = load_fixture();
+    // Remove the rework field from T5.
+    file.targets.get_mut("T5").unwrap().rework = None;
+    let err = ops::rework(&mut file, "T5", "").unwrap_err();
+    assert_eq!(err, ops::ReworkError::NoReworkTarget("T5".to_string()));
+}
+
+#[test]
+fn rework_error_dest_not_found() {
+    let mut file = load_fixture();
+    // Point rework at a nonexistent target (bypass validation for this test).
+    file.targets.get_mut("T5").unwrap().rework = Some("T99".to_string());
+    file.targets.get_mut("T5").unwrap().verifies.push("T99".to_string());
+    let err = ops::rework(&mut file, "T5", "").unwrap_err();
+    assert_eq!(err, ops::ReworkError::ReworkDestNotFound("T99".to_string()));
 }
 
 #[test]

@@ -14,6 +14,7 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::McpServer;
 
 use crate::graph;
+use crate::ops;
 use crate::render;
 use crate::schema::{Status, Target};
 use crate::store;
@@ -366,56 +367,18 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
 fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
     let (path, mut file) = load_file(&t.cwd)?;
 
-    // Validate the verify target.
-    let verify = file
-        .targets
-        .get(&t.id)
-        .ok_or_else(|| tool_err(format!("target {} not found", t.id)))?;
-
-    if verify.kind != crate::schema::Kind::Verify {
-        return err(format!("🎯{} is not a verify target", t.id));
-    }
-
-    let rework_id = verify
-        .rework
-        .clone()
-        .ok_or_else(|| tool_err(format!("🎯{} has no rework target", t.id)))?;
-
-    // Check the rework destination exists.
-    if !file.targets.contains_key(&rework_id) {
-        return err(format!("rework target {} does not exist", rework_id));
-    }
-
-    // Reset the verify target to identified.
-    file.targets.get_mut(&t.id).unwrap().status = Status::Identified;
-
-    // Reset the rework target to converging and increment retries.
-    let rework_target = file.targets.get_mut(&rework_id).unwrap();
-    rework_target.status = Status::Converging;
-    rework_target.retries += 1;
-    let retries = rework_target.retries;
-    let budget = rework_target.retry_budget;
-    let rework_name = rework_target.name.clone();
-
-    // Append diagnosis to rework target's context if provided.
-    if !t.diagnosis.is_empty() {
-        let ctx = &mut file.targets.get_mut(&rework_id).unwrap().context;
-        if !ctx.is_empty() {
-            ctx.push_str("\n\n");
-        }
-        ctx.push_str(&format!("Rework #{retries}: {}", t.diagnosis));
-    }
+    let result = ops::rework(&mut file, &t.id, &t.diagnosis)
+        .map_err(|e| tool_err(e.to_string()))?;
 
     save_and_render(&path, &file)?;
 
     let mut out = format!(
-        "Rework triggered: 🎯{} → 🎯{rework_id} \"{rework_name}\"\n\
-         Retry {retries}",
-        t.id,
+        "Rework triggered: 🎯{} → 🎯{} \"{}\"\nRetry {}",
+        t.id, result.rework_id, result.rework_name, result.retries,
     );
-    if let Some(budget) = budget {
+    if let Some(budget) = result.budget {
         out.push_str(&format!(" of {budget}"));
-        if retries >= budget {
+        if result.budget_exhausted {
             out.push_str("\n\n⚠ RETRY BUDGET EXHAUSTED — escalate to human review");
         }
     }
