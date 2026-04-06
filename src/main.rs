@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use bullseye::handler::TargetHandler;
-use rust_mcp_sdk::mcp_server::{server_runtime, McpServerOptions};
+use rust_mcp_sdk::mcp_server::{McpServerOptions, server_runtime};
 use rust_mcp_sdk::schema::{
-    Implementation, InitializeResult, ProtocolVersion, ServerCapabilities,
-    ServerCapabilitiesTools,
+    Implementation, InitializeResult, ProtocolVersion, ServerCapabilities, ServerCapabilitiesTools,
 };
-use rust_mcp_sdk::{error::SdkResult, McpServer, StdioTransport, ToMcpServerHandler, TransportOptions};
+use rust_mcp_sdk::{
+    McpServer, StdioTransport, ToMcpServerHandler, TransportOptions, error::SdkResult,
+};
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
@@ -40,7 +41,7 @@ async fn main() -> SdkResult<()> {
     };
 
     let transport = StdioTransport::new(TransportOptions::default())?;
-    let handler = TargetHandler::default().to_mcp_server_handler();
+    let handler = TargetHandler.to_mcp_server_handler();
     let server = server_runtime::create_server(McpServerOptions {
         transport,
         handler,

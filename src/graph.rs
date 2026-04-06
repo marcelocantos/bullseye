@@ -42,11 +42,11 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
 
     // Build set of targets that have active children.
     let mut has_active_children: HashSet<&str> = HashSet::new();
-    for (_, t) in &active {
-        if let Some(ref parent) = t.parent {
-            if active.contains_key(parent.as_str()) {
-                has_active_children.insert(parent.as_str());
-            }
+    for t in active.values() {
+        if let Some(ref parent) = t.parent
+            && active.contains_key(parent.as_str())
+        {
+            has_active_children.insert(parent.as_str());
         }
     }
 
@@ -82,10 +82,10 @@ pub fn rank(file: &TargetsFile) -> Vec<RankedTarget> {
     // Build parent -> children map.
     let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (id, t) in &active {
-        if let Some(ref parent) = t.parent {
-            if active.contains_key(parent.as_str()) {
-                children.entry(parent.as_str()).or_default().push(id);
-            }
+        if let Some(ref parent) = t.parent
+            && active.contains_key(parent.as_str())
+        {
+            children.entry(parent.as_str()).or_default().push(id);
         }
     }
 
@@ -123,14 +123,22 @@ pub fn rank(file: &TargetsFile) -> Vec<RankedTarget> {
                 weight: t.weight(),
                 blocked_by: blocked_by.get(id).cloned().unwrap_or_default(),
                 children: child_ids,
-                gates: t.gates.iter().map(|g| (g.target.clone(), g.criticality)).collect(),
+                gates: t
+                    .gates
+                    .iter()
+                    .map(|g| (g.target.clone(), g.criticality))
+                    .collect(),
                 tags: t.tags.clone(),
             }
         })
         .collect();
 
     // Sort by weight descending.
-    ranked.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     ranked
 }
@@ -204,11 +212,12 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
 
         while let Some((current, depth)) = queue.pop_front() {
             // Check if current is a verify target that covers us.
-            if let Some(ct) = active.get(current) {
-                if ct.kind == Kind::Verify && current != *id {
-                    nearest = Some((depth, current.to_string()));
-                    break;
-                }
+            if let Some(ct) = active.get(current)
+                && ct.kind == Kind::Verify
+                && current != *id
+            {
+                nearest = Some((depth, current.to_string()));
+                break;
             }
 
             // Don't expand beyond max_depth + 1 (we need to check nodes at depth max_depth+1).
@@ -263,14 +272,14 @@ pub fn mermaid(file: &TargetsFile) -> String {
 
     // Parent -> child edges.
     for (id, t) in &active {
-        if let Some(ref parent) = t.parent {
-            if active.contains_key(parent.as_str()) {
-                lines.push(format!(
-                    "    {} --> {}",
-                    mermaid_node(parent),
-                    mermaid_node(id)
-                ));
-            }
+        if let Some(ref parent) = t.parent
+            && active.contains_key(parent.as_str())
+        {
+            lines.push(format!(
+                "    {} --> {}",
+                mermaid_node(parent),
+                mermaid_node(id)
+            ));
         }
     }
 
@@ -320,14 +329,14 @@ pub fn mermaid(file: &TargetsFile) -> String {
 
     // Rework edges (backward, shown in red).
     for (id, t) in &active {
-        if let Some(ref rework) = t.rework {
-            if active.contains_key(rework.as_str()) {
-                lines.push(format!(
-                    "    {} -.->|rework| {}",
-                    mermaid_node(id),
-                    mermaid_node(rework)
-                ));
-            }
+        if let Some(ref rework) = t.rework
+            && active.contains_key(rework.as_str())
+        {
+            lines.push(format!(
+                "    {} -.->|rework| {}",
+                mermaid_node(id),
+                mermaid_node(rework)
+            ));
         }
     }
 
@@ -342,7 +351,9 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
     for (id, t) in &file.targets {
         // Check ID format.
         if !id.starts_with('T') || id[1..].split('.').any(|p| p.parse::<u32>().is_err()) {
-            errors.push(format!("{id}: invalid target ID format (expected T<N> or T<N>.<M>)"));
+            errors.push(format!(
+                "{id}: invalid target ID format (expected T<N> or T<N>.<M>)"
+            ));
         }
 
         // Duplicate check.
@@ -364,10 +375,10 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
         }
 
         // Parent reference must exist.
-        if let Some(ref parent) = t.parent {
-            if !file.targets.contains_key(parent) {
-                errors.push(format!("{id}: parent {parent} does not exist"));
-            }
+        if let Some(ref parent) = t.parent
+            && !file.targets.contains_key(parent)
+        {
+            errors.push(format!("{id}: parent {parent} does not exist"));
         }
 
         // Gates references must exist.
@@ -432,10 +443,7 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
                 errors.push(format!("{id}: cycle in parent hierarchy"));
                 break;
             }
-            current = file
-                .targets
-                .get(c)
-                .and_then(|t| t.parent.as_deref());
+            current = file.targets.get(c).and_then(|t| t.parent.as_deref());
         }
     }
 
@@ -447,9 +455,10 @@ fn mermaid_node(id: &str) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max - 1])
+        let end: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{end}…")
     }
 }

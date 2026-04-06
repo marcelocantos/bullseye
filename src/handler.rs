@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Local;
+use rust_mcp_sdk::McpServer;
 use rust_mcp_sdk::mcp_server::ServerHandler;
 use rust_mcp_sdk::schema::schema_utils::CallToolError;
 use rust_mcp_sdk::schema::{
     CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, RpcError,
 };
-use rust_mcp_sdk::McpServer;
 
 use crate::graph;
 use crate::ops;
@@ -77,19 +77,15 @@ fn err(msg: impl Into<String>) -> ToolResult {
 
 fn load_file(cwd: &str) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {
     let dir = Path::new(cwd);
-    let path = store::discover(dir)
-        .ok_or_else(|| tool_err("no targets.yaml found"))?;
-    let file = store::load(&path).map_err(|e| tool_err(e))?;
+    let path = store::discover(dir).ok_or_else(|| tool_err("no targets.yaml found"))?;
+    let file = store::load(&path).map_err(tool_err)?;
     Ok((path, file))
 }
 
 /// Save the YAML and re-render the markdown view.
-fn save_and_render(
-    path: &Path,
-    file: &crate::schema::TargetsFile,
-) -> Result<(), CallToolError> {
-    store::save(path, file).map_err(|e| tool_err(e))?;
-    render::render_to_file(path, file).map_err(|e| tool_err(e))?;
+fn save_and_render(path: &Path, file: &crate::schema::TargetsFile) -> Result<(), CallToolError> {
+    store::save(path, file).map_err(tool_err)?;
+    render::render_to_file(path, file).map_err(tool_err)?;
     Ok(())
 }
 
@@ -100,7 +96,11 @@ fn handle_list(t: crate::tools::ListTool) -> ToolResult {
         "active" => file.active().into_iter().collect(),
         "achieved" => file.achieved().into_iter().collect(),
         "all" => file.targets.iter().map(|(k, v)| (k.as_str(), v)).collect(),
-        other => return err(format!("unknown filter: {other} (use active, achieved, all)")),
+        other => {
+            return err(format!(
+                "unknown filter: {other} (use active, achieved, all)"
+            ));
+        }
     };
 
     let mut sorted: Vec<_> = targets;
@@ -134,7 +134,7 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
         .get(&t.id)
         .ok_or_else(|| tool_err(format!("target {} not found", t.id)))?;
 
-    let yaml = serde_yaml::to_string(target).map_err(|e| tool_err(e.to_string()))?;
+    let yaml = serde_yaml_ng::to_string(target).map_err(|e| tool_err(e.to_string()))?;
     text_result(format!("🎯{} {}\n\n{yaml}", t.id, target.name))
 }
 
@@ -269,11 +269,7 @@ fn handle_update(t: crate::tools::UpdateTool) -> ToolResult {
 
     save_and_render(&path, &file)?;
 
-    text_result(format!(
-        "Updated 🎯{}:\n{}",
-        t.id,
-        changes.join("\n")
-    ))
+    text_result(format!("Updated 🎯{}:\n{}", t.id, changes.join("\n")))
 }
 
 fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
@@ -367,8 +363,8 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
 fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
     let (path, mut file) = load_file(&t.cwd)?;
 
-    let result = ops::rework(&mut file, &t.id, &t.diagnosis)
-        .map_err(|e| tool_err(e.to_string()))?;
+    let result =
+        ops::rework(&mut file, &t.id, &t.diagnosis).map_err(|e| tool_err(e.to_string()))?;
 
     save_and_render(&path, &file)?;
 
@@ -499,7 +495,11 @@ fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
 
     let errors = graph::validate(&file);
     if errors.is_empty() {
-        text_result(format!("Valid: {} ({} targets)", path.display(), file.targets.len()))
+        text_result(format!(
+            "Valid: {} ({} targets)",
+            path.display(),
+            file.targets.len()
+        ))
     } else {
         text_result(format!(
             "# Validation errors in {}\n\n{}",
@@ -517,7 +517,7 @@ fn handle_graph(t: crate::tools::GraphTool) -> ToolResult {
 
 fn handle_render(t: crate::tools::RenderTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
-    render::render_to_file(&path, &file).map_err(|e| tool_err(e))?;
+    render::render_to_file(&path, &file).map_err(tool_err)?;
     let md_path = render::markdown_path(&path);
     text_result(format!("Rendered {}", md_path.display()))
 }

@@ -63,7 +63,12 @@ fn render_target(out: &mut String, id: &str, t: &Target) {
         Kind::Work => "",
     };
     writeln!(out, "\n### 🎯{id}{kind_suffix} {}", t.name).unwrap();
-    writeln!(out, "- **Weight**: {w:.0} (value {} / cost {})", t.value, t.cost).unwrap();
+    writeln!(
+        out,
+        "- **Weight**: {w:.0} (value {} / cost {})",
+        t.value, t.cost
+    )
+    .unwrap();
     writeln!(out, "- **Estimated-cost**: {}", t.cost).unwrap();
 
     if t.acceptance.len() == 1 {

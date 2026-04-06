@@ -89,7 +89,11 @@ fn detects_missing_parent() {
     let mut file = load_fixture();
     file.targets.get_mut("T2").unwrap().parent = Some("T99".to_string());
     let errors = graph::validate(&file);
-    assert!(errors.iter().any(|e| e.contains("T99") && e.contains("does not exist")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T99") && e.contains("does not exist"))
+    );
 }
 
 #[test]
@@ -104,13 +108,10 @@ fn detects_cycle_in_parents() {
 #[test]
 fn yaml_roundtrip() {
     let file = load_fixture();
-    let yaml = serde_yaml::to_string(&file).unwrap();
-    let reparsed: TargetsFile = serde_yaml::from_str(&yaml).unwrap();
+    let yaml = serde_yaml_ng::to_string(&file).unwrap();
+    let reparsed: TargetsFile = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(file.targets.len(), reparsed.targets.len());
-    assert_eq!(
-        file.targets["T1"].status,
-        reparsed.targets["T1"].status
-    );
+    assert_eq!(file.targets["T1"].status, reparsed.targets["T1"].status);
 }
 
 #[test]
@@ -148,7 +149,10 @@ fn frontier_excludes_parents_with_active_children() {
     let front = graph::frontier(&file);
     let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
     // T1 now has an active child (T2), so T1 is not a leaf.
-    assert!(!ids.contains(&"T1"), "T1 should be excluded (has active child T2)");
+    assert!(
+        !ids.contains(&"T1"),
+        "T1 should be excluded (has active child T2)"
+    );
     assert!(ids.contains(&"T2"));
     assert!(ids.contains(&"T3"));
 }
@@ -175,7 +179,11 @@ fn validate_verify_without_verifies_is_error() {
     // Make T5 a verify target but clear its verifies list.
     file.targets.get_mut("T5").unwrap().verifies.clear();
     let errors = graph::validate(&file);
-    assert!(errors.iter().any(|e| e.contains("T5") && e.contains("non-empty verifies")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T5") && e.contains("non-empty verifies"))
+    );
 }
 
 #[test]
@@ -184,7 +192,11 @@ fn validate_work_with_verifies_is_error() {
     // Give T1 (work) a verifies list.
     file.targets.get_mut("T1").unwrap().verifies = vec!["T2".to_string()];
     let errors = graph::validate(&file);
-    assert!(errors.iter().any(|e| e.contains("T1") && e.contains("must not have verifies")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T1") && e.contains("must not have verifies"))
+    );
 }
 
 #[test]
@@ -195,7 +207,10 @@ fn frontier_includes_verify_when_unblocked() {
     file.targets.get_mut("T3").unwrap().status = Status::Achieved;
     let front = graph::frontier(&file);
     let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
-    assert!(ids.contains(&"T5"), "T5 should be in frontier when T1+T3 achieved");
+    assert!(
+        ids.contains(&"T5"),
+        "T5 should be in frontier when T1+T3 achieved"
+    );
     let t5 = front.iter().find(|f| f.id == "T5").unwrap();
     assert_eq!(t5.kind, Kind::Verify);
     assert_eq!(t5.verifies, vec!["T1", "T3"]);
@@ -246,7 +261,11 @@ fn validate_rework_must_be_in_verifies() {
     // Point rework at T2 which is NOT in verifies.
     file.targets.get_mut("T5").unwrap().rework = Some("T2".to_string());
     let errors = graph::validate(&file);
-    assert!(errors.iter().any(|e| e.contains("T5") && e.contains("must be in verifies")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T5") && e.contains("must be in verifies"))
+    );
 }
 
 #[test]
@@ -255,7 +274,11 @@ fn validate_rework_only_on_verify() {
     // Give T1 (work target) a rework field.
     file.targets.get_mut("T1").unwrap().rework = Some("T2".to_string());
     let errors = graph::validate(&file);
-    assert!(errors.iter().any(|e| e.contains("T1") && e.contains("only verify")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T1") && e.contains("only verify"))
+    );
 }
 
 #[test]
@@ -272,7 +295,10 @@ fn tunnel_detects_uncovered_work() {
     // T2 has no verify target covering it — should be flagged.
     let t2_warning = warnings.iter().find(|w| w.target_id == "T2");
     assert!(t2_warning.is_some(), "T2 should be flagged as a tunnel");
-    assert!(t2_warning.unwrap().depth.is_none(), "T2 has no verify reachable");
+    assert!(
+        t2_warning.unwrap().depth.is_none(),
+        "T2 has no verify reachable"
+    );
 }
 
 #[test]
@@ -292,8 +318,8 @@ fn tunnel_no_warning_for_covered_work() {
 
 #[test]
 fn tunnel_detects_deep_chain() {
-    use chrono::NaiveDate;
     use bullseye::schema::{Kind as K, Target};
+    use chrono::NaiveDate;
 
     let mut file = load_fixture();
     let date = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
@@ -301,19 +327,47 @@ fn tunnel_detects_deep_chain() {
     // Build a chain: T10 → T11 → T12 → T13(verify covers T10)
     // T10 is 3 hops from verification — should be flagged at max_depth=2.
     for (id, deps) in [("T10", vec![]), ("T11", vec!["T10"]), ("T12", vec!["T11"])] {
-        file.targets.insert(id.to_string(), Target {
-            name: format!("Work {id}"),
-            kind: K::Work,
+        file.targets.insert(
+            id.to_string(),
+            Target {
+                name: format!("Work {id}"),
+                kind: K::Work,
+                status: Status::Identified,
+                value: 1.0,
+                cost: 1.0,
+                actual_cost: None,
+                acceptance: vec!["done".to_string()],
+                context: String::new(),
+                parent: None,
+                gates: vec![],
+                depends_on: deps.into_iter().map(String::from).collect(),
+                verifies: vec![],
+                rework: None,
+                retry_budget: None,
+                retries: 0,
+                tags: vec![],
+                origin: "test".to_string(),
+                discovered: date,
+                achieved: None,
+            },
+        );
+    }
+    // T13 is a verify target covering T10, depending on T12.
+    file.targets.insert(
+        "T13".to_string(),
+        Target {
+            name: "Verify chain".to_string(),
+            kind: K::Verify,
             status: Status::Identified,
             value: 1.0,
             cost: 1.0,
             actual_cost: None,
-            acceptance: vec!["done".to_string()],
+            acceptance: vec!["verified".to_string()],
             context: String::new(),
             parent: None,
             gates: vec![],
-            depends_on: deps.into_iter().map(String::from).collect(),
-            verifies: vec![],
+            depends_on: vec!["T12".to_string()],
+            verifies: vec!["T10".to_string()],
             rework: None,
             retry_budget: None,
             retries: 0,
@@ -321,30 +375,8 @@ fn tunnel_detects_deep_chain() {
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
-        });
-    }
-    // T13 is a verify target covering T10, depending on T12.
-    file.targets.insert("T13".to_string(), Target {
-        name: "Verify chain".to_string(),
-        kind: K::Verify,
-        status: Status::Identified,
-        value: 1.0,
-        cost: 1.0,
-        actual_cost: None,
-        acceptance: vec!["verified".to_string()],
-        context: String::new(),
-        parent: None,
-        gates: vec![],
-        depends_on: vec!["T12".to_string()],
-        verifies: vec!["T10".to_string()],
-        rework: None,
-        retry_budget: None,
-        retries: 0,
-        tags: vec![],
-        origin: "test".to_string(),
-        discovered: date,
-        achieved: None,
-    });
+        },
+    );
 
     // At max_depth=2 these are all within range. Test with max_depth=0
     // where distance 1 is already too far.
@@ -497,7 +529,11 @@ fn rework_error_dest_not_found() {
     let mut file = load_fixture();
     // Point rework at a nonexistent target (bypass validation for this test).
     file.targets.get_mut("T5").unwrap().rework = Some("T99".to_string());
-    file.targets.get_mut("T5").unwrap().verifies.push("T99".to_string());
+    file.targets
+        .get_mut("T5")
+        .unwrap()
+        .verifies
+        .push("T99".to_string());
     let err = ops::rework(&mut file, "T5", "").unwrap_err();
     assert_eq!(err, ops::ReworkError::ReworkDestNotFound("T99".to_string()));
 }

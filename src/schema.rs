@@ -117,15 +117,11 @@ pub enum Status {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Kind {
+    #[default]
     Work,
     Verify,
-}
-
-impl Default for Kind {
-    fn default() -> Self {
-        Kind::Work
-    }
 }
 
 fn is_zero(v: &u32) -> bool {

@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use rust_mcp_sdk::macros::{mcp_tool, JsonSchema};
+use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::tool_box;
 
 /// List targets with optional filtering.
@@ -236,17 +236,20 @@ fn default_origin() -> String {
     "manual".to_string()
 }
 
-tool_box!(TargetTools, [
-    ListTool,
-    GetTool,
-    AddTool,
-    UpdateTool,
-    RetireTool,
-    FrontierTool,
-    ReworkTool,
-    TunnelsTool,
-    RankTool,
-    ValidateTool,
-    GraphTool,
-    RenderTool
-]);
+tool_box!(
+    TargetTools,
+    [
+        ListTool,
+        GetTool,
+        AddTool,
+        UpdateTool,
+        RetireTool,
+        FrontierTool,
+        ReworkTool,
+        TunnelsTool,
+        RankTool,
+        ValidateTool,
+        GraphTool,
+        RenderTool
+    ]
+);
