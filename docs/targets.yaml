@@ -340,14 +340,32 @@ targets:
       - No loss of target history or structure during migration
       - Clear cutover point after which markdown targets are retired
     context: >
-      Moving from the current markdown-based target system (docs/targets.md parsed
-      by /cv) to the bullseye MCP server (docs/targets.yaml) is a cross-repo
-      migration. Many repos have established targets in markdown. The transition
-      needs to handle: (1) converting existing markdown targets to YAML schema,
-      (2) a dual-read period where /cv works with both formats, (3) updating
-      global CLAUDE.md directives that reference the old format, (4) migrating
-      skills that parse targets.md directly. The migration touches every repo
-      with a targets.md file.
+      Two dimensions to this migration: technical (format conversion, tool
+      compatibility) and workflow (when does the human switch daily habits).
+
+      Technical: converting markdown targets to YAML, dual-format /cv during
+      transition, updating skills and CLAUDE.md directives. Covered by sub-targets.
+
+      Workflow: The current system (markdown targets + /cv + manual convergence
+      assessment) works today. Bullseye is better in theory but still rough.
+      The risk is switching too early (bullseye can't do something the old system
+      handles) or too late (maintaining two systems indefinitely). The migration
+      needs a clear "bullseye-first" switchover point — a defined set of
+      capabilities that, once working, make bullseye the default for new work.
+      Before that point, the old system remains primary and bullseye is used
+      experimentally on this repo only. After that point, new repos get
+      targets.yaml and existing repos migrate on next touch.
+
+      During the interim (bullseye under development), the old system stays
+      authoritative. Bullseye eats its own dogfood on this repo, but other
+      repos continue with markdown targets. The /cv skill needs to work with
+      both — not as a permanent feature, but as a bridge. The bridge is removed
+      once all active repos are migrated.
+
+      Key question: what's the minimum set of bullseye capabilities that justify
+      switching daily workflow? Likely: bullseye_list + bullseye_rank + bullseye_frontier
+      working reliably, plus /cv calling them instead of parsing markdown. That's
+      roughly T1.3 achieved.
     tags:
       - migration
       - architecture
