@@ -329,6 +329,93 @@ targets:
       - startup
     discovered: 2026-04-07
 
+  T5:
+    name: Migration from markdown targets to bullseye
+    status: identified
+    value: 8
+    cost: 5
+    acceptance:
+      - All repos using docs/targets.md can be migrated to docs/targets.yaml
+      - /cv and related skills work against both old (markdown) and new (bullseye) formats during transition
+      - No loss of target history or structure during migration
+      - Clear cutover point after which markdown targets are retired
+    context: >
+      Moving from the current markdown-based target system (docs/targets.md parsed
+      by /cv) to the bullseye MCP server (docs/targets.yaml) is a cross-repo
+      migration. Many repos have established targets in markdown. The transition
+      needs to handle: (1) converting existing markdown targets to YAML schema,
+      (2) a dual-read period where /cv works with both formats, (3) updating
+      global CLAUDE.md directives that reference the old format, (4) migrating
+      skills that parse targets.md directly. The migration touches every repo
+      with a targets.md file.
+    tags:
+      - migration
+      - architecture
+    discovered: 2026-04-07
+
+  T5.1:
+    name: Markdown-to-YAML target converter
+    parent: T5
+    status: identified
+    value: 5
+    cost: 3
+    acceptance:
+      - bullseye_import tool or standalone script reads docs/targets.md and emits docs/targets.yaml
+      - Preserves target IDs, status, value/cost, acceptance criteria, parent/child relationships
+      - Handles the common markdown conventions (🎯T prefix, status/weight/acceptance fields)
+      - Produces valid YAML that passes bullseye_validate
+    context: >
+      The markdown format has no formal schema — it's whatever /cv and render.rs
+      produce. The converter needs to be tolerant of minor formatting variations
+      across repos.
+    depends_on: []
+    tags:
+      - migration
+    discovered: 2026-04-07
+
+  T5.2:
+    name: Dual-format /cv support during transition
+    parent: T5
+    status: identified
+    value: 5
+    cost: 3
+    acceptance:
+      - /cv detects whether the repo has targets.yaml (use bullseye) or only targets.md (use legacy parser)
+      - Behaviour is identical from the user's perspective regardless of format
+      - Repos can be migrated independently — no big-bang cutover
+    context: >
+      During transition, some repos will have targets.yaml and some will still
+      have targets.md. The /cv skill needs to work with both. Once all repos are
+      migrated, the legacy parser can be removed.
+    depends_on:
+      - T1.3
+      - T5.1
+    tags:
+      - migration
+      - skill
+    discovered: 2026-04-07
+
+  T5.3:
+    name: Global CLAUDE.md and skill directives updated for bullseye
+    parent: T5
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - ~/.claude/CLAUDE.md convergence-targets section references bullseye tools
+      - Skills that reference targets.md parsing are updated to use bullseye MCP calls
+      - No stale references to the old markdown-based workflow remain
+    context: >
+      The global CLAUDE.md has extensive directives about targets.md format,
+      /cv behaviour, and convergence workflow. These all need updating once
+      bullseye is the primary system. This should happen at cutover, not during
+      the dual-format period.
+    depends_on:
+      - T5.2
+    tags:
+      - migration
+    discovered: 2026-04-07
+
   T1.5:
     name: Rework diagnosis integration
     parent: T1
