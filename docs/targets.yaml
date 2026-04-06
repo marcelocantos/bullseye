@@ -218,8 +218,8 @@ targets:
       - Sync runs periodically (cron or daemon hook)
     context: >
       Design note: docs/mcp-triad.md section 7. The portfolio ranking should
-      surface on the phone so Marcelo sees top priorities when he picks up
-      his phone. The sync chain is: targets_portfolio → SQLite table →
+      surface on the phone so the user sees top priorities when they pick up
+      their phone. The sync chain is: targets_portfolio → SQLite table →
       sqlpipe over pigeon → Protocol Today page. Protocol already uses SQLite
       for all storage. jevon T10 tracks the same sqlpipe-over-pigeon pattern
       for jevon's mobile app — same infrastructure.

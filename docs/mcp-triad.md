@@ -214,8 +214,8 @@ computation, fan-out, verification checkpoints. WSJF ranking is
 unnecessary because agents can work everything on the frontier
 simultaneously.
 
-Across repos, the constraint changes. Marcelo's attention is finite.
-He can't review, steer, and unblock work in 15 repos at once. The
+Across repos, the constraint changes. Human attention is finite.
+You can't review, steer, and unblock work in 15 repos at once. The
 question returns to classical scheduling: "What should I focus on
 this hour, today, this week?" This is WSJF's home turf — scarce
 capacity, competing demands, value-weighted prioritisation.
@@ -341,8 +341,8 @@ or at session start when no specific repo context is established.
 ## 7. Protocol app integration (portfolio → phone)
 
 The portfolio view produces a ranked list of what to focus on. That
-ranking should surface on the Protocol app's Today page — so Marcelo
-sees his top priorities when he picks up his phone in the morning.
+ranking should surface on the Protocol app's Today page — so the user
+sees their top priorities when they pick up their phone in the morning.
 
 ### Data flow
 
