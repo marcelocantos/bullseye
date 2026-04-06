@@ -362,10 +362,14 @@ targets:
       both — not as a permanent feature, but as a bridge. The bridge is removed
       once all active repos are migrated.
 
-      Key question: what's the minimum set of bullseye capabilities that justify
-      switching daily workflow? Likely: bullseye_list + bullseye_rank + bullseye_frontier
-      working reliably, plus /cv calling them instead of parsing markdown. That's
-      roughly T1.3 achieved.
+      Migration strategy: run both systems in parallel. Agents write targets to
+      both markdown and YAML — every target addition, status change, or retirement
+      lands in both places. This lets bullseye prove itself against the live
+      workflow without risk. No bridge code needed in /cv — the old /cv reads
+      markdown as before, and bullseye tools read YAML independently. When
+      bullseye consistently produces equal or better results, stop writing
+      to markdown. This avoids both premature switchover and the complexity
+      of dual-format reading logic.
     tags:
       - migration
       - architecture
@@ -392,28 +396,6 @@ targets:
     discovered: 2026-04-07
 
   T5.2:
-    name: Dual-format /cv support during transition
-    parent: T5
-    status: identified
-    value: 5
-    cost: 3
-    acceptance:
-      - /cv detects whether the repo has targets.yaml (use bullseye) or only targets.md (use legacy parser)
-      - Behaviour is identical from the user's perspective regardless of format
-      - Repos can be migrated independently — no big-bang cutover
-    context: >
-      During transition, some repos will have targets.yaml and some will still
-      have targets.md. The /cv skill needs to work with both. Once all repos are
-      migrated, the legacy parser can be removed.
-    depends_on:
-      - T1.3
-      - T5.1
-    tags:
-      - migration
-      - skill
-    discovered: 2026-04-07
-
-  T5.3:
     name: Global CLAUDE.md and skill directives updated for bullseye
     parent: T5
     status: identified
@@ -426,10 +408,10 @@ targets:
     context: >
       The global CLAUDE.md has extensive directives about targets.md format,
       /cv behaviour, and convergence workflow. These all need updating once
-      bullseye is the primary system. This should happen at cutover, not during
-      the dual-format period.
+      bullseye is the primary system. This happens at cutover — when parallel
+      running has built enough confidence to drop markdown.
     depends_on:
-      - T5.2
+      - T5.1
     tags:
       - migration
     discovered: 2026-04-07
