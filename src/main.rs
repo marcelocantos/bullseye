@@ -1,6 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+use std::process;
+
 use bullseye::handler::TargetHandler;
 use rust_mcp_sdk::mcp_server::{McpServerOptions, server_runtime};
 use rust_mcp_sdk::schema::{
@@ -10,8 +12,36 @@ use rust_mcp_sdk::{
     McpServer, StdioTransport, ToMcpServerHandler, TransportOptions, error::SdkResult,
 };
 
+const AGENT_GUIDE: &str = include_str!("../docs/agents-guide.md");
+
 #[tokio::main]
 async fn main() -> SdkResult<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "--version" => {
+                println!("bullseye {}", env!("CARGO_PKG_VERSION"));
+                process::exit(0);
+            }
+            "--help" => {
+                print_help();
+                process::exit(0);
+            }
+            "--help-agent" => {
+                print_help();
+                println!();
+                print!("{AGENT_GUIDE}");
+                process::exit(0);
+            }
+            other => {
+                eprintln!("unknown flag: {other}");
+                eprintln!();
+                print_help();
+                process::exit(1);
+            }
+        }
+    }
+
     let server_details = InitializeResult {
         server_info: Implementation {
             name: "bullseye".to_string(),
@@ -52,4 +82,16 @@ async fn main() -> SdkResult<()> {
     });
 
     server.start().await
+}
+
+fn print_help() {
+    println!("bullseye {} — Convergence Targets MCP Server", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("USAGE:");
+    println!("    bullseye              Start the MCP server (stdio transport)");
+    println!();
+    println!("FLAGS:");
+    println!("    --version             Print version");
+    println!("    --help                Print this help");
+    println!("    --help-agent          Print help and agent guide");
 }
