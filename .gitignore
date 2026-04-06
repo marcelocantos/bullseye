@@ -1,1 +1,6 @@
 /target
+.DS_Store
+*.swp
+*.orig
+.idea/
+.vscode/
