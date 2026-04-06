@@ -204,6 +204,140 @@ Steps 1-2 can proceed independently of 3-5. Step 3 is the
 highest-value integration point (immediate daily workflow
 improvement).
 
+## 6. Global portfolio view
+
+### The two-tier attention model
+
+Within a single repo, agent capacity is effectively unlimited. The
+state machine model optimises for parallel throughput — frontier
+computation, fan-out, verification checkpoints. WSJF ranking is
+unnecessary because agents can work everything on the frontier
+simultaneously.
+
+Across repos, the constraint changes. Marcelo's attention is finite.
+He can't review, steer, and unblock work in 15 repos at once. The
+question returns to classical scheduling: "What should I focus on
+this hour, today, this week?" This is WSJF's home turf — scarce
+capacity, competing demands, value-weighted prioritisation.
+
+### The global graph
+
+Each repo has its own `targets.yaml` with an internal target graph.
+The global view meshes these into a cross-repo quasi-graph:
+
+```
+repo: mnemo
+  T10 (live context compaction)
+    depends: jevon Process/Manager API  ←── cross-repo edge
+    
+repo: targets
+  T1.1 (executable acceptance checks)
+    depends: sawmill conventions        ←── cross-repo edge
+  T1.4 (target-aware compaction)
+    depends: mnemo T10                  ←── cross-repo edge
+
+repo: sawmill
+  T19 (structural invariants)
+    enables: targets T1.1 phase 2       ←── cross-repo edge
+```
+
+Cross-repo dependencies are currently tracked informally in `context`
+fields and memory notes. The global view makes them explicit and
+computable.
+
+### Discovery
+
+The targets server discovers all `targets.yaml` files across the
+managed repo forest. Sources:
+
+1. **`~/.claude/managed-repos.md`** — canonical repo list
+2. **Walk `~/work/`** — fallback discovery
+3. **mnemo_repos** — repos with recent session activity (may include
+   repos not yet in managed-repos.md)
+
+For each discovered repo, load `docs/targets.yaml` (if it exists).
+Repos still using markdown `docs/targets.md` are excluded until
+migrated, or optionally parsed with a best-effort adapter.
+
+### Cross-repo edges
+
+A new field on targets:
+
+```yaml
+T10:
+  name: Live context compaction
+  cross_depends:
+    - repo: marcelocantos/jevon
+      capability: "claude.Process / manager.Manager API"
+      note: "Summarizer lifecycle management"
+  cross_enables:
+    - repo: marcelocantos/targets
+      target: T1.4
+```
+
+`cross_depends` is advisory — it doesn't block frontier computation
+(the dependency is on a capability, not a target state). But it
+surfaces in the global view so the human can make informed decisions.
+
+`cross_enables` tracks value propagation — work on this target
+unblocks work in another repo.
+
+### Global ranking
+
+At the portfolio level, each repo gets an aggregate score:
+
+```
+repo_priority = Σ (frontier_target_weight × momentum) / repo_count_on_frontier
+```
+
+Where:
+- `frontier_target_weight` — WSJF weight of each target on the
+  repo's frontier
+- `momentum` — from mnemo_recent_activity (session recency/frequency)
+- `repo_count_on_frontier` — number of unblocked targets (more
+  frontier = more parallelisable = less human attention needed
+  per unit of progress)
+
+The global `/cv` presents:
+1. **Portfolio ranking** — repos ordered by aggregate priority
+2. **Top target per repo** — what to work on if you enter this repo
+3. **Cross-repo blockers** — targets in repo A that unblock work
+   in repo B (these get a priority boost because their value
+   propagates)
+4. **Momentum report** — which repos have recent activity, which
+   are stale
+
+### Tool: `targets_portfolio`
+
+A new MCP tool on the targets server:
+
+```
+targets_portfolio
+  repos: [list of repo paths, or "all" for discovery]
+  days: recency window for momentum (default 7)
+  
+Returns:
+  - Per-repo: frontier targets, aggregate priority, momentum
+  - Cross-repo edges: blockers and enablers
+  - Recommended focus: top 1-3 repos with reasoning
+```
+
+This tool calls mnemo_recent_activity for momentum data. The
+composition question (direct MCP call vs skill-layer) applies here
+too — start with skill-layer orchestration.
+
+### Interaction with `/cv`
+
+`/cv` gains a scope parameter:
+
+- `/cv` (no args, current behaviour) — evaluate current repo
+- `/cv global` — portfolio-level evaluation across all repos
+- `/cv scan` — lightweight single-repo scan (existing)
+
+The global evaluation is heavier (discovers repos, loads multiple
+YAML files, calls mnemo) so it runs only when explicitly requested
+or at session start when no specific repo context is established.
+
 ## Open questions
 
 - **MCP server composition**: Should targets call sawmill directly
@@ -222,3 +356,16 @@ improvement).
 - **Momentum formula**: The log/decay formula is a guess. Should be
   calibrated against real usage data from mnemo. Consider making it
   a named parameter in the targets YAML rather than hardcoding.
+
+- **Global ranking granularity**: Should the portfolio rank repos
+  (coarse) or individual targets across repos (fine)? Repo-level is
+  simpler and matches the human decision ("which project do I enter?").
+  Target-level is more precise but may be noise — the top target in
+  a low-priority repo is still low-priority. Likely answer: rank
+  repos, then show per-repo frontier within each.
+
+- **Cross-repo edge discovery**: Manual `cross_depends`/`cross_enables`
+  fields are accurate but high-friction. Could mnemo detect cross-repo
+  references automatically (sessions that touch multiple repos, search
+  queries that reference another repo's targets)? Worth exploring as
+  an enrichment layer on top of manual edges.
