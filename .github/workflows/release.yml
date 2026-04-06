@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            asset: darwin-arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset: linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            asset: linux-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+
+      - name: Run tests
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          ASSET="bullseye-${VERSION}-${{ matrix.asset }}.tar.gz"
+          tar czf "$ASSET" -C target/${{ matrix.target }}/release bullseye
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+
+      - name: Upload to release
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ASSET"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Justintime50/homebrew-releaser@v3
+        with:
+          homebrew_owner: marcelocantos
+          homebrew_tap: homebrew-tap
+          github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          formula_folder: Formula
+          version: ${{ github.event.release.tag_name }}
+          install: 'bin.install "bullseye" => "bullseye"'
+          target_darwin_arm64: true
+          target_linux_amd64: true
+          target_linux_arm64: true
+          test: 'system bin/"bullseye", "--version"'
+          skip_checksum: true
+          update_readme_table: true
