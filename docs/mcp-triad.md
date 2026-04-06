@@ -338,6 +338,147 @@ The global evaluation is heavier (discovers repos, loads multiple
 YAML files, calls mnemo) so it runs only when explicitly requested
 or at session start when no specific repo context is established.
 
+## 7. Protocol app integration (portfolio → phone)
+
+The portfolio view produces a ranked list of what to focus on. That
+ranking should surface on the Protocol app's Today page — so Marcelo
+sees his top priorities when he picks up his phone in the morning.
+
+### Data flow
+
+```
+targets_portfolio (laptop)
+  → top N frontier targets with context
+  → written to a SQLite table (e.g., targets_priorities)
+
+sqlpipe (bidirectional sync over pigeon relay)
+  → replicates targets_priorities to Protocol's protocol.db on phone
+
+Protocol Today page (Android)
+  → renders priorities section above the daily checklist
+```
+
+### The sync layer
+
+Protocol already uses SQLite (`protocol.db`) for all storage. sqlpipe
+provides bidirectional SQLite replication with reconnect diff sync.
+pigeon (formerly tern) provides the encrypted WebSocket relay. jevon
+🎯T10 already tracks sqlpipe-based state sync for the jevon mobile
+app — the same infrastructure serves Protocol.
+
+### Schema: `targets_priorities` table
+
+Laptop-owned (Protocol is read-only for this table):
+
+```sql
+CREATE TABLE targets_priorities (
+    id TEXT PRIMARY KEY,          -- "mnemo/T3", "targets/T1.1"
+    repo TEXT NOT NULL,           -- "marcelocantos/mnemo"
+    name TEXT NOT NULL,           -- "Active work dashboard data"
+    weight REAL NOT NULL,         -- effective priority
+    context TEXT,                 -- why this is important now
+    horizon TEXT DEFAULT 'today', -- "today", "tomorrow", "this_week"
+    updated_at TEXT NOT NULL      -- ISO timestamp
+);
+```
+
+The `horizon` field maps to Protocol's daily view — "today" items
+appear on today's page, "tomorrow" on tomorrow's. "this_week" items
+appear in a separate section or as lower-priority entries.
+
+### Sync cadence
+
+A cron job (or mnemo daemon hook) runs `targets_portfolio` periodically
+(e.g., every 30 minutes) and upserts results into `targets_priorities`.
+sqlpipe replicates the changes to the phone on next sync. The phone
+sees fresh priorities without any manual action.
+
+### Protocol UI
+
+The Today page gains a "Focus" section above the checklist:
+
+```
+┌──────────────────────────────────┐
+│ Focus                            │
+│                                  │
+│ 🎯 mnemo/T10  w:1.25             │
+│   Live context compaction        │
+│                                  │
+│ 🎯 targets/T1.3  w:2.67          │
+│   /cv skill rewrite              │
+│                                  │
+│ 🎯 sawmill/T19  w:1.6            │
+│   Structural invariants          │
+├──────────────────────────────────┤
+│ Checklist                        │
+│ ☐ Morning routine                │
+│ ...                              │
+└──────────────────────────────────┘
+```
+
+Tapping a priority could deep-link to the repo (future), or just
+show the target context in a detail sheet.
+
+## 8. Dynamic session startup context (mnemo)
+
+When Claude Code starts a session, it injects static context via
+`<system-reminder>` — CLAUDE.md files, git status, date. mnemo can
+enrich this with dynamic context derived from transcript history.
+
+### What to inject
+
+The MCP server description (the text that appears in the
+`system-reminder` tool listing) can include dynamic content generated
+at registration time or refreshed periodically:
+
+1. **Recently active repos** — "You've worked on mnemo (12 sessions),
+   sawmill (8), targets (3) in the last 7 days."
+2. **Active targets** — top frontier targets from the portfolio view
+3. **Last session summary** — if compaction (🎯T10) is running, the
+   most recent compacted context for this project
+4. **Stale targets** — targets not progressed in >14 days
+
+### Implementation options
+
+**Option A: MCP tool description** — The `mnemo_self` or a new
+`mnemo_context` tool includes dynamic text in its description field.
+MCP tool descriptions are served fresh on each connection, so they
+can include recent data. Downside: tool descriptions are meant to
+be stable; dynamic content is a mild abuse of the protocol.
+
+**Option B: Startup tool call** — CLAUDE.md instructs the agent to
+call `mnemo_startup_context` at session start. Returns a structured
+context block with recent repos, active targets, and last session
+summary. The agent integrates this into its working context. More
+explicit, no protocol abuse, but requires a tool call round-trip.
+
+**Option C: MCP resource** — Expose the startup context as an MCP
+resource (e.g., `mnemo://startup-context/{project}`). Resources are
+designed for dynamic content that the client reads at will. If
+Claude Code supports MCP resources in the system prompt, this is
+the cleanest approach.
+
+**Recommended:** Option B for immediate value (works today), with a
+migration path to Option C when MCP resource support matures.
+
+### Recently active repos — the obvious first feature
+
+This is high-value and low-cost. `mnemo_recent_activity` already
+exists. A `mnemo_startup_context` tool wraps it with formatting:
+
+```
+Recent activity (last 7 days):
+  mnemo        12 sessions  last: 2h ago   targets: T3 (achieved), T10 (new)
+  sawmill       8 sessions  last: 1d ago   targets: T18 (achieved)
+  targets       3 sessions  last: 4h ago   targets: T1, T2 (new)
+  pigeon        2 sessions  last: 3d ago
+  protocol      1 session   last: 6d ago
+```
+
+This immediately answers "where was I?" without running `/waw` or
+`/cv`. The agent sees it in context and can decide whether to
+continue prior work or start something new.
+
 ## Open questions
 
 - **MCP server composition**: Should targets call sawmill directly

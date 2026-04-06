@@ -206,6 +206,129 @@ targets:
       - portfolio
     discovered: 2026-04-07
 
+  T3:
+    name: Protocol app priority sync
+    status: identified
+    value: 8
+    cost: 8
+    acceptance:
+      - targets_portfolio output written to a targets_priorities SQLite table
+      - sqlpipe replicates priorities to Protocol's protocol.db via pigeon
+      - Protocol Today page shows Focus section with top frontier targets
+      - Sync runs periodically (cron or daemon hook)
+    context: >
+      Design note: docs/mcp-triad.md section 7. The portfolio ranking should
+      surface on the phone so Marcelo sees top priorities when he picks up
+      his phone. The sync chain is: targets_portfolio → SQLite table →
+      sqlpipe over pigeon → Protocol Today page. Protocol already uses SQLite
+      for all storage. jevon T10 tracks the same sqlpipe-over-pigeon pattern
+      for jevon's mobile app — same infrastructure.
+    cross_depends:
+      - repo: marcelocantos/pigeon
+        capability: "Encrypted WebSocket relay"
+      - repo: marcelocantos/sqlpipe
+        capability: "Bidirectional SQLite replication"
+    tags:
+      - protocol
+      - mobile
+    discovered: 2026-04-07
+
+  T3.1:
+    name: targets_priorities SQLite table and writer
+    parent: T3
+    status: identified
+    value: 5
+    cost: 3
+    acceptance:
+      - targets_portfolio output upserted into targets_priorities table
+      - Table schema includes repo, name, weight, context, horizon, updated_at
+      - Periodic refresh via cron or daemon hook
+    context: >
+      Laptop-owned table. Protocol is read-only. Horizon field (today/tomorrow/
+      this_week) maps to Protocol's daily view paging.
+    depends_on:
+      - T2.3
+    tags:
+      - protocol
+    discovered: 2026-04-07
+
+  T3.2:
+    name: Protocol Today page Focus section
+    parent: T3
+    status: identified
+    value: 5
+    cost: 3
+    acceptance:
+      - Focus section renders above daily checklist
+      - Shows top frontier targets with repo, weight, and name
+      - Updates on sync without manual refresh
+    context: >
+      Reads from targets_priorities table in protocol.db. Tapping a priority
+      shows context in a detail sheet. Future: deep-link to repo.
+    depends_on:
+      - T3.1
+    tags:
+      - protocol
+      - mobile
+    discovered: 2026-04-07
+
+  T4:
+    name: Dynamic session startup context
+    status: identified
+    value: 8
+    cost: 3
+    acceptance:
+      - mnemo_startup_context tool returns structured context for current project
+      - Includes recently active repos with session counts and recency
+      - Agent sees recent activity without running /waw or /cv
+    context: >
+      Design note: docs/mcp-triad.md section 8. High value, low cost — wraps
+      existing mnemo_recent_activity with formatting. Answers "where was I?"
+      at session start. Implementation: Option B (explicit tool call from
+      CLAUDE.md instruction) for now, Option C (MCP resource) when protocol
+      support matures.
+    tags:
+      - mnemo
+      - startup
+    discovered: 2026-04-07
+
+  T4.1:
+    name: mnemo_startup_context tool
+    parent: T4
+    status: identified
+    value: 5
+    cost: 2
+    acceptance:
+      - Returns per-repo summary with session counts, recency, and active targets
+      - Formatted for easy agent consumption
+      - Filterable by project (current working directory)
+    context: >
+      Wraps mnemo_recent_activity with target-aware enrichment. If the targets
+      MCP server is available, includes frontier targets per repo. Otherwise
+      falls back to session-only data.
+    depends_on: []
+    tags:
+      - mnemo
+    discovered: 2026-04-07
+
+  T4.2:
+    name: CLAUDE.md auto-call directive
+    parent: T4
+    status: identified
+    value: 3
+    cost: 1
+    acceptance:
+      - Global CLAUDE.md instructs agent to call mnemo_startup_context at session start
+      - Context is presented to the agent without user intervention
+    context: >
+      A one-line addition to ~/.claude/CLAUDE.md. Depends on mnemo_startup_context
+      existing. Low cost, immediate value.
+    depends_on:
+      - T4.1
+    tags:
+      - startup
+    discovered: 2026-04-07
+
   T1.5:
     name: Rework diagnosis integration
     parent: T1
