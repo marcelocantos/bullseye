@@ -3,11 +3,11 @@
 
 use std::path::PathBuf;
 
-use targets::graph;
-use targets::ops;
-use targets::render;
-use targets::schema::{Kind, Status, TargetsFile};
-use targets::store;
+use bullseye::graph;
+use bullseye::ops;
+use bullseye::render;
+use bullseye::schema::{Kind, Status, TargetsFile};
+use bullseye::store;
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -293,7 +293,7 @@ fn tunnel_no_warning_for_covered_work() {
 #[test]
 fn tunnel_detects_deep_chain() {
     use chrono::NaiveDate;
-    use targets::schema::{Kind as K, Target};
+    use bullseye::schema::{Kind as K, Target};
 
     let mut file = load_fixture();
     let date = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();

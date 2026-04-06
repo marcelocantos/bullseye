@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use targets::handler::TargetHandler;
+use bullseye::handler::TargetHandler;
 use rust_mcp_sdk::mcp_server::{server_runtime, McpServerOptions};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, ProtocolVersion, ServerCapabilities,
@@ -13,9 +13,9 @@ use rust_mcp_sdk::{error::SdkResult, McpServer, StdioTransport, ToMcpServerHandl
 async fn main() -> SdkResult<()> {
     let server_details = InitializeResult {
         server_info: Implementation {
-            name: "targets".to_string(),
+            name: "bullseye".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            title: Some("Convergence Targets MCP Server".to_string()),
+            title: Some("Bullseye — Convergence Targets MCP Server".to_string()),
             description: Some(
                 "Manage convergence targets — desired states expressed as testable \
                  properties. Provides WSJF ranking, validation, and dependency graph \
@@ -32,8 +32,8 @@ async fn main() -> SdkResult<()> {
         meta: None,
         instructions: Some(
             "Convergence target management. Targets are desired states expressed as \
-             testable properties. Use targets_list to see active targets, targets_rank \
-             for WSJF-ordered recommendations, targets_add/update/retire to manage them."
+             testable properties. Use bullseye_list to see active targets, bullseye_rank \
+             for WSJF-ordered recommendations, bullseye_add/update/retire to manage them."
                 .to_string(),
         ),
         protocol_version: ProtocolVersion::V2025_11_25.into(),

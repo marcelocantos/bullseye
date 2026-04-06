@@ -6,7 +6,7 @@ use rust_mcp_sdk::tool_box;
 
 /// List targets with optional filtering.
 #[mcp_tool(
-    name = "targets_list",
+    name = "bullseye_list",
     description = "List convergence targets, sorted by weight (descending). Returns active targets by default."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -21,7 +21,7 @@ pub struct ListTool {
 
 /// Get a single target by ID.
 #[mcp_tool(
-    name = "targets_get",
+    name = "bullseye_get",
     description = "Get a single target by ID (e.g., 'T1', 'T1.2'). Returns full detail including acceptance criteria and graph relationships."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -35,7 +35,7 @@ pub struct GetTool {
 
 /// Add a new target.
 #[mcp_tool(
-    name = "targets_add",
+    name = "bullseye_add",
     description = "Add a new convergence target. The server assigns the next available ID and validates the entry."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -82,7 +82,7 @@ pub struct AddTool {
 
 /// Update fields on an existing target.
 #[mcp_tool(
-    name = "targets_update",
+    name = "bullseye_update",
     description = "Update one or more fields on an existing target. Only provided fields are changed."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -124,7 +124,7 @@ pub struct UpdateTool {
 
 /// Retire a target (move to achieved).
 #[mcp_tool(
-    name = "targets_retire",
+    name = "bullseye_retire",
     description = "Retire a target by marking it achieved with today's date. Optionally records actual cost for calibration."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -142,7 +142,7 @@ pub struct RetireTool {
 
 /// Compute the frontier: unblocked targets ready for work.
 #[mcp_tool(
-    name = "targets_frontier",
+    name = "bullseye_frontier",
     description = "Compute the frontier: active leaf targets with all dependencies satisfied. These are the targets that can be worked on right now, in parallel."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -153,7 +153,7 @@ pub struct FrontierTool {
 
 /// Trigger a rework cycle from a verify target.
 #[mcp_tool(
-    name = "targets_rework",
+    name = "bullseye_rework",
     description = "Trigger rework from a failed verification. Resets the rework target to converging, increments its retry count, and resets the verify target to identified. Returns an escalation warning if the retry budget is exhausted."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -171,7 +171,7 @@ pub struct ReworkTool {
 
 /// Detect tunnels: work targets far from verification.
 #[mcp_tool(
-    name = "targets_tunnels",
+    name = "bullseye_tunnels",
     description = "Detect tunnels: active work targets that have no verification checkpoint within 2 hops. Suggests where to insert verify targets to prevent agent drift."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -186,7 +186,7 @@ pub struct TunnelsTool {
 
 /// Compute WSJF ranking with blocking analysis.
 #[mcp_tool(
-    name = "targets_rank",
+    name = "bullseye_rank",
     description = "Compute WSJF ranking of active targets with blocking analysis. Returns targets sorted by effective weight, split into unblocked and blocked."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -197,7 +197,7 @@ pub struct RankTool {
 
 /// Validate the targets file for schema conformance.
 #[mcp_tool(
-    name = "targets_validate",
+    name = "bullseye_validate",
     description = "Validate the targets file for schema conformance: ID format, references, cycles, required fields."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -208,7 +208,7 @@ pub struct ValidateTool {
 
 /// Generate a Mermaid dependency graph.
 #[mcp_tool(
-    name = "targets_graph",
+    name = "bullseye_graph",
     description = "Generate a Mermaid dependency graph of active targets showing parent/child, gating, and depends-on relationships."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -219,7 +219,7 @@ pub struct GraphTool {
 
 /// Render targets.md from the YAML source.
 #[mcp_tool(
-    name = "targets_render",
+    name = "bullseye_render",
     description = "Render docs/targets.md from docs/targets.yaml. The YAML is the source of truth; the markdown is a human-readable view. Mutation tools (add, update, retire) auto-render, so this is only needed for manual re-rendering."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
