@@ -9,7 +9,7 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.1.0.
+Snapshot as of v0.2.0.
 
 ### MCP tools
 
@@ -80,8 +80,7 @@ Planned additions:
 
 - **Tool response format**: Responses are unstructured text. Consider
   returning structured JSON alongside text for programmatic consumers.
-- **Error types**: All errors use `CallToolError::unknown_tool`. Should
-  use appropriate error variants for different failure modes.
+- ~~**Error types**: All errors use `CallToolError::unknown_tool`.~~ Fixed in v0.2.0 — now uses `from_message`.
 - **`bullseye_verify`**: Core planned tool not yet implemented. Should
   be present before 1.0.
 - **`weight()` minimum clamp**: Clamping to 1.0 distorts ranking for
