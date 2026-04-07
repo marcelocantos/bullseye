@@ -16,20 +16,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T6.3 Copy-pasteable CLAUDE.md snippet for target management
-- **Weight**: 3 (value 3 / cost 1)
-- **Estimated-cost**: 1
-- **Acceptance**:
-  - README and agents-guide include a CLAUDE.md section users can paste into their project
-  - The snippet tells agents to use bullseye tools for target management
-  - Works standalone — doesn't require other skills or setup
-- **Context**: The snippet bridges the gap between "bullseye is installed as an MCP server" and "agents actually use it." Without explicit CLAUDE.md instructions, agents won't know bullseye exists even if it's registered.
-
-- **Parent**: 🎯T6
-- **Tags**: adoption, docs
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T1.3 /cv skill rewrite against MCP tools
 - **Weight**: 3 (value 8 / cost 3)
 - **Estimated-cost**: 3
@@ -356,6 +342,22 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 - **Achieved**: 2026-04-07
 - **Actual-cost**: 2
 
+### 🎯T6.3 Copy-pasteable CLAUDE.md snippet for target management
+- **Weight**: 3 (value 3 / cost 1)
+- **Estimated-cost**: 1
+- **Acceptance**:
+  - README and agents-guide include a CLAUDE.md section users can paste into their project
+  - The snippet tells agents to use bullseye tools for target management
+  - Works standalone — doesn't require other skills or setup
+- **Context**: The snippet bridges the gap between "bullseye is installed as an MCP server" and "agents actually use it." Without explicit CLAUDE.md instructions, agents won't know bullseye exists even if it's registered.
+
+- **Parent**: 🎯T6
+- **Tags**: adoption, docs
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-07
+- **Actual-cost**: 1
+
 ## Graph
 
 ```mermaid
@@ -382,7 +384,6 @@ graph TD
     T5_2["Global CLAUDE.md and skill di…"]
     T6["Seamless new-user adoption"]
     T6_1["bullseye_init tool creates st…"]
-    T6_3["Copy-pasteable CLAUDE.md snip…"]
     T1 --> T1_1
     T1 --> T1_2
     T1 --> T1_3
@@ -399,7 +400,6 @@ graph TD
     T5 --> T5_1
     T5 --> T5_2
     T6 --> T6_1
-    T6 --> T6_3
     T1_3 -.->|needs| T1_1
     T1_3 -.->|needs| T1_2
     T1_5 -.->|needs| T1_1

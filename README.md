@@ -65,7 +65,9 @@ the nearest `targets.yaml`.
 | `bullseye_render` | Re-render docs/targets.md from YAML |
 
 See [agents-guide.md](docs/agents-guide.md) for detailed tool
-parameters, the targets.yaml schema, and usage workflows.
+parameters, the targets.yaml schema, usage workflows, and a
+[copy-pasteable CLAUDE.md snippet](docs/agents-guide.md#agent-integration)
+for wiring Bullseye into your project's agent instructions.
 
 ## Key concepts
 

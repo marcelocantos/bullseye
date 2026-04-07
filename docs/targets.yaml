@@ -407,9 +407,10 @@ targets:
     achieved: 2026-04-07
   T6.3:
     name: Copy-pasteable CLAUDE.md snippet for target management
-    status: identified
+    status: achieved
     value: 3.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - README and agents-guide include a CLAUDE.md section users can paste into their project
     - The snippet tells agents to use bullseye tools for target management
@@ -422,3 +423,4 @@ targets:
     - docs
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-07
