@@ -68,7 +68,7 @@ fn text_result(text: String) -> ToolResult {
 }
 
 fn tool_err(msg: impl Into<String>) -> CallToolError {
-    CallToolError::unknown_tool(msg.into())
+    CallToolError::from_message(msg)
 }
 
 fn err(msg: impl Into<String>) -> ToolResult {
