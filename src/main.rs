@@ -46,11 +46,10 @@ async fn main() -> SdkResult<()> {
         server_info: Implementation {
             name: "bullseye".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            title: Some("Bullseye — Convergence Targets MCP Server".to_string()),
+            title: Some("Bullseye — Target Management MCP Server".to_string()),
             description: Some(
-                "Manage convergence targets — desired states expressed as testable \
-                 properties. Provides WSJF ranking, validation, and dependency graph \
-                 analysis."
+                "Manage targets — desired states expressed as testable properties. \
+                 Provides WSJF ranking, validation, and dependency graph analysis."
                     .to_string(),
             ),
             icons: vec![],
@@ -62,8 +61,8 @@ async fn main() -> SdkResult<()> {
         },
         meta: None,
         instructions: Some(
-            "Convergence target management. Targets are desired states expressed as \
-             testable properties. Use bullseye_list to see active targets, bullseye_rank \
+            "Target management. Targets are desired states expressed as testable \
+             properties. Use bullseye_list to see active targets, bullseye_rank \
              for WSJF-ordered recommendations, bullseye_add/update/retire to manage them."
                 .to_string(),
         ),
@@ -85,7 +84,7 @@ async fn main() -> SdkResult<()> {
 }
 
 fn print_help() {
-    println!("bullseye {} — Convergence Targets MCP Server", env!("CARGO_PKG_VERSION"));
+    println!("bullseye {} — Target Management MCP Server", env!("CARGO_PKG_VERSION"));
     println!();
     println!("USAGE:");
     println!("    bullseye              Start the MCP server (stdio transport)");

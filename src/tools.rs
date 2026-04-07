@@ -7,7 +7,7 @@ use rust_mcp_sdk::tool_box;
 /// List targets with optional filtering.
 #[mcp_tool(
     name = "bullseye_list",
-    description = "List convergence targets, sorted by weight (descending). Returns active targets by default."
+    description = "List targets, sorted by weight (descending). Returns active targets by default."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ListTool {
@@ -36,7 +36,7 @@ pub struct GetTool {
 /// Add a new target.
 #[mcp_tool(
     name = "bullseye_add",
-    description = "Add a new convergence target. The server assigns the next available ID and validates the entry."
+    description = "Add a new target. The server assigns the next available ID and validates the entry."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct AddTool {
@@ -52,7 +52,7 @@ pub struct AddTool {
     /// Agent-estimated cost (Fibonacci: 1, 2, 3, 5, 8, 13, 20).
     pub cost: f64,
 
-    /// Acceptance criteria — how to verify convergence.
+    /// Acceptance criteria — how to verify the target is achieved.
     pub acceptance: Vec<String>,
 
     /// Why this target matters.

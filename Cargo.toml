@@ -2,11 +2,11 @@
 name = "bullseye"
 version = "0.1.0"
 edition = "2024"
-description = "MCP server for convergence targets — desired states ranked by WSJF"
+description = "MCP server for managing targets — desired states ranked by WSJF"
 license = "Apache-2.0"
 repository = "https://github.com/marcelocantos/bullseye"
 authors = ["Marcelo Cantos"]
-keywords = ["mcp", "targets", "convergence", "wsjf", "scheduling"]
+keywords = ["mcp", "targets", "wsjf", "scheduling", "planning"]
 categories = ["development-tools"]
 
 [dependencies]

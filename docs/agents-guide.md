@@ -4,8 +4,8 @@ Reference for AI agents using Bullseye as an MCP server.
 
 ## What Bullseye does
 
-Bullseye manages **convergence targets** — desired project states
-expressed as testable properties. It stores targets in
+Bullseye manages **targets** — desired project states expressed as
+testable properties. It stores targets in
 `docs/targets.yaml`, ranks them by WSJF (value/cost), computes which
 are unblocked, and detects gaps in verification coverage.
 
@@ -42,7 +42,7 @@ Add a new target. The server assigns the next available ID.
 | `name` | string | required | Desired state assertion |
 | `value` | number | required | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 |
 | `cost` | number | required | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 |
-| `acceptance` | string[] | required | How to verify convergence |
+| `acceptance` | string[] | required | How to verify the target is achieved |
 | `context` | string | `""` | Why this target matters |
 | `parent` | string | null | Parent target ID for sub-targets |
 | `kind` | string | `"work"` | `"work"` or `"verify"` |
@@ -155,7 +155,7 @@ targets:
     value: 8                              # Fibonacci: 1, 2, 3, 5, 8, 13, 20
     cost: 3                               # Fibonacci: 1, 2, 3, 5, 8, 13, 20
     actual_cost: 5                        # recorded on retirement (optional)
-    acceptance:                           # how to verify convergence (required)
+    acceptance:                           # how to verify achievement (required)
       - CI green on all platforms
       - No test skips without documented reason
     context: "Cross-platform CI is a project goal."  # optional

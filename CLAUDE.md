@@ -17,7 +17,7 @@ Rust edition 2024, toolchain 1.94+.
 
 ## What This Is
 
-**Bullseye** is an MCP (Model Context Protocol) server that manages **convergence targets** — desired project states expressed as testable properties, ranked by weighted shortest job first (WSJF = value/cost).
+**Bullseye** is an MCP (Model Context Protocol) server that manages **targets** — desired project states expressed as testable properties, ranked by weighted shortest job first (WSJF = value/cost).
 
 Targets live in `docs/targets.yaml` (YAML source of truth) with an auto-rendered `docs/targets.md` markdown view. The server discovers the targets file by walking up from the caller's `cwd`.
 

@@ -1,8 +1,8 @@
 # Bullseye
 
-An MCP server for managing **convergence targets** — desired project
-states expressed as testable properties, ranked by weighted shortest
-job first (WSJF).
+An MCP server for managing **targets** — desired project states
+expressed as testable properties, ranked by weighted shortest job
+first (WSJF).
 
 Targets live in `docs/targets.yaml` (source of truth) with an
 auto-rendered `docs/targets.md` markdown view. The server discovers

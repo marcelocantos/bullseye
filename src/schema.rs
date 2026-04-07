@@ -18,7 +18,7 @@ pub struct TargetsFile {
     pub targets: BTreeMap<String, Target>,
 }
 
-/// A single convergence target.
+/// A single target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
     /// Short assertion describing the desired state.
