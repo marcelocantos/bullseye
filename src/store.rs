@@ -26,6 +26,21 @@ pub fn discover(start_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Create an empty targets file at `start_dir/docs/targets.yaml`.
+/// Creates the `docs/` directory if it doesn't exist.
+pub fn create_default(start_dir: &Path) -> Result<PathBuf, String> {
+    let docs = start_dir.join("docs");
+    std::fs::create_dir_all(&docs)
+        .map_err(|e| format!("failed to create {}: {e}", docs.display()))?;
+    let path = docs.join("targets.yaml");
+    let file = TargetsFile {
+        last_evaluated: None,
+        targets: Default::default(),
+    };
+    save(&path, &file)?;
+    Ok(path)
+}
+
 /// Load and parse a targets file.
 pub fn load(path: &Path) -> Result<TargetsFile, String> {
     let content = std::fs::read_to_string(path)

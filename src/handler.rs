@@ -82,6 +82,21 @@ fn load_file(cwd: &str) -> Result<(std::path::PathBuf, crate::schema::TargetsFil
     Ok((path, file))
 }
 
+/// Load the targets file, or create an empty one if none exists.
+fn load_or_create_file(
+    cwd: &str,
+) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {
+    let dir = Path::new(cwd);
+    if let Some(path) = store::discover(dir) {
+        let file = store::load(&path).map_err(tool_err)?;
+        Ok((path, file))
+    } else {
+        let path = store::create_default(dir).map_err(tool_err)?;
+        let file = store::load(&path).map_err(tool_err)?;
+        Ok((path, file))
+    }
+}
+
 /// Save the YAML and re-render the markdown view.
 fn save_and_render(path: &Path, file: &crate::schema::TargetsFile) -> Result<(), CallToolError> {
     store::save(path, file).map_err(tool_err)?;
@@ -139,7 +154,7 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
 }
 
 fn handle_add(t: crate::tools::AddTool) -> ToolResult {
-    let (path, mut file) = load_file(&t.cwd)?;
+    let (path, mut file) = load_or_create_file(&t.cwd)?;
 
     // Determine next ID.
     let next_id = match &t.parent {
