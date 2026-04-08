@@ -9,7 +9,7 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.3.0.
+Snapshot as of v0.4.0.
 
 ### MCP tools
 
@@ -26,6 +26,7 @@ Snapshot as of v0.3.0.
 | `bullseye_validate(cwd)` | Stable | Validation rules will grow but existing ones won't change |
 | `bullseye_graph(cwd)` | Stable | |
 | `bullseye_render(cwd)` | Stable | |
+| `bullseye_import(cwd, path, force)` | Stable | Markdown-to-YAML migration |
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
 
 Planned additions (not yet implemented):

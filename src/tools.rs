@@ -7,7 +7,7 @@ use rust_mcp_sdk::tool_box;
 /// List targets with optional filtering.
 #[mcp_tool(
     name = "bullseye_list",
-    description = "List targets, sorted by weight (descending). Returns active targets by default."
+    description = "List targets. Returns active targets by default."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ListTool {

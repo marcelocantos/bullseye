@@ -46,7 +46,7 @@ The server communicates over stdio using the MCP protocol.
 
 ## Tools
 
-Bullseye exposes 12 MCP tools. All accept a `cwd` parameter to locate
+Bullseye exposes 13 MCP tools. All accept a `cwd` parameter to locate
 the nearest `targets.yaml`.
 
 | Tool | Description |
@@ -61,6 +61,7 @@ the nearest `targets.yaml`.
 | `bullseye_tunnels` | Detect work targets far from verification |
 | `bullseye_validate` | Check schema conformance |
 | `bullseye_graph` | Generate Mermaid dependency graph |
+| `bullseye_import` | Import targets from markdown into YAML |
 | `bullseye_render` | Re-render docs/targets.md from YAML |
 | `bullseye_init` | Create starter targets.yaml with sample target |
 

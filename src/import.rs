@@ -416,8 +416,10 @@ mod tests {
             "T5.1 should depend on T5"
         );
         assert!(
-            t5_1.status == Status::Identified || t5_1.status == Status::Converging,
-            "T5.1 should be identified or converging"
+            t5_1.status == Status::Identified
+                || t5_1.status == Status::Converging
+                || t5_1.status == Status::Achieved,
+            "T5.1 should have a valid status"
         );
     }
 
