@@ -562,3 +562,69 @@ fn create_starter_does_not_overwrite() {
     let found = store::discover(tmp.path());
     assert!(found.is_some());
 }
+
+// --- Startup context tests ---
+
+#[test]
+fn startup_context_shows_frontier_and_counts() {
+    let file = load_fixture();
+    let ctx = graph::startup_context(&file, "test/docs/targets.yaml", 14);
+
+    // Header with counts.
+    assert!(ctx.contains("Active: 4 target(s)"));
+    assert!(ctx.contains("Frontier:"));
+
+    // Frontier section should include T1 and T2 (unblocked active targets).
+    assert!(ctx.contains("## Frontier"));
+    assert!(ctx.contains("🎯T1"));
+    assert!(ctx.contains("🎯T2"));
+}
+
+#[test]
+fn startup_context_shows_recently_achieved() {
+    let mut file = load_fixture();
+    // Set T4's achieved date to today so it appears in recent.
+    let today = chrono::Local::now().date_naive();
+    file.targets.get_mut("T4").unwrap().achieved = Some(today);
+
+    let ctx = graph::startup_context(&file, "test", 14);
+    assert!(ctx.contains("## Recently achieved"));
+    assert!(ctx.contains("🎯T4"));
+    assert!(ctx.contains("Documentation covers all public APIs"));
+}
+
+#[test]
+fn startup_context_omits_old_achieved() {
+    let file = load_fixture();
+    // T4 was achieved on 2026-03-10, which is >14 days ago (test runs after that).
+    let ctx = graph::startup_context(&file, "test", 14);
+    // Should NOT have a recently achieved section (T4 is too old).
+    assert!(!ctx.contains("## Recently achieved"));
+}
+
+#[test]
+fn startup_context_shows_tunnel_warnings() {
+    let mut file = load_fixture();
+    // Remove the verify target so tunnels are detected.
+    file.targets.remove("T5");
+
+    let ctx = graph::startup_context(&file, "test", 14);
+    assert!(ctx.contains("## Warnings"));
+    assert!(ctx.contains("Tunnels:"));
+    assert!(ctx.contains("lack nearby verification"));
+}
+
+#[test]
+fn startup_context_shows_validation_errors() {
+    let mut file = load_fixture();
+    // Create a dangling depends_on reference.
+    file.targets
+        .get_mut("T1")
+        .unwrap()
+        .depends_on
+        .push("T99".to_string());
+
+    let ctx = graph::startup_context(&file, "test", 14);
+    assert!(ctx.contains("Validation errors"));
+    assert!(ctx.contains("T99"));
+}

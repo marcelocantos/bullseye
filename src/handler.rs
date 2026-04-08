@@ -59,6 +59,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::RenderTool(t) => handle_render(t),
             TargetTools::InitTool(t) => handle_init(t),
             TargetTools::ImportTool(t) => handle_import(t),
+            TargetTools::StartupContextTool(t) => handle_startup_context(t),
         }
     }
 }
@@ -514,6 +515,13 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
         md_path.display(),
         yaml_path.display(),
     ))
+}
+
+fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
+    let (path, file) = load_file(&t.cwd)?;
+    let recent_days = t.recent_days.unwrap_or(14);
+    let out = graph::startup_context(&file, &path.display().to_string(), recent_days);
+    text_result(out)
 }
 
 /// Discover a targets.md by walking up from start_dir.

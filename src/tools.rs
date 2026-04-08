@@ -247,6 +247,21 @@ pub struct RenderTool {
     pub cwd: String,
 }
 
+/// Session startup context for a project.
+#[mcp_tool(
+    name = "bullseye_startup_context",
+    description = "Return a concise startup context for the current project: active target count, frontier targets ready for work, recently achieved targets, and any warnings (tunnels, validation errors). Designed for agent consumption at session start — pair with mnemo_recent_activity for full session context."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct StartupContextTool {
+    /// Working directory to discover targets.yaml from.
+    pub cwd: String,
+
+    /// Number of days to look back for recently achieved targets (default: 14).
+    #[serde(default)]
+    pub recent_days: Option<u32>,
+}
+
 fn default_filter() -> String {
     "active".to_string()
 }
@@ -270,6 +285,7 @@ tool_box!(
         GraphTool,
         RenderTool,
         InitTool,
-        ImportTool
+        ImportTool,
+        StartupContextTool
     ]
 );

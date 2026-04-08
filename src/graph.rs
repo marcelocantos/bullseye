@@ -356,6 +356,85 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
     errors
 }
 
+/// Produce a concise startup context summary for agent consumption.
+pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) -> String {
+    let cutoff = chrono::Local::now().date_naive() - chrono::Duration::days(recent_days as i64);
+
+    let active = file.active();
+    let active_count = active.len();
+
+    let errors = validate(file);
+    let front = if errors.is_empty() {
+        frontier(file)
+    } else {
+        Vec::new()
+    };
+
+    // Recently achieved targets.
+    let mut recent_achieved: Vec<(&str, &crate::schema::Target)> = file
+        .achieved()
+        .into_iter()
+        .filter(|(_, t)| t.achieved.is_some_and(|d| d >= cutoff))
+        .collect();
+    recent_achieved.sort_by(|a, b| b.1.achieved.cmp(&a.1.achieved));
+
+    let tuns = if errors.is_empty() {
+        tunnels(file, 2)
+    } else {
+        Vec::new()
+    };
+
+    let mut out = String::new();
+
+    out.push_str(&format!(
+        "# Startup context\nFile: {file_path}\nActive: {active_count} target(s), Frontier: {} ready for work\n\n",
+        front.len(),
+    ));
+
+    if !front.is_empty() {
+        out.push_str("## Frontier (unblocked, ready for work)\n\n");
+        for ft in &front {
+            let kind_label = match ft.kind {
+                Kind::Work => "",
+                Kind::Verify => " [verify]",
+            };
+            out.push_str(&format!("🎯{} {}{kind_label}\n", ft.id, ft.name));
+            if !ft.tags.is_empty() {
+                out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
+            }
+        }
+        out.push('\n');
+    }
+
+    if !recent_achieved.is_empty() {
+        out.push_str(&format!(
+            "## Recently achieved (last {recent_days} days)\n\n"
+        ));
+        for (id, target) in &recent_achieved {
+            let date = target.achieved.map_or("?".to_string(), |d| d.to_string());
+            out.push_str(&format!("🎯{id} {} (achieved {date})\n", target.name));
+        }
+        out.push('\n');
+    }
+
+    if !errors.is_empty() {
+        out.push_str("## Warnings\n\n");
+        out.push_str(&format!("Validation errors: {}\n\n", errors.join("; ")));
+    }
+
+    if !tuns.is_empty() {
+        if errors.is_empty() {
+            out.push_str("## Warnings\n\n");
+        }
+        out.push_str(&format!(
+            "Tunnels: {} work target(s) lack nearby verification\n",
+            tuns.len()
+        ));
+    }
+
+    out
+}
+
 fn mermaid_node(id: &str) -> String {
     id.replace('.', "_")
 }
