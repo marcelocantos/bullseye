@@ -32,7 +32,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
         if let Some(caps) = header_re.captures(line) {
             let id = caps[1].to_string();
             let is_verify = caps.get(2).is_some();
-            let name = caps[3].trim().to_string();
+            let name = caps[3].trim().trim_start_matches('—').trim().to_string();
 
             i += 1;
 
@@ -48,9 +48,23 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 if l.starts_with("- **") {
                     break;
                 }
-                // Skip the mermaid graph and section headers.
-                if l.starts_with("##") || l.starts_with("```") {
+                // Stop at section headers.
+                if l.starts_with("##") {
                     break;
+                }
+                // Skip over code fences within descriptions.
+                if l.starts_with("```") {
+                    description_lines.push(lines[i]);
+                    i += 1;
+                    while i < lines.len() && !lines[i].trim().starts_with("```") {
+                        description_lines.push(lines[i]);
+                        i += 1;
+                    }
+                    if i < lines.len() {
+                        description_lines.push(lines[i]); // closing fence
+                        i += 1;
+                    }
+                    continue;
                 }
                 if l.is_empty() && description_lines.is_empty() {
                     // Leading blank — skip.
