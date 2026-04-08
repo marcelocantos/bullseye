@@ -223,7 +223,7 @@
 - **Context**: Wraps mnemo_recent_activity with target-aware enrichment. If the targets MCP server is available, includes frontier targets per repo. Otherwise falls back to session-only data.
 
 - **Tags**: mnemo
-- **Status**: Identified
+- **Status**: Converging
 - **Discovered**: 2026-04-07
 
 ### 🎯T4.2 CLAUDE.md auto-call directive

@@ -273,7 +273,7 @@ targets:
     discovered: 2026-04-07
   T4.1:
     name: mnemo_startup_context tool
-    status: identified
+    status: converging
     value: 5.0
     cost: 2.0
     acceptance:
