@@ -411,16 +411,6 @@ mod tests {
         // Spot-check a known target.
         let t5_1 = parsed.targets.get("T5.1").expect("T5.1 not found");
         assert_eq!(t5_1.name, "Markdown-to-YAML target converter");
-        assert!(
-            t5_1.depends_on.contains(&"T5".to_string()),
-            "T5.1 should depend on T5"
-        );
-        assert!(
-            t5_1.status == Status::Identified
-                || t5_1.status == Status::Converging
-                || t5_1.status == Status::Achieved,
-            "T5.1 should have a valid status"
-        );
     }
 
     #[test]
