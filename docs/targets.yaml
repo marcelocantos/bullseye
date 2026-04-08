@@ -26,7 +26,8 @@ targets:
     - Structured pass/fail report with file/line-level detail
     context: |
       Phase 1 uses sawmill's existing check_conventions and query tools. Phase 2 adds structural invariants when sawmill T19 lands. See docs/mcp-triad.md section 1.
-    parent: T1
+    depends_on:
+    - T1
     tags:
     - sawmill
     origin: manual
@@ -42,7 +43,8 @@ targets:
     - Momentum factor is tunable, not hardcoded
     context: |
       Static WSJF ranking ignores whether a target is actively being worked on or has been stale for weeks. mnemo_recent_activity provides the signal; the /cv skill merges it with targets_rank output. See docs/mcp-triad.md section 2.
-    parent: T1
+    depends_on:
+    - T1
     tags:
     - mnemo
     origin: manual
@@ -59,8 +61,8 @@ targets:
     - Output quality matches or exceeds current /cv
     context: |
       Highest-value integration point — immediate daily workflow improvement. The skill shrinks from ~200 lines to ~20 lines of tool orchestration. See docs/mcp-triad.md section 5.
-    parent: T1
     depends_on:
+    - T1
     - T1.1
     - T1.2
     tags:
@@ -78,7 +80,8 @@ targets:
     - mnemo_restore returns structured target context
     context: |
       Depends on mnemo T10 (live context compaction). The summarizer speaks the language of the target graph instead of free-text. See docs/mcp-triad.md section 3.
-    parent: T1
+    depends_on:
+    - T1
     tags:
     - mnemo
     origin: manual
@@ -94,8 +97,8 @@ targets:
     - Combined diagnosis is passed as targets_rework payload
     context: |
       The rework agent gets maximum context: what failed (sawmill), what was tried before (mnemo), and retry budget status (targets). See docs/mcp-triad.md section 4.
-    parent: T1
     depends_on:
+    - T1
     - T1.1
     tags:
     - sawmill
@@ -130,7 +133,8 @@ targets:
     - Handles missing/invalid files gracefully (skip with warning)
     context: |
       Sources: ~/.claude/managed-repos.md (canonical), ~/work/ walk (fallback), mnemo_repos (enrichment for recently-active repos not in managed list).
-    parent: T2
+    depends_on:
+    - T2
     tags:
     - portfolio
     origin: manual
@@ -146,8 +150,8 @@ targets:
     - Targets enabling work in other repos get a priority boost
     context: |
       Manual cross_depends/cross_enables fields are accurate but high-friction. Future enrichment: mnemo could detect cross-repo references automatically from sessions that reference another repo's targets. Start manual.
-    parent: T2
     depends_on:
+    - T2
     - T2.1
     tags:
     - portfolio
@@ -165,8 +169,8 @@ targets:
     - Momentum from mnemo_recent_activity integrated into ranking
     context: |
       Aggregate score: sum(frontier_weight * momentum) / frontier_size. Repos with more frontier targets are more parallelisable and need less per-unit human attention. Cross-repo enablers propagate value from downstream repos. See docs/mcp-triad.md section 6.
-    parent: T2
     depends_on:
+    - T2
     - T2.1
     - T2.2
     tags:
@@ -186,8 +190,8 @@ targets:
     - Includes momentum report (active vs stale repos)
     context: |
       Heavier than single-repo /cv (discovers repos, loads multiple YAML, calls mnemo). Runs on explicit request or at session start when no specific repo context.
-    parent: T2
     depends_on:
+    - T2
     - T2.3
     - T1.3
     tags:
@@ -223,8 +227,8 @@ targets:
     - Periodic refresh via cron or daemon hook
     context: |
       Laptop-owned table. Protocol is read-only. Horizon field (today/tomorrow/ this_week) maps to Protocol's daily view paging.
-    parent: T3
     depends_on:
+    - T3
     - T2.3
     tags:
     - protocol
@@ -241,8 +245,8 @@ targets:
     - Updates on sync without manual refresh
     context: |
       Reads from targets_priorities table in protocol.db. Tapping a priority shows context in a detail sheet. Future: deep-link to repo.
-    parent: T3
     depends_on:
+    - T3
     - T3.1
     tags:
     - protocol
@@ -276,7 +280,8 @@ targets:
     - Filterable by project (current working directory)
     context: |
       Wraps mnemo_recent_activity with target-aware enrichment. If the targets MCP server is available, includes frontier targets per repo. Otherwise falls back to session-only data.
-    parent: T4
+    depends_on:
+    - T4
     tags:
     - mnemo
     origin: manual
@@ -291,8 +296,8 @@ targets:
     - Context is presented to the agent without user intervention
     context: |
       A one-line addition to ~/.claude/CLAUDE.md. Depends on mnemo_startup_context existing. Low cost, immediate value.
-    parent: T4
     depends_on:
+    - T4
     - T4.1
     tags:
     - startup
@@ -331,7 +336,8 @@ targets:
     - Produces valid YAML that passes bullseye_validate
     context: |
       The markdown format has no formal schema — it's whatever /cv and render.rs produce. The converter needs to be tolerant of minor formatting variations across repos.
-    parent: T5
+    depends_on:
+    - T5
     tags:
     - migration
     origin: manual
@@ -347,8 +353,8 @@ targets:
     - No stale references to the old markdown-based workflow remain
     context: |
       The global CLAUDE.md has extensive directives about targets.md format, /cv behaviour, and convergence workflow. These all need updating once bullseye is the primary system. This happens at cutover — when parallel running has built enough confidence to drop markdown.
-    parent: T5
     depends_on:
+    - T5
     - T5.1
     tags:
     - migration
@@ -385,7 +391,8 @@ targets:
     - Idempotent — refuses to overwrite an existing file
     context: |
       Eliminates the cold-start problem. A new user's first interaction with bullseye produces a working targets file they can immediately build on.
-    parent: T6
+    depends_on:
+    - T6
     tags:
     - adoption
     origin: manual
@@ -403,7 +410,8 @@ targets:
     - Other mutation tools (update, retire) still error on missing file
     context: |
       Complementary to bullseye_init. If an agent calls bullseye_add before init, it should just work rather than erroring. This makes the tool more forgiving in agentic workflows where the agent may not know to call init first.
-    parent: T6
+    depends_on:
+    - T6
     tags:
     - adoption
     origin: manual
@@ -421,7 +429,8 @@ targets:
     - Works standalone — doesn't require other skills or setup
     context: |
       The snippet bridges the gap between "bullseye is installed as an MCP server" and "agents actually use it." Without explicit CLAUDE.md instructions, agents won't know bullseye exists even if it's registered.
-    parent: T6
+    depends_on:
+    - T6
     tags:
     - adoption
     - docs
