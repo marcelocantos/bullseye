@@ -17,7 +17,7 @@ Rust edition 2024, toolchain 1.94+.
 
 ## What This Is
 
-**Bullseye** is an MCP (Model Context Protocol) server that manages **targets** — desired project states expressed as testable properties, ranked by weighted shortest job first (WSJF = value/cost).
+**Bullseye** is an MCP (Model Context Protocol) server that manages **targets** — desired project states expressed as testable properties, with dependency tracking and frontier computation.
 
 Targets live in `docs/targets.yaml` (YAML source of truth) with an auto-rendered `docs/targets.md` markdown view. The server discovers the targets file by walking up from the caller's `cwd`.
 
@@ -29,20 +29,19 @@ Part of a planned **MCP triad**: targets (plan) + sawmill (code) + mnemo (histor
 main.rs        — MCP server entry point (tokio + rust-mcp-sdk stdio transport)
 schema.rs      — Core types: TargetsFile, Target, Status, Kind, GateEdge
 store.rs       — YAML file I/O: discover, load, save
-graph.rs       — Ranking (WSJF), frontier (unblocked leaves), tunnel detection,
+graph.rs       — Frontier (unblocked leaves), tunnel detection,
                  validation, Mermaid graph rendering
 ops.rs         — Rework cycle logic (verify failure → re-enter work target)
 handler.rs     — MCP tool request dispatch (routes tool name → implementation)
-tools.rs       — 12 MCP tool definitions via #[mcp_tool] macro
+tools.rs       — MCP tool definitions via #[mcp_tool] macro
 render.rs      — Markdown rendering of targets for docs/targets.md
 ```
 
 **Data flow**: Every MCP tool call receives a `cwd` parameter → `store::discover()` finds `targets.yaml` → `store::load()` deserializes → operation applied → `store::save()` writes back + `render::render()` updates markdown.
 
 **Key domain concepts**:
-- Targets are hierarchical (T1 → T1.1, T1.2) via `parent` field
-- `gates` edges express criticality-weighted blocking relationships
-- `depends_on` edges express hard blocking dependencies
+- `depends_on` edges express hard blocking dependencies; all structural relationships use `depends_on`
+- `gates` edges express soft blocking with criticality weights
 - Verify-kind targets (`kind: verify`) validate work targets via `verifies` edges
 - Rework loops: when verification fails, `rework` edge re-enters a work target with retry budget
 

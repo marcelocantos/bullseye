@@ -21,7 +21,6 @@ Snapshot as of v0.3.0.
 | `bullseye_update(cwd, id, ...)` | Needs review | Field set may expand |
 | `bullseye_retire(cwd, id, actual_cost)` | Stable | |
 | `bullseye_frontier(cwd)` | Stable | |
-| `bullseye_rank(cwd)` | Needs review | May gain momentum parameter (mnemo integration) |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
 | `bullseye_tunnels(cwd, max_depth)` | Stable | |
 | `bullseye_validate(cwd)` | Stable | Validation rules will grow but existing ones won't change |
@@ -46,7 +45,6 @@ Planned additions (not yet implemented):
 | `actual_cost` | Stable | |
 | `acceptance` | Stable | |
 | `context` | Stable | |
-| `parent` | Stable | |
 | `gates` (target, criticality) | Stable | |
 | `depends_on` | Stable | |
 | `verifies` | Stable | |
@@ -84,8 +82,6 @@ Planned additions:
 - ~~**Error types**: All errors use `CallToolError::unknown_tool`.~~ Fixed in v0.2.0 — now uses `from_message`.
 - **`bullseye_verify`**: Core planned tool not yet implemented. Should
   be present before 1.0.
-- **`weight()` minimum clamp**: Clamping to 1.0 distorts ranking for
-  low-value targets. Review before stabilising.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
@@ -94,5 +90,4 @@ Planned additions:
   real-world validation before stabilising.
 - Protocol app sync — depends on external infrastructure (sqlpipe,
   pigeon).
-- Momentum-aware ranking — depends on mnemo integration.
 - MCP resource support — waiting on protocol maturity.

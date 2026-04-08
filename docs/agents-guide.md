@@ -6,8 +6,8 @@ Reference for AI agents using Bullseye as an MCP server.
 
 Bullseye manages **targets** — desired project states expressed as
 testable properties. It stores targets in
-`docs/targets.yaml`, ranks them by WSJF (value/cost), computes which
-are unblocked, and detects gaps in verification coverage.
+`docs/targets.yaml`, computes which are unblocked (the frontier),
+and detects gaps in verification coverage.
 
 Every tool accepts a `cwd` parameter. The server walks up from `cwd`
 to find the nearest `docs/targets.yaml` or `targets.yaml`.
@@ -44,7 +44,6 @@ Add a new target. The server assigns the next available ID.
 | `cost` | number | required | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 |
 | `acceptance` | string[] | required | How to verify the target is achieved |
 | `context` | string | `""` | Why this target matters |
-| `parent` | string | null | Parent target ID for sub-targets |
 | `kind` | string | `"work"` | `"work"` or `"verify"` |
 | `verifies` | string[] | `[]` | For verify targets: IDs of targets this verifies |
 | `origin` | string | `"manual"` | How the target was created |
@@ -85,14 +84,6 @@ graph first and returns errors if invalid.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 
-### bullseye_rank
-
-WSJF ranking of active targets, split into unblocked and blocked.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cwd` | string | required | Working directory |
-
 ### bullseye_rework
 
 Trigger rework from a failed verification. Resets the rework
@@ -117,7 +108,7 @@ hops.
 
 ### bullseye_validate
 
-Validate the targets file: ID format, parent/dependency references,
+Validate the targets file: ID format, dependency references,
 cycle detection, verify/rework constraints.
 
 | Parameter | Type | Default | Description |
@@ -185,7 +176,6 @@ targets:
       - CI green on all platforms
       - No test skips without documented reason
     context: "Cross-platform CI is a project goal."  # optional
-    parent: T0                            # parent target ID (optional)
     gates:                                # gating relationships (optional)
       - target: T2
         criticality: 0.8                  # fraction of gated value (default 1.0)
@@ -202,8 +192,7 @@ targets:
 
 ### Target IDs
 
-Top-level targets use `T<N>` (e.g., `T1`, `T2`). Sub-targets append
-a dot-separated suffix: `T1.1`, `T1.2`. IDs are assigned
+Targets use `T<N>` (e.g., `T1`, `T2`). IDs are assigned
 automatically by `bullseye_add`.
 
 ### Status lifecycle
@@ -215,8 +204,6 @@ destination to `converging`.
 
 ### Edges
 
-- **parent/child**: Decomposition. Parents are excluded from the
-  frontier while they have active children.
 - **depends_on**: Hard blocking. Target cannot start until all
   dependencies are achieved.
 - **gates**: Soft blocking with criticality weight. A gate at 0.8
@@ -232,7 +219,6 @@ destination to `converging`.
 
 ```
 bullseye_frontier(cwd) → unblocked targets ready for work
-bullseye_rank(cwd)     → full priority ordering with blocking info
 ```
 
 ### Add and track a target
@@ -285,11 +271,10 @@ If this project doesn't have `docs/targets.yaml` yet, call
 ### Assessing work
 
 - `bullseye_frontier` — unblocked targets ready for work right now.
-- `bullseye_rank` — full WSJF priority ordering with blocking info.
 - `bullseye_list` — browse all targets (active, achieved, or all).
 
 Before starting work, call `bullseye_frontier` to see what's
-available. Use `bullseye_rank` when you need the full priority picture.
+available.
 
 ### Managing targets
 

@@ -4,8 +4,9 @@
 
 The convergence target system was originally designed around human
 development workflows: scarce capacity, careful prioritisation, serial
-execution with occasional delegation. WSJF ranking answers "what's the
-single best use of my time right now?" — a question rooted in scarcity.
+execution with occasional delegation. Priority ranking answers "what's
+the single best use of my time right now?" — a question rooted in
+scarcity.
 
 With AI agents doing the coding, the capacity constraint largely
 disappears. Work that took a week takes hours. Multiple agents can run
@@ -594,7 +595,7 @@ The human intervenes when:
 
 ## Relationship to Value and Priority
 
-Value and cost don't disappear, but they change role:
+Value and cost inform decomposition but don't drive sequencing:
 
 - **Value** becomes a coarse filter: is this worth doing at all? A
   target with value < cost might be dropped entirely. But among
@@ -615,6 +616,12 @@ Value and cost don't disappear, but they change role:
   in an order that lets them course-correct early. High-observability
   verification checkpoints are staged early, not because they're more
   valuable, but because they're more informative.
+
+Note: WSJF (weighted shortest job first) ranking was present in early
+versions of Bullseye but has been removed. Within a single repo,
+frontier-first scheduling (work everything unblocked in parallel) is
+the right model. Portfolio-level ranking across repos is deferred to
+`bullseye_portfolio` (a future tool).
 
 ## Relationship to TLA+
 

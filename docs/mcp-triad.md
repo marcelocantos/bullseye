@@ -69,43 +69,50 @@ repeatable — no LLM judgment needed for structural assertions.
 - Phase 3: LLM-assisted check generation — agent reads prose
   acceptance criteria and proposes executable checks
 
-### 2. Momentum-aware ranking (targets <-> mnemo)
+### 2. Momentum-aware frontier ordering (targets <-> mnemo)
 
-`targets_rank` computes static priority from value, cost, and the
-dependency graph. But two targets with the same weight are not
-equivalent if one has been actively worked on for three sessions
-and the other has been stale for a month.
+`targets_frontier` returns all unblocked targets. Within a repo,
+all frontier targets can be worked in parallel, so ordering is
+advisory rather than prescriptive. But a momentum signal from mnemo
+can guide which frontier target to focus on when human attention is
+limited.
 
-**Proposal:** Extend `targets_rank` (or add `targets_rank_dynamic`)
-to accept a momentum signal from mnemo:
+**Proposal:** The `/cv` skill (or its successor) calls both
+`targets_frontier` and `mnemo_recent_activity`, using momentum as
+a tiebreaker when suggesting focus:
 
 ```
-targets_rank
-  → static ranking from YAML graph
+targets_frontier
+  → unblocked targets from the YAML graph
 
 mnemo_recent_activity(repo: "targets")
   → per-repo session counts, recency, topics
 
-Combined ranking:
-  effective_priority = static_weight * momentum_factor
+Combined suggestion:
+  preferred = frontier_target with highest recent momentum
   where momentum_factor boosts targets with recent active sessions
   and decays stale ones
 ```
 
-The momentum factor is advisory — it nudges the ranking toward
-continuity (finishing what was started) without overriding the
-structural priority. The exact formula should be tunable;
-a reasonable starting point:
+Note: WSJF ranking (`targets_rank`) has been removed from Bullseye.
+Within a single repo, frontier-first scheduling is the right model —
+agents work everything unblocked in parallel. Portfolio-level ranking
+across repos is deferred to `targets_portfolio` (a planned future
+tool, see section 6).
+
+The momentum factor is advisory — it nudges attention toward
+continuity (finishing what was started) without blocking parallelism.
+The exact formula should be tunable; a reasonable starting point:
 
 ```
 momentum = 1.0 + 0.3 * log(1 + recent_sessions) * recency_decay
 recency_decay = exp(-days_since_last_session / 7)
 ```
 
-**Data flow:** The `/cv` skill (or its successor) calls both
-`targets_rank` and `mnemo_recent_activity`, merges the signals,
-and presents the combined ranking. Neither server needs to know
-about the other — the composition happens at the skill layer.
+**Data flow:** The `/cv` skill calls both `targets_frontier` and
+`mnemo_recent_activity`, merges the signals, and presents a suggested
+focus order. Neither server needs to know about the other — the
+composition happens at the skill layer.
 
 ### 3. Structured context restoration (mnemo <-> targets)
 
@@ -166,24 +173,22 @@ verify target fails
 
 Today `/cv` is a ~200-line skill that:
 1. Reads and parses `docs/targets.md` (fragile markdown parsing)
-2. Runs `rank.py` for WSJF ranking
-3. Spawns an agent to assess gaps (expensive, non-deterministic)
-4. Formats and presents results
+2. Spawns an agent to assess gaps (expensive, non-deterministic)
+3. Formats and presents results
 
 With the triad, it becomes a thin orchestrator (~20 lines):
 
 ```
 1. targets_frontier → unblocked leaf targets
-2. targets_rank → static priority ordering
-3. mnemo_recent_activity → momentum signal (optional)
-4. Merge rankings, present top candidates
-5. For top candidate: targets_get → acceptance criteria
-6. If checks defined: targets_verify → deterministic pass/fail
-7. Present recommendation with confidence level
+2. mnemo_recent_activity → momentum signal (optional)
+3. Suggest focus order, present top candidates
+4. For top candidate: targets_get → acceptance criteria
+5. If checks defined: targets_verify → deterministic pass/fail
+6. Present recommendation with confidence level
 ```
 
-Steps 1-2 are fast typed RPCs. Step 3 is optional enrichment.
-Steps 5-6 only run for the top candidate. Total: 3-6 tool calls
+Step 1 is a fast typed RPC. Step 2 is optional enrichment.
+Steps 4-5 only run for the top candidate. Total: 2-5 tool calls
 vs. the current unbounded agent exploration.
 
 ## Implementation order
@@ -210,15 +215,16 @@ improvement).
 
 Within a single repo, agent capacity is effectively unlimited. The
 state machine model optimises for parallel throughput — frontier
-computation, fan-out, verification checkpoints. WSJF ranking is
-unnecessary because agents can work everything on the frontier
-simultaneously.
+computation, fan-out, verification checkpoints. Priority ranking is
+unnecessary within a repo because agents can work everything on the
+frontier simultaneously.
 
 Across repos, the constraint changes. Human attention is finite.
 You can't review, steer, and unblock work in 15 repos at once. The
 question returns to classical scheduling: "What should I focus on
-this hour, today, this week?" This is WSJF's home turf — scarce
-capacity, competing demands, value-weighted prioritisation.
+this hour, today, this week?" Value-weighted prioritisation is
+appropriate at this portfolio level — scarce human capacity,
+competing demands across repos.
 
 ### The global graph
 
@@ -287,12 +293,13 @@ unblocks work in another repo.
 At the portfolio level, each repo gets an aggregate score:
 
 ```
-repo_priority = Σ (frontier_target_weight × momentum) / repo_count_on_frontier
+repo_priority = Σ (frontier_target_value × momentum) / repo_count_on_frontier
 ```
 
 Where:
-- `frontier_target_weight` — WSJF weight of each target on the
-  repo's frontier
+- `frontier_target_value` — value score of each target on the
+  repo's frontier (value/cost ratio used as priority signal at
+  the portfolio level, where human attention is the scarce resource)
 - `momentum` — from mnemo_recent_activity (session recency/frequency)
 - `repo_count_on_frontier` — number of unblocked targets (more
   frontier = more parallelisable = less human attention needed
@@ -375,7 +382,7 @@ CREATE TABLE targets_priorities (
     id TEXT PRIMARY KEY,          -- "mnemo/T3", "targets/T1.1"
     repo TEXT NOT NULL,           -- "marcelocantos/mnemo"
     name TEXT NOT NULL,           -- "Active work dashboard data"
-    weight REAL NOT NULL,         -- effective priority
+    priority REAL NOT NULL,       -- effective priority (portfolio-level value signal)
     context TEXT,                 -- why this is important now
     horizon TEXT DEFAULT 'today', -- "today", "tomorrow", "this_week"
     updated_at TEXT NOT NULL      -- ISO timestamp
@@ -401,13 +408,13 @@ The Today page gains a "Focus" section above the checklist:
 ┌──────────────────────────────────┐
 │ Focus                            │
 │                                  │
-│ 🎯 mnemo/T10  w:1.25             │
+│ 🎯 mnemo/T10  p:1.25             │
 │   Live context compaction        │
 │                                  │
-│ 🎯 targets/T1.3  w:2.67          │
+│ 🎯 targets/T1.3  p:2.67          │
 │   /cv skill rewrite              │
 │                                  │
-│ 🎯 sawmill/T19  w:1.6            │
+│ 🎯 sawmill/T19  p:1.6            │
 │   Structural invariants          │
 ├──────────────────────────────────┤
 │ Checklist                        │
