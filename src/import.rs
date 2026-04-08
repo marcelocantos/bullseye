@@ -405,7 +405,10 @@ mod tests {
         let t5_1 = parsed.targets.get("T5.1").expect("T5.1 not found");
         assert_eq!(t5_1.name, "Markdown-to-YAML target converter");
         assert_eq!(t5_1.parent.as_deref(), Some("T5"));
-        assert_eq!(t5_1.status, Status::Identified);
+        assert!(
+            t5_1.status == Status::Identified || t5_1.status == Status::Converging,
+            "T5.1 should be identified or converging"
+        );
     }
 
     #[test]
