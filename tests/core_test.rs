@@ -64,22 +64,10 @@ fn discovers_from_subdirectory() {
 }
 
 #[test]
-fn detects_missing_parent() {
+fn detects_cycle_in_depends_on() {
     let mut file = load_fixture();
-    file.targets.get_mut("T2").unwrap().parent = Some("T99".to_string());
-    let errors = graph::validate(&file);
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("T99") && e.contains("does not exist"))
-    );
-}
-
-#[test]
-fn detects_cycle_in_parents() {
-    let mut file = load_fixture();
-    file.targets.get_mut("T1").unwrap().parent = Some("T2".to_string());
-    file.targets.get_mut("T2").unwrap().parent = Some("T1".to_string());
+    file.targets.get_mut("T1").unwrap().depends_on = vec!["T2".to_string()];
+    file.targets.get_mut("T2").unwrap().depends_on = vec!["T1".to_string()];
     let errors = graph::validate(&file);
     assert!(errors.iter().any(|e| e.contains("cycle")));
 }
@@ -117,22 +105,6 @@ fn frontier_excludes_blocked() {
     let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
     assert!(!ids.contains(&"T2"), "T2 should be blocked by T1");
     assert!(ids.contains(&"T1"));
-    assert!(ids.contains(&"T3"));
-}
-
-#[test]
-fn frontier_excludes_parents_with_active_children() {
-    let mut file = load_fixture();
-    // Make T2 a child of T1.
-    file.targets.get_mut("T2").unwrap().parent = Some("T1".to_string());
-    let front = graph::frontier(&file);
-    let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
-    // T1 now has an active child (T2), so T1 is not a leaf.
-    assert!(
-        !ids.contains(&"T1"),
-        "T1 should be excluded (has active child T2)"
-    );
-    assert!(ids.contains(&"T2"));
     assert!(ids.contains(&"T3"));
 }
 
@@ -317,7 +289,7 @@ fn tunnel_detects_deep_chain() {
                 actual_cost: None,
                 acceptance: vec!["done".to_string()],
                 context: String::new(),
-                parent: None,
+
                 gates: vec![],
                 depends_on: deps.into_iter().map(String::from).collect(),
                 verifies: vec![],
@@ -343,7 +315,6 @@ fn tunnel_detects_deep_chain() {
             actual_cost: None,
             acceptance: vec!["verified".to_string()],
             context: String::new(),
-            parent: None,
             gates: vec![],
             depends_on: vec!["T12".to_string()],
             verifies: vec!["T10".to_string()],

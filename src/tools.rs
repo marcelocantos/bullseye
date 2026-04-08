@@ -59,10 +59,6 @@ pub struct AddTool {
     #[serde(default)]
     pub context: String,
 
-    /// Parent target ID (optional, for sub-targets).
-    #[serde(default)]
-    pub parent: Option<String>,
-
     /// Target kind: "work" (default) or "verify".
     #[serde(default)]
     pub kind: Option<String>,

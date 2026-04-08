@@ -129,7 +129,6 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 actual_cost: fields.actual_cost,
                 acceptance: fields.acceptance,
                 context,
-                parent: fields.parent,
                 gates: fields.gates,
                 depends_on: fields.depends_on,
                 verifies: fields.verifies,
@@ -173,7 +172,6 @@ struct ParsedFields {
     actual_cost: Option<f64>,
     acceptance: Vec<String>,
     context: String,
-    parent: Option<String>,
     gates: Vec<GateEdge>,
     depends_on: Vec<String>,
     verifies: Vec<String>,
@@ -238,7 +236,12 @@ fn parse_field(line: &str, lines: &[&str], i: &mut usize, fields: &mut ParsedFie
             fields.context = field_value.to_string();
         }
         "Parent" => {
-            fields.parent = parse_target_ref(field_value);
+            // Backward compat: convert parent to depends_on.
+            if let Some(parent_id) = parse_target_ref(field_value)
+                && !fields.depends_on.contains(&parent_id)
+            {
+                fields.depends_on.push(parent_id);
+            }
         }
         "Gates" => {
             fields.gates = parse_gates(field_value);
@@ -367,7 +370,8 @@ mod tests {
                 imported.acceptance, original.acceptance,
                 "acceptance mismatch for {id}"
             );
-            assert_eq!(imported.parent, original.parent, "parent mismatch for {id}");
+            // depends_on may include converted parent refs; check subset.
+
             assert_eq!(
                 imported.depends_on, original.depends_on,
                 "depends_on mismatch for {id}"
@@ -407,7 +411,10 @@ mod tests {
         // Spot-check a known target.
         let t5_1 = parsed.targets.get("T5.1").expect("T5.1 not found");
         assert_eq!(t5_1.name, "Markdown-to-YAML target converter");
-        assert_eq!(t5_1.parent.as_deref(), Some("T5"));
+        assert!(
+            t5_1.depends_on.contains(&"T5".to_string()),
+            "T5.1 should depend on T5"
+        );
         assert!(
             t5_1.status == Status::Identified || t5_1.status == Status::Converging,
             "T5.1 should be identified or converging"

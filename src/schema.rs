@@ -50,10 +50,6 @@ pub struct Target {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub context: String,
 
-    /// Parent target ID (e.g., "T1" for sub-target "T1.1").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
-
     /// Targets this one enables (gating relationships).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gates: Vec<GateEdge>,

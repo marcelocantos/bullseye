@@ -16,32 +16,17 @@ pub struct FrontierTarget {
     pub tags: Vec<String>,
 }
 
-/// Compute the frontier: active leaf targets with all dependencies satisfied.
+/// Compute the frontier: active targets with all dependencies satisfied.
 ///
 /// A target is in the frontier if:
 /// - It is active (not achieved).
 /// - It has no unachieved dependencies (depends_on all achieved or absent).
-/// - It has no active children (it's a leaf in the active graph).
 pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
     let active = file.active();
 
-    // Build set of targets that have active children.
-    let mut has_active_children: HashSet<&str> = HashSet::new();
-    for t in active.values() {
-        if let Some(ref parent) = t.parent
-            && active.contains_key(parent.as_str())
-        {
-            has_active_children.insert(parent.as_str());
-        }
-    }
-
     active
         .iter()
-        .filter(|(id, t)| {
-            // Must be a leaf (no active children).
-            if has_active_children.contains(*id) {
-                return false;
-            }
+        .filter(|(_, t)| {
             // All dependencies must be achieved.
             t.depends_on.iter().all(|dep| {
                 file.targets
@@ -187,19 +172,6 @@ pub fn mermaid(file: &TargetsFile) -> String {
         lines.push(format!("    {node}[\"{label}\"]"));
     }
 
-    // Parent -> child edges.
-    for (id, t) in &active {
-        if let Some(ref parent) = t.parent
-            && active.contains_key(parent.as_str())
-        {
-            lines.push(format!(
-                "    {} --> {}",
-                mermaid_node(parent),
-                mermaid_node(id)
-            ));
-        }
-    }
-
     // Gates edges.
     for (id, t) in &active {
         for gate in &t.gates {
@@ -291,13 +263,6 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
             errors.push(format!("{id}: acceptance criteria must not be empty"));
         }
 
-        // Parent reference must exist.
-        if let Some(ref parent) = t.parent
-            && !file.targets.contains_key(parent)
-        {
-            errors.push(format!("{id}: parent {parent} does not exist"));
-        }
-
         // Gates references must exist.
         for gate in &t.gates {
             if !file.targets.contains_key(&gate.target) {
@@ -351,17 +316,41 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
         // (Advisory — we don't enforce this strictly, just warn if retries > budget.)
     }
 
-    // Cycle detection on parent hierarchy.
-    for id in file.targets.keys() {
-        let mut visited = HashSet::new();
-        let mut current = Some(id.as_str());
-        while let Some(c) = current {
-            if !visited.insert(c) {
-                errors.push(format!("{id}: cycle in parent hierarchy"));
-                break;
-            }
-            current = file.targets.get(c).and_then(|t| t.parent.as_deref());
+    // Cycle detection on depends_on graph (DFS).
+    let mut permanent: HashSet<&str> = HashSet::new();
+    let mut temporary: HashSet<&str> = HashSet::new();
+
+    fn dfs<'a>(
+        id: &'a str,
+        targets: &'a std::collections::BTreeMap<String, crate::schema::Target>,
+        permanent: &mut HashSet<&'a str>,
+        temporary: &mut HashSet<&'a str>,
+        errors: &mut Vec<String>,
+    ) {
+        if permanent.contains(id) {
+            return;
         }
+        if !temporary.insert(id) {
+            errors.push(format!("{id}: cycle in depends_on graph"));
+            return;
+        }
+        if let Some(t) = targets.get(id) {
+            for dep in &t.depends_on {
+                dfs(dep.as_str(), targets, permanent, temporary, errors);
+            }
+        }
+        temporary.remove(id);
+        permanent.insert(id);
+    }
+
+    for id in file.targets.keys() {
+        dfs(
+            id.as_str(),
+            &file.targets,
+            &mut permanent,
+            &mut temporary,
+            &mut errors,
+        );
     }
 
     errors

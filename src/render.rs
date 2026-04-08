@@ -74,10 +74,6 @@ fn render_target(out: &mut String, id: &str, t: &Target) {
         writeln!(out, "- **Context**: {}", t.context).unwrap();
     }
 
-    if let Some(ref parent) = t.parent {
-        writeln!(out, "- **Parent**: 🎯{parent}").unwrap();
-    }
-
     if !t.gates.is_empty() {
         let gs: Vec<String> = t
             .gates

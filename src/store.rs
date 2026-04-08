@@ -65,7 +65,6 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
                 "At least one sub-target breaks the milestone into actionable work".to_string(),
             ],
             context: "Starter target — replace with your project's actual first goal.".to_string(),
-            parent: None,
             gates: Vec::new(),
             depends_on: Vec::new(),
             verifies: Vec::new(),

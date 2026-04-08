@@ -158,34 +158,21 @@ fn handle_add(t: crate::tools::AddTool) -> ToolResult {
     let (path, mut file) = load_or_create_file(&t.cwd)?;
 
     // Determine next ID.
-    let next_id = match &t.parent {
-        Some(parent_id) => {
-            let prefix = format!("{parent_id}.");
-            let max_child = file
-                .targets
-                .keys()
-                .filter_map(|k| k.strip_prefix(&prefix))
-                .filter_map(|suffix| suffix.split('.').next()?.parse::<u32>().ok())
-                .max()
-                .unwrap_or(0);
-            format!("{parent_id}.{}", max_child + 1)
-        }
-        None => {
-            let max_num = file
-                .targets
-                .keys()
-                .filter_map(|k| {
-                    let num_str = k.strip_prefix('T')?;
-                    if num_str.contains('.') {
-                        None
-                    } else {
-                        num_str.parse::<u32>().ok()
-                    }
-                })
-                .max()
-                .unwrap_or(0);
-            format!("T{}", max_num + 1)
-        }
+    let next_id = {
+        let max_num = file
+            .targets
+            .keys()
+            .filter_map(|k| {
+                let num_str = k.strip_prefix('T')?;
+                if num_str.contains('.') {
+                    None
+                } else {
+                    num_str.parse::<u32>().ok()
+                }
+            })
+            .max()
+            .unwrap_or(0);
+        format!("T{}", max_num + 1)
     };
 
     let kind = match t.kind.as_deref() {
@@ -203,7 +190,6 @@ fn handle_add(t: crate::tools::AddTool) -> ToolResult {
         actual_cost: None,
         acceptance: t.acceptance,
         context: t.context,
-        parent: t.parent,
         gates: Vec::new(),
         depends_on: Vec::new(),
         verifies: t.verifies,
@@ -299,16 +285,6 @@ fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
         return text_result(format!("🎯{} is already achieved", t.id));
     }
 
-    // Check for unachieved children.
-    let unachieved_children: Vec<String> = file
-        .targets
-        .iter()
-        .filter(|(_, child)| {
-            child.parent.as_deref() == Some(&t.id) && child.status != Status::Achieved
-        })
-        .map(|(id, _)| id.clone())
-        .collect();
-
     let target = file.targets.get_mut(&t.id).unwrap();
     target.status = Status::Achieved;
     target.achieved = Some(Local::now().date_naive());
@@ -325,13 +301,6 @@ fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     if let Some(actual) = t.actual_cost {
         out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
     }
-    if !unachieved_children.is_empty() {
-        out.push_str(&format!(
-            "\n⚠ Unachieved children: {}",
-            unachieved_children.join(", ")
-        ));
-    }
-
     text_result(out)
 }
 
