@@ -9,7 +9,7 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.4.0.
+Snapshot as of v0.5.0.
 
 ### MCP tools
 
