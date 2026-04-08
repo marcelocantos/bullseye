@@ -232,6 +232,25 @@ pub struct InitTool {
     pub project_name: Option<String>,
 }
 
+/// Import targets from a markdown file into YAML.
+#[mcp_tool(
+    name = "bullseye_import",
+    description = "Import targets from a markdown targets file (docs/targets.md) into docs/targets.yaml. Parses the markdown format produced by render.rs and other repos' /cv skills. Tolerant of minor formatting variations. Refuses to overwrite an existing targets.yaml — use this for initial migration only."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ImportTool {
+    /// Working directory (project root) where docs/targets.md will be read.
+    pub cwd: String,
+
+    /// Path to the markdown file to import (default: docs/targets.md discovered by walking up from cwd).
+    #[serde(default)]
+    pub path: Option<String>,
+
+    /// If true, overwrite an existing targets.yaml (default: false).
+    #[serde(default)]
+    pub force: bool,
+}
+
 /// Render targets.md from the YAML source.
 #[mcp_tool(
     name = "bullseye_render",
@@ -266,6 +285,7 @@ tool_box!(
         ValidateTool,
         GraphTool,
         RenderTool,
-        InitTool
+        InitTool,
+        ImportTool
     ]
 );

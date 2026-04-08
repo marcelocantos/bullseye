@@ -14,6 +14,7 @@ use rust_mcp_sdk::schema::{
 };
 
 use crate::graph;
+use crate::import;
 use crate::ops;
 use crate::render;
 use crate::schema::{Status, Target};
@@ -58,6 +59,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::GraphTool(t) => handle_graph(t),
             TargetTools::RenderTool(t) => handle_render(t),
             TargetTools::InitTool(t) => handle_init(t),
+            TargetTools::ImportTool(t) => handle_import(t),
         }
     }
 }
@@ -561,4 +563,75 @@ fn handle_render(t: crate::tools::RenderTool) -> ToolResult {
     render::render_to_file(&path, &file).map_err(tool_err)?;
     let md_path = render::markdown_path(&path);
     text_result(format!("Rendered {}", md_path.display()))
+}
+
+fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
+    let dir = Path::new(&t.cwd);
+
+    // Refuse to overwrite unless force is set.
+    if !t.force && store::discover(dir).is_some() {
+        return err(
+            "targets.yaml already exists — use force: true to overwrite, \
+             or use bullseye_add/update to modify existing targets",
+        );
+    }
+
+    // Find the markdown file.
+    let md_path = if let Some(ref explicit) = t.path {
+        std::path::PathBuf::from(explicit)
+    } else {
+        discover_markdown(dir).ok_or_else(|| tool_err("no targets.md found"))?
+    };
+
+    let content = std::fs::read_to_string(&md_path)
+        .map_err(|e| tool_err(format!("failed to read {}: {e}", md_path.display())))?;
+
+    let file = import::parse_markdown(&content).map_err(tool_err)?;
+
+    // Validate the parsed result.
+    let errors = graph::validate(&file);
+    if !errors.is_empty() {
+        return err(format!(
+            "Parsed {} targets but validation failed:\n{}",
+            file.targets.len(),
+            errors.join("\n")
+        ));
+    }
+
+    // Write the YAML file.
+    let docs = dir.join("docs");
+    std::fs::create_dir_all(&docs)
+        .map_err(|e| tool_err(format!("failed to create {}: {e}", docs.display())))?;
+    let yaml_path = docs.join("targets.yaml");
+    store::save(&yaml_path, &file).map_err(tool_err)?;
+
+    // Re-render the markdown from the YAML (canonical formatting).
+    render::render_to_file(&yaml_path, &file).map_err(tool_err)?;
+
+    text_result(format!(
+        "Imported {} targets from {}\n\
+         Written to {}\n\
+         Markdown re-rendered alongside.\n\
+         Validation: OK",
+        file.targets.len(),
+        md_path.display(),
+        yaml_path.display(),
+    ))
+}
+
+/// Discover a targets.md by walking up from start_dir.
+fn discover_markdown(start_dir: &Path) -> Option<std::path::PathBuf> {
+    let mut dir = start_dir.to_path_buf();
+    for _ in 0..64 {
+        for candidate in &["docs/targets.md", "targets.md"] {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+    None
 }

@@ -153,6 +153,21 @@ have targets.
 | `cwd` | string | required | Project root directory |
 | `project_name` | string | directory name | Project name for sample target context |
 
+### bullseye_import
+
+Import targets from a markdown `docs/targets.md` file into
+`docs/targets.yaml`. Parses the markdown format produced by
+`render.rs` and other repos' `/cv` skills. Tolerant of minor
+formatting variations. Validates the parsed result before writing.
+
+Refuses to overwrite an existing `targets.yaml` unless `force` is set.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Project root directory |
+| `path` | string | auto-discover | Explicit path to markdown file |
+| `force` | bool | `false` | Overwrite existing `targets.yaml` |
+
 ## targets.yaml schema
 
 ```yaml
