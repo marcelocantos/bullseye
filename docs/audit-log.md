@@ -22,3 +22,8 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 - **Commit**: `bb9225b`
 - **Outcome**: Released v0.3.0 (darwin-arm64, linux-amd64, linux-arm64). New bullseye_init tool, agent integration CLAUDE.md snippet, CI fix. 🎯T6 (new-user adoption) fully achieved. Homebrew formula updated.
+
+## 2026-04-08 -- /release v0.4.0
+
+- **Commit**: `9eebcc3`
+- **Outcome**: Released v0.4.0 (darwin-arm64, linux-amd64, linux-arm64). Removed WSJF ranking, collapsed parent/child into depends_on, added bullseye_import tool. Homebrew formula updated.
