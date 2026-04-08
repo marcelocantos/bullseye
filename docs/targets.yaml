@@ -305,9 +305,10 @@ targets:
     discovered: 2026-04-07
   T5:
     name: Migration from markdown targets to bullseye
-    status: identified
+    status: achieved
     value: 8.0
     cost: 5.0
+    actual_cost: 5.0
     acceptance:
     - All repos using docs/targets.md can be migrated to docs/targets.yaml
     - /cv and related skills work against both old (markdown) and new (bullseye) formats during transition
@@ -324,11 +325,13 @@ targets:
     - architecture
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-09
   T5.1:
     name: Markdown-to-YAML target converter
-    status: converging
+    status: achieved
     value: 5.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - bullseye_import tool or standalone script reads docs/targets.md and emits docs/targets.yaml
     - Preserves target IDs, status, value/cost, acceptance criteria, parent/child relationships
@@ -342,11 +345,13 @@ targets:
     - migration
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-09
   T5.2:
     name: Global CLAUDE.md and skill directives updated for bullseye
-    status: identified
+    status: achieved
     value: 3.0
     cost: 2.0
+    actual_cost: 2.0
     acceptance:
     - ~/.claude/CLAUDE.md convergence-targets section references bullseye tools
     - Skills that reference targets.md parsing are updated to use bullseye MCP calls
@@ -360,6 +365,7 @@ targets:
     - migration
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-09
   T6:
     name: Seamless new-user adoption
     status: achieved

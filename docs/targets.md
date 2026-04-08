@@ -2,50 +2,22 @@
 
 ## Active
 
-### 🎯T1 MCP triad integration (targets + sawmill + mnemo)
-- **Value**: 13
-- **Cost**: 8
+### 🎯T4.2 CLAUDE.md auto-call directive
+- **Weight**: 3 (value 3 / cost 1)
+- **Estimated-cost**: 1
 - **Acceptance**:
-  - targets_verify tool executes sawmill checks against acceptance criteria
-  - /cv skill calls targets_rank + mnemo_recent_activity instead of parsing markdown
-  - Rework diagnosis includes sawmill failure report and mnemo session history
-- **Context**: Design note: docs/mcp-triad.md. The three MCP servers (targets, sawmill, mnemo) each own a distinct concern (plan, code, history). Integrating them replaces the monolithic /cv skill with composable typed tool calls — faster, deterministic, and testable. The highest-value integration point is the /cv skill rewrite (step 3 in the design note).
+  - Global CLAUDE.md instructs agent to call mnemo_startup_context at session start
+  - Context is presented to the agent without user intervention
+- **Context**: A one-line addition to ~/.claude/CLAUDE.md. Depends on mnemo_startup_context existing. Low cost, immediate value.
 
-- **Tags**: integration, architecture
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
-### 🎯T1.1 Executable acceptance checks via sawmill
-- **Value**: 8
-- **Cost**: 5
-- **Acceptance**:
-  - Target schema has optional checks field (convention, query, invariant types)
-  - targets_verify tool iterates checks and calls sawmill tools
-  - Structured pass/fail report with file/line-level detail
-- **Context**: Phase 1 uses sawmill's existing check_conventions and query tools. Phase 2 adds structural invariants when sawmill T19 lands. See docs/mcp-triad.md section 1.
-
-- **Depends on**: 🎯T1
-- **Tags**: sawmill
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
-### 🎯T1.2 Momentum-aware ranking via mnemo
-- **Value**: 5
-- **Cost**: 3
-- **Acceptance**:
-  - targets_rank accepts optional momentum signal
-  - Ranking integrates session recency and frequency from mnemo_recent_activity
-  - Momentum factor is tunable, not hardcoded
-- **Context**: Static WSJF ranking ignores whether a target is actively being worked on or has been stale for weeks. mnemo_recent_activity provides the signal; the /cv skill merges it with targets_rank output. See docs/mcp-triad.md section 2.
-
-- **Depends on**: 🎯T1
-- **Tags**: mnemo
+- **Depends on**: 🎯T4, 🎯T4.1
+- **Tags**: startup
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
 ### 🎯T1.3 /cv skill rewrite against MCP tools
-- **Value**: 8
-- **Cost**: 3
+- **Weight**: 3 (value 8 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - /cv calls targets_frontier + targets_rank (no markdown parsing)
   - /cv optionally calls mnemo_recent_activity for momentum
@@ -58,9 +30,50 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
+### 🎯T4 Dynamic session startup context
+- **Weight**: 3 (value 8 / cost 3)
+- **Estimated-cost**: 3
+- **Acceptance**:
+  - mnemo_startup_context tool returns structured context for current project
+  - Includes recently active repos with session counts and recency
+  - Agent sees recent activity without running /waw or /cv
+- **Context**: Design note: docs/mcp-triad.md section 8. High value, low cost — wraps existing mnemo_recent_activity with formatting. Answers "where was I?" at session start. Implementation: Option B (explicit tool call from CLAUDE.md instruction) for now, Option C (MCP resource) when protocol support matures.
+
+- **Tags**: mnemo, startup
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
+### 🎯T4.1 mnemo_startup_context tool
+- **Weight**: 2 (value 5 / cost 2)
+- **Estimated-cost**: 2
+- **Acceptance**:
+  - Returns per-repo summary with session counts, recency, and active targets
+  - Formatted for easy agent consumption
+  - Filterable by project (current working directory)
+- **Context**: Wraps mnemo_recent_activity with target-aware enrichment. If the targets MCP server is available, includes frontier targets per repo. Otherwise falls back to session-only data.
+
+- **Depends on**: 🎯T4
+- **Tags**: mnemo
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
+### 🎯T1.2 Momentum-aware ranking via mnemo
+- **Weight**: 2 (value 5 / cost 3)
+- **Estimated-cost**: 3
+- **Acceptance**:
+  - targets_rank accepts optional momentum signal
+  - Ranking integrates session recency and frequency from mnemo_recent_activity
+  - Momentum factor is tunable, not hardcoded
+- **Context**: Static WSJF ranking ignores whether a target is actively being worked on or has been stale for weeks. mnemo_recent_activity provides the signal; the /cv skill merges it with targets_rank output. See docs/mcp-triad.md section 2.
+
+- **Depends on**: 🎯T1
+- **Tags**: mnemo
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
 ### 🎯T1.4 Target-aware context compaction
-- **Value**: 5
-- **Cost**: 3
+- **Weight**: 2 (value 5 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - mnemo summarizer calls targets_list to anchor compaction output
   - Compaction includes targets_active, targets_progressed, targets_next fields
@@ -72,37 +85,9 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T1.5 Rework diagnosis integration
-- **Value**: 5
-- **Cost**: 5
-- **Acceptance**:
-  - Verify target failure includes sawmill structural failure report
-  - Rework diagnosis includes mnemo prior-attempt history
-  - Combined diagnosis is passed as targets_rework payload
-- **Context**: The rework agent gets maximum context: what failed (sawmill), what was tried before (mnemo), and retry budget status (targets). See docs/mcp-triad.md section 4.
-
-- **Depends on**: 🎯T1, 🎯T1.1
-- **Tags**: sawmill, mnemo
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
-### 🎯T2 Global portfolio view across all repos
-- **Value**: 13
-- **Cost**: 8
-- **Acceptance**:
-  - targets_portfolio tool discovers and loads targets.yaml from all managed repos
-  - Cross-repo dependency edges are explicit and surfaced in ranking
-  - Portfolio-level WSJF ranking orders repos by aggregate priority
-  - /cv global presents top repos, per-repo frontier, cross-repo blockers
-- **Context**: Design note: docs/mcp-triad.md section 6. Within a repo, agent capacity is unlimited and the state machine optimises for parallel throughput. Across repos, human attention is the scarce resource — WSJF returns as the scheduling primitive. The global view meshes per-repo target graphs into a cross-repo quasi-graph with explicit dependency edges, momentum signals from mnemo, and portfolio-level ranking.
-
-- **Tags**: portfolio, architecture
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T2.1 Cross-repo target discovery
-- **Value**: 5
-- **Cost**: 3
+- **Weight**: 2 (value 5 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - Discovers targets.yaml from managed-repos.md and ~/work/ walk
   - Loads and validates each repo's target graph independently
@@ -114,38 +99,9 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T2.2 Cross-repo dependency edges
-- **Value**: 8
-- **Cost**: 5
-- **Acceptance**:
-  - Schema supports cross_depends and cross_enables fields with repo + capability/target refs
-  - Cross-repo edges surfaced in targets_portfolio output
-  - Targets enabling work in other repos get a priority boost
-- **Context**: Manual cross_depends/cross_enables fields are accurate but high-friction. Future enrichment: mnemo could detect cross-repo references automatically from sessions that reference another repo's targets. Start manual.
-
-- **Depends on**: 🎯T2, 🎯T2.1
-- **Tags**: portfolio
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
-### 🎯T2.3 Portfolio-level WSJF ranking
-- **Value**: 8
-- **Cost**: 5
-- **Acceptance**:
-  - Repos ranked by aggregate frontier weight adjusted for momentum
-  - Cross-repo enablers get value propagation boost
-  - targets_portfolio returns ranked repos with per-repo frontier and reasoning
-  - Momentum from mnemo_recent_activity integrated into ranking
-- **Context**: Aggregate score: sum(frontier_weight * momentum) / frontier_size. Repos with more frontier targets are more parallelisable and need less per-unit human attention. Cross-repo enablers propagate value from downstream repos. See docs/mcp-triad.md section 6.
-
-- **Depends on**: 🎯T2, 🎯T2.1, 🎯T2.2
-- **Tags**: portfolio, mnemo
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T2.4 /cv global mode
-- **Value**: 5
-- **Cost**: 3
+- **Weight**: 2 (value 5 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - "/cv global" runs portfolio-level evaluation
   - Presents top 1-3 repos with reasoning
@@ -158,23 +114,9 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T3 Protocol app priority sync
-- **Value**: 8
-- **Cost**: 8
-- **Acceptance**:
-  - targets_portfolio output written to a targets_priorities SQLite table
-  - sqlpipe replicates priorities to Protocol's protocol.db via pigeon
-  - Protocol Today page shows Focus section with top frontier targets
-  - Sync runs periodically (cron or daemon hook)
-- **Context**: Design note: docs/mcp-triad.md section 7. The portfolio ranking should surface on the phone so the user sees top priorities when they pick up their phone. The sync chain is: targets_portfolio → SQLite table → sqlpipe over pigeon → Protocol Today page. Protocol already uses SQLite for all storage. jevon T10 tracks the same sqlpipe-over-pigeon pattern for jevon's mobile app — same infrastructure.
-
-- **Tags**: protocol, mobile
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T3.1 targets_priorities SQLite table and writer
-- **Value**: 5
-- **Cost**: 3
+- **Weight**: 2 (value 5 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - targets_portfolio output upserted into targets_priorities table
   - Table schema includes repo, name, weight, context, horizon, updated_at
@@ -187,8 +129,8 @@
 - **Discovered**: 2026-04-07
 
 ### 🎯T3.2 Protocol Today page Focus section
-- **Value**: 5
-- **Cost**: 3
+- **Weight**: 2 (value 5 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - Focus section renders above daily checklist
   - Shows top frontier targets with repo, weight, and name
@@ -200,49 +142,109 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T4 Dynamic session startup context
-- **Value**: 8
-- **Cost**: 3
+### 🎯T1 MCP triad integration (targets + sawmill + mnemo)
+- **Weight**: 2 (value 13 / cost 8)
+- **Estimated-cost**: 8
 - **Acceptance**:
-  - mnemo_startup_context tool returns structured context for current project
-  - Includes recently active repos with session counts and recency
-  - Agent sees recent activity without running /waw or /cv
-- **Context**: Design note: docs/mcp-triad.md section 8. High value, low cost — wraps existing mnemo_recent_activity with formatting. Answers "where was I?" at session start. Implementation: Option B (explicit tool call from CLAUDE.md instruction) for now, Option C (MCP resource) when protocol support matures.
+  - targets_verify tool executes sawmill checks against acceptance criteria
+  - /cv skill calls targets_rank + mnemo_recent_activity instead of parsing markdown
+  - Rework diagnosis includes sawmill failure report and mnemo session history
+- **Context**: Design note: docs/mcp-triad.md. The three MCP servers (targets, sawmill, mnemo) each own a distinct concern (plan, code, history). Integrating them replaces the monolithic /cv skill with composable typed tool calls — faster, deterministic, and testable. The highest-value integration point is the /cv skill rewrite (step 3 in the design note).
 
-- **Tags**: mnemo, startup
+- **Tags**: integration, architecture
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T4.1 mnemo_startup_context tool
-- **Value**: 5
-- **Cost**: 2
+### 🎯T2 Global portfolio view across all repos
+- **Weight**: 2 (value 13 / cost 8)
+- **Estimated-cost**: 8
 - **Acceptance**:
-  - Returns per-repo summary with session counts, recency, and active targets
-  - Formatted for easy agent consumption
-  - Filterable by project (current working directory)
-- **Context**: Wraps mnemo_recent_activity with target-aware enrichment. If the targets MCP server is available, includes frontier targets per repo. Otherwise falls back to session-only data.
+  - targets_portfolio tool discovers and loads targets.yaml from all managed repos
+  - Cross-repo dependency edges are explicit and surfaced in ranking
+  - Portfolio-level WSJF ranking orders repos by aggregate priority
+  - /cv global presents top repos, per-repo frontier, cross-repo blockers
+- **Context**: Design note: docs/mcp-triad.md section 6. Within a repo, agent capacity is unlimited and the state machine optimises for parallel throughput. Across repos, human attention is the scarce resource — WSJF returns as the scheduling primitive. The global view meshes per-repo target graphs into a cross-repo quasi-graph with explicit dependency edges, momentum signals from mnemo, and portfolio-level ranking.
 
-- **Depends on**: 🎯T4
-- **Tags**: mnemo
+- **Tags**: portfolio, architecture
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T4.2 CLAUDE.md auto-call directive
-- **Value**: 3
-- **Cost**: 1
+### 🎯T1.1 Executable acceptance checks via sawmill
+- **Weight**: 2 (value 8 / cost 5)
+- **Estimated-cost**: 5
 - **Acceptance**:
-  - Global CLAUDE.md instructs agent to call mnemo_startup_context at session start
-  - Context is presented to the agent without user intervention
-- **Context**: A one-line addition to ~/.claude/CLAUDE.md. Depends on mnemo_startup_context existing. Low cost, immediate value.
+  - Target schema has optional checks field (convention, query, invariant types)
+  - targets_verify tool iterates checks and calls sawmill tools
+  - Structured pass/fail report with file/line-level detail
+- **Context**: Phase 1 uses sawmill's existing check_conventions and query tools. Phase 2 adds structural invariants when sawmill T19 lands. See docs/mcp-triad.md section 1.
 
-- **Depends on**: 🎯T4, 🎯T4.1
-- **Tags**: startup
+- **Depends on**: 🎯T1
+- **Tags**: sawmill
 - **Status**: Identified
 - **Discovered**: 2026-04-07
+
+### 🎯T2.2 Cross-repo dependency edges
+- **Weight**: 2 (value 8 / cost 5)
+- **Estimated-cost**: 5
+- **Acceptance**:
+  - Schema supports cross_depends and cross_enables fields with repo + capability/target refs
+  - Cross-repo edges surfaced in targets_portfolio output
+  - Targets enabling work in other repos get a priority boost
+- **Context**: Manual cross_depends/cross_enables fields are accurate but high-friction. Future enrichment: mnemo could detect cross-repo references automatically from sessions that reference another repo's targets. Start manual.
+
+- **Depends on**: 🎯T2, 🎯T2.1
+- **Tags**: portfolio
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
+### 🎯T2.3 Portfolio-level WSJF ranking
+- **Weight**: 2 (value 8 / cost 5)
+- **Estimated-cost**: 5
+- **Acceptance**:
+  - Repos ranked by aggregate frontier weight adjusted for momentum
+  - Cross-repo enablers get value propagation boost
+  - targets_portfolio returns ranked repos with per-repo frontier and reasoning
+  - Momentum from mnemo_recent_activity integrated into ranking
+- **Context**: Aggregate score: sum(frontier_weight * momentum) / frontier_size. Repos with more frontier targets are more parallelisable and need less per-unit human attention. Cross-repo enablers propagate value from downstream repos. See docs/mcp-triad.md section 6.
+
+- **Depends on**: 🎯T2, 🎯T2.1, 🎯T2.2
+- **Tags**: portfolio, mnemo
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
+### 🎯T1.5 Rework diagnosis integration
+- **Weight**: 1 (value 5 / cost 5)
+- **Estimated-cost**: 5
+- **Acceptance**:
+  - Verify target failure includes sawmill structural failure report
+  - Rework diagnosis includes mnemo prior-attempt history
+  - Combined diagnosis is passed as targets_rework payload
+- **Context**: The rework agent gets maximum context: what failed (sawmill), what was tried before (mnemo), and retry budget status (targets). See docs/mcp-triad.md section 4.
+
+- **Depends on**: 🎯T1, 🎯T1.1
+- **Tags**: sawmill, mnemo
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
+### 🎯T3 Protocol app priority sync
+- **Weight**: 1 (value 8 / cost 8)
+- **Estimated-cost**: 8
+- **Acceptance**:
+  - targets_portfolio output written to a targets_priorities SQLite table
+  - sqlpipe replicates priorities to Protocol's protocol.db via pigeon
+  - Protocol Today page shows Focus section with top frontier targets
+  - Sync runs periodically (cron or daemon hook)
+- **Context**: Design note: docs/mcp-triad.md section 7. The portfolio ranking should surface on the phone so the user sees top priorities when they pick up their phone. The sync chain is: targets_portfolio → SQLite table → sqlpipe over pigeon → Protocol Today page. Protocol already uses SQLite for all storage. jevon T10 tracks the same sqlpipe-over-pigeon pattern for jevon's mobile app — same infrastructure.
+
+- **Tags**: protocol, mobile
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
+## Achieved
 
 ### 🎯T5 Migration from markdown targets to bullseye
-- **Value**: 8
-- **Cost**: 5
+- **Weight**: 2 (value 8 / cost 5)
+- **Estimated-cost**: 5
 - **Acceptance**:
   - All repos using docs/targets.md can be migrated to docs/targets.yaml
   - /cv and related skills work against both old (markdown) and new (bullseye) formats during transition
@@ -255,12 +257,14 @@ During the interim (bullseye under development), the old system stays authoritat
 Migration strategy: run both systems in parallel. Agents write targets to both markdown and YAML — every target addition, status change, or retirement lands in both places. This lets bullseye prove itself against the live workflow without risk. No bridge code needed in /cv — the old /cv reads markdown as before, and bullseye tools read YAML independently. When bullseye consistently produces equal or better results, stop writing to markdown. This avoids both premature switchover and the complexity of dual-format reading logic.
 
 - **Tags**: migration, architecture
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-09
+- **Actual-cost**: 5
 
 ### 🎯T5.1 Markdown-to-YAML target converter
-- **Value**: 5
-- **Cost**: 3
+- **Weight**: 2 (value 5 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - bullseye_import tool or standalone script reads docs/targets.md and emits docs/targets.yaml
   - Preserves target IDs, status, value/cost, acceptance criteria, parent/child relationships
@@ -270,12 +274,14 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 
 - **Depends on**: 🎯T5
 - **Tags**: migration
-- **Status**: Converging
+- **Status**: Achieved
 - **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-09
+- **Actual-cost**: 3
 
 ### 🎯T5.2 Global CLAUDE.md and skill directives updated for bullseye
-- **Value**: 3
-- **Cost**: 2
+- **Weight**: 2 (value 3 / cost 2)
+- **Estimated-cost**: 2
 - **Acceptance**:
   - ~/.claude/CLAUDE.md convergence-targets section references bullseye tools
   - Skills that reference targets.md parsing are updated to use bullseye MCP calls
@@ -284,14 +290,14 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 
 - **Depends on**: 🎯T5, 🎯T5.1
 - **Tags**: migration
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-07
-
-## Achieved
+- **Achieved**: 2026-04-09
+- **Actual-cost**: 2
 
 ### 🎯T6 Seamless new-user adoption
-- **Value**: 8
-- **Cost**: 3
+- **Weight**: 3 (value 8 / cost 3)
+- **Estimated-cost**: 3
 - **Acceptance**:
   - A new user can go from "found the repo" to "bullseye is running and useful" with minimal friction
   - No cold-start problem — first interaction produces something useful
@@ -305,8 +311,8 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 - **Actual-cost**: 3
 
 ### 🎯T6.1 bullseye_init tool creates starter targets.yaml
-- **Value**: 5
-- **Cost**: 2
+- **Weight**: 2 (value 5 / cost 2)
+- **Estimated-cost**: 2
 - **Acceptance**:
   - bullseye_init creates docs/targets.yaml with a sensible skeleton
   - Includes a sample target demonstrating the schema
@@ -322,8 +328,8 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 - **Actual-cost**: 2
 
 ### 🎯T6.2 Auto-create targets.yaml on first bullseye_add
-- **Value**: 3
-- **Cost**: 2
+- **Weight**: 2 (value 3 / cost 2)
+- **Estimated-cost**: 2
 - **Acceptance**:
   - bullseye_add creates docs/targets.yaml if it doesn't exist
   - The created file contains only the added target (no sample data)
@@ -338,8 +344,8 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 - **Actual-cost**: 2
 
 ### 🎯T6.3 Copy-pasteable CLAUDE.md snippet for target management
-- **Value**: 3
-- **Cost**: 1
+- **Weight**: 3 (value 3 / cost 1)
+- **Estimated-cost**: 1
 - **Acceptance**:
   - README and agents-guide include a CLAUDE.md section users can paste into their project
   - The snippet tells agents to use bullseye tools for target management
@@ -374,9 +380,6 @@ graph TD
     T4["Dynamic session startup conte…"]
     T4_1["mnemo_startup_context tool"]
     T4_2["CLAUDE.md auto-call directive"]
-    T5["Migration from markdown targe…"]
-    T5_1["Markdown-to-YAML target conve…"]
-    T5_2["Global CLAUDE.md and skill di…"]
     T1_1 -.->|needs| T1
     T1_2 -.->|needs| T1
     T1_3 -.->|needs| T1
@@ -401,7 +404,4 @@ graph TD
     T4_1 -.->|needs| T4
     T4_2 -.->|needs| T4
     T4_2 -.->|needs| T4_1
-    T5_1 -.->|needs| T5
-    T5_2 -.->|needs| T5
-    T5_2 -.->|needs| T5_1
 ```
