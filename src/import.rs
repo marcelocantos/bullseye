@@ -17,6 +17,9 @@ use crate::schema::{GateEdge, Kind, Status, Target, TargetsFile};
 pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
     let last_evaluated = parse_last_evaluated(input);
     let mut targets = BTreeMap::new();
+    // Track parent→child relationships for post-parse fixup.
+    // The parent depends on the child (roll-up waits for its parts).
+    let mut parent_of: Vec<(String, String)> = Vec::new(); // (child_id, parent_id)
 
     let header_re = Regex::new(r"^###\s+🎯(T[\d.]+)\s*(✓)?\s+(.+)$").expect("invalid header regex");
 
@@ -143,9 +146,22 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 achieved: fields.achieved,
             };
 
+            if let Some(ref parent_id) = fields.parent_ref {
+                parent_of.push((id.clone(), parent_id.clone()));
+            }
+
             targets.insert(id, target);
         } else {
             i += 1;
+        }
+    }
+
+    // Post-parse fixup: parent depends on child (roll-up waits for parts).
+    for (child_id, parent_id) in &parent_of {
+        if let Some(parent) = targets.get_mut(parent_id)
+            && !parent.depends_on.contains(child_id)
+        {
+            parent.depends_on.push(child_id.clone());
         }
     }
 
@@ -172,6 +188,7 @@ struct ParsedFields {
     actual_cost: Option<f64>,
     acceptance: Vec<String>,
     context: String,
+    parent_ref: Option<String>,
     gates: Vec<GateEdge>,
     depends_on: Vec<String>,
     verifies: Vec<String>,
@@ -236,12 +253,9 @@ fn parse_field(line: &str, lines: &[&str], i: &mut usize, fields: &mut ParsedFie
             fields.context = field_value.to_string();
         }
         "Parent" => {
-            // Backward compat: convert parent to depends_on.
-            if let Some(parent_id) = parse_target_ref(field_value)
-                && !fields.depends_on.contains(&parent_id)
-            {
-                fields.depends_on.push(parent_id);
-            }
+            // Backward compat: record for post-parse fixup.
+            // The parent depends on the child (not the reverse).
+            fields.parent_ref = parse_target_ref(field_value);
         }
         "Gates" => {
             fields.gates = parse_gates(field_value);
