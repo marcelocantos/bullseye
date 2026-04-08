@@ -141,15 +141,6 @@ fn default_origin() -> String {
 }
 
 impl Target {
-    /// Computed weight = value / cost (minimum 1).
-    pub fn weight(&self) -> f64 {
-        if self.cost > 0.0 {
-            (self.value / self.cost).max(1.0)
-        } else {
-            self.value.max(1.0)
-        }
-    }
-
     /// Whether this target is active (not achieved).
     pub fn is_active(&self) -> bool {
         self.status != Status::Achieved

@@ -5,21 +5,6 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use crate::schema::{Kind, Status, TargetsFile};
 
-/// Ranked target with computed effective weight and blocking info.
-#[derive(Debug, Clone)]
-pub struct RankedTarget {
-    pub id: String,
-    pub name: String,
-    pub status: Status,
-    pub value: f64,
-    pub cost: f64,
-    pub weight: f64,
-    pub blocked_by: Vec<String>,
-    pub children: Vec<String>,
-    pub gates: Vec<(String, f64)>,
-    pub tags: Vec<String>,
-}
-
 /// A target in the frontier: unblocked and ready for work.
 #[derive(Debug, Clone)]
 pub struct FrontierTarget {
@@ -73,74 +58,6 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
             tags: t.tags.clone(),
         })
         .collect()
-}
-
-/// Compute rankings for all active targets.
-pub fn rank(file: &TargetsFile) -> Vec<RankedTarget> {
-    let active: BTreeMap<&str, _> = file.active();
-
-    // Build parent -> children map.
-    let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (id, t) in &active {
-        if let Some(ref parent) = t.parent
-            && active.contains_key(parent.as_str())
-        {
-            children.entry(parent.as_str()).or_default().push(id);
-        }
-    }
-
-    // Compute blocked-by: depends_on targets that aren't achieved.
-    let mut blocked_by: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for (id, t) in &active {
-        let blockers: Vec<String> = t
-            .depends_on
-            .iter()
-            .filter(|dep| {
-                file.targets
-                    .get(dep.as_str())
-                    .is_some_and(|d| d.status != Status::Achieved)
-            })
-            .cloned()
-            .collect();
-        blocked_by.insert(id, blockers);
-    }
-
-    // Build ranked list.
-    let mut ranked: Vec<RankedTarget> = active
-        .iter()
-        .map(|(id, t)| {
-            let child_ids: Vec<String> = children
-                .get(id)
-                .map(|cs| cs.iter().map(|s| s.to_string()).collect())
-                .unwrap_or_default();
-
-            RankedTarget {
-                id: id.to_string(),
-                name: t.name.clone(),
-                status: t.status,
-                value: t.value,
-                cost: t.cost,
-                weight: t.weight(),
-                blocked_by: blocked_by.get(id).cloned().unwrap_or_default(),
-                children: child_ids,
-                gates: t
-                    .gates
-                    .iter()
-                    .map(|g| (g.target.clone(), g.criticality))
-                    .collect(),
-                tags: t.tags.clone(),
-            }
-        })
-        .collect();
-
-    // Sort by weight descending.
-    ranked.sort_by(|a, b| {
-        b.weight
-            .partial_cmp(&a.weight)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    ranked
 }
 
 /// A tunnel warning: a work target that is too far from verification.

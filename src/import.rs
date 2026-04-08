@@ -200,7 +200,7 @@ fn parse_field(line: &str, lines: &[&str], i: &mut usize, fields: &mut ParsedFie
 
     match field_name {
         "Weight" => {
-            // Parse "N (value V / cost C)" format.
+            // Backward compat: parse old "N (value V / cost C)" format.
             let weight_re = Regex::new(r"value\s+(\d+\.?\d*)\s*/\s*cost\s+(\d+\.?\d*)")
                 .expect("invalid weight regex");
             if let Some(wc) = weight_re.captures(field_value) {
@@ -208,8 +208,11 @@ fn parse_field(line: &str, lines: &[&str], i: &mut usize, fields: &mut ParsedFie
                 fields.cost = wc[2].parse().ok();
             }
         }
-        "Estimated-cost" => {
-            // Already captured from Weight line; ignore.
+        "Value" => {
+            fields.value = field_value.parse().ok();
+        }
+        "Cost" | "Estimated-cost" => {
+            fields.cost = field_value.parse().ok();
         }
         "Acceptance" => {
             if !field_value.is_empty() {

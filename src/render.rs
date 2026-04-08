@@ -18,11 +18,7 @@ pub fn render_markdown(file: &TargetsFile) -> String {
 
     // Active section.
     let mut active: Vec<(&str, &Target)> = file.active().into_iter().collect();
-    active.sort_by(|a, b| {
-        b.1.weight()
-            .partial_cmp(&a.1.weight())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    active.sort_by(|a, b| a.0.cmp(b.0));
 
     out.push_str("## Active\n");
     for (id, target) in &active {
@@ -57,19 +53,13 @@ pub fn render_markdown(file: &TargetsFile) -> String {
 }
 
 fn render_target(out: &mut String, id: &str, t: &Target) {
-    let w = t.weight();
     let kind_suffix = match t.kind {
         Kind::Verify => " ✓",
         Kind::Work => "",
     };
     writeln!(out, "\n### 🎯{id}{kind_suffix} {}", t.name).unwrap();
-    writeln!(
-        out,
-        "- **Weight**: {w:.0} (value {} / cost {})",
-        t.value, t.cost
-    )
-    .unwrap();
-    writeln!(out, "- **Estimated-cost**: {}", t.cost).unwrap();
+    writeln!(out, "- **Value**: {}", t.value).unwrap();
+    writeln!(out, "- **Cost**: {}", t.cost).unwrap();
 
     if t.acceptance.len() == 1 {
         writeln!(out, "- **Acceptance**: {}", t.acceptance[0]).unwrap();

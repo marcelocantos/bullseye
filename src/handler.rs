@@ -54,7 +54,6 @@ impl ServerHandler for TargetHandler {
             TargetTools::FrontierTool(t) => handle_frontier(t),
             TargetTools::ReworkTool(t) => handle_rework(t),
             TargetTools::TunnelsTool(t) => handle_tunnels(t),
-            TargetTools::RankTool(t) => handle_rank(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
             TargetTools::RenderTool(t) => handle_render(t),
@@ -122,13 +121,12 @@ fn handle_list(t: crate::tools::ListTool) -> ToolResult {
     };
 
     let mut sorted: Vec<_> = targets;
-    sorted.sort_by(|a, b| b.1.weight().partial_cmp(&a.1.weight()).unwrap());
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = format!("# Targets ({})\nFile: {}\n\n", t.filter, path.display());
     for (id, target) in &sorted {
-        let w = target.weight();
         out.push_str(&format!(
-            "🎯{id} {name}\n  status: {status:?}  weight: {w:.0} (value {v} / cost {c})\n",
+            "🎯{id} {name}\n  status: {status:?}  value: {v}, cost: {c}\n",
             name = target.name,
             status = target.status,
             v = target.value,
@@ -222,9 +220,8 @@ fn handle_add(t: crate::tools::AddTool) -> ToolResult {
     save_and_render(&path, &file)?;
 
     text_result(format!(
-        "Created 🎯{next_id} \"{name}\"\nWeight: {w:.0} (value {v} / cost {c})\nFile: {path}",
+        "Created 🎯{next_id} \"{name}\"\nValue: {v}, Cost: {c}\nFile: {path}",
         name = t.name,
-        w = (t.value / t.cost).max(1.0),
         v = t.value,
         c = t.cost,
         path = path.display(),
@@ -437,75 +434,6 @@ fn handle_tunnels(t: crate::tools::TunnelsTool) -> ToolResult {
     }
 
     text_result(out)
-}
-
-fn handle_rank(t: crate::tools::RankTool) -> ToolResult {
-    let (path, file) = load_file(&t.cwd)?;
-
-    let errors = graph::validate(&file);
-    if !errors.is_empty() {
-        return text_result(format!("# Validation errors\n\n{}", errors.join("\n")));
-    }
-
-    let ranked = graph::rank(&file);
-    let (unblocked, blocked): (Vec<_>, Vec<_>) =
-        ranked.iter().partition(|r| r.blocked_by.is_empty());
-
-    let mut out = format!("# Ranking\nFile: {}\n", path.display());
-
-    out.push_str("\n## Unblocked\n");
-    if unblocked.is_empty() {
-        out.push_str("(none)\n");
-    }
-    for r in &unblocked {
-        format_ranked(&mut out, r, 0);
-    }
-
-    out.push_str("\n## Blocked\n");
-    if blocked.is_empty() {
-        out.push_str("(none)\n");
-    }
-    for r in &blocked {
-        format_ranked(&mut out, r, 0);
-    }
-
-    text_result(out)
-}
-
-fn format_ranked(out: &mut String, r: &graph::RankedTarget, indent: usize) {
-    let prefix = "  ".repeat(indent);
-    out.push_str(&format!(
-        "\n{prefix}🎯{id} {name}\n{prefix}  status: {status:?}  weight: {w:.0} (value {v} / cost {c})\n",
-        id = r.id,
-        name = r.name,
-        status = r.status,
-        w = r.weight,
-        v = r.value,
-        c = r.cost,
-    ));
-    if !r.tags.is_empty() {
-        out.push_str(&format!("{prefix}  tags: {}\n", r.tags.join(", ")));
-    }
-    if !r.gates.is_empty() {
-        let gs: Vec<String> = r
-            .gates
-            .iter()
-            .map(|(id, c)| {
-                if *c < 1.0 {
-                    format!("{id} ({}%)", (*c * 100.0) as u32)
-                } else {
-                    id.clone()
-                }
-            })
-            .collect();
-        out.push_str(&format!("{prefix}  gates: {}\n", gs.join(", ")));
-    }
-    if !r.blocked_by.is_empty() {
-        out.push_str(&format!(
-            "{prefix}  blocked-by: {}\n",
-            r.blocked_by.join(", ")
-        ));
-    }
 }
 
 fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {

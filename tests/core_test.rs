@@ -41,31 +41,10 @@ fn achieved_filter() {
 }
 
 #[test]
-fn weight_computation() {
-    let file = load_fixture();
-    let t1 = &file.targets["T1"];
-    // value 8 / cost 3 = 2.67
-    assert!((t1.weight() - 8.0 / 3.0).abs() < 0.01);
-}
-
-#[test]
 fn validates_ok() {
     let file = load_fixture();
     let errors = graph::validate(&file);
     assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-}
-
-#[test]
-fn ranking_order() {
-    let file = load_fixture();
-    let ranked = graph::rank(&file);
-    // Should be sorted by weight descending.
-    for w in ranked.windows(2) {
-        assert!(w[0].weight >= w[1].weight);
-    }
-    // T5 (weight 3.0) should be first, then T1 (weight ~2.67).
-    assert_eq!(ranked[0].id, "T5");
-    assert_eq!(ranked[1].id, "T1");
 }
 
 #[test]
@@ -539,17 +518,6 @@ fn rework_error_dest_not_found() {
 }
 
 #[test]
-fn blocked_detection() {
-    let mut file = load_fixture();
-    // Make T2 depend on T1 (which is converging, not achieved).
-    file.targets.get_mut("T2").unwrap().depends_on = vec!["T1".to_string()];
-    let ranked = graph::rank(&file);
-    let t2 = ranked.iter().find(|r| r.id == "T2").unwrap();
-    assert!(!t2.blocked_by.is_empty());
-    assert_eq!(t2.blocked_by[0], "T1");
-}
-
-#[test]
 fn renders_markdown() {
     let file = load_fixture();
     let md = render::render_markdown(&file);
@@ -563,8 +531,9 @@ fn renders_markdown() {
     assert!(md.contains("### 🎯T1 All tests pass on CI"));
     assert!(md.contains("### 🎯T4 Documentation covers all public APIs"));
 
-    // Has weight line.
-    assert!(md.contains("- **Weight**:"));
+    // Has value and cost lines.
+    assert!(md.contains("- **Value**:"));
+    assert!(md.contains("- **Cost**:"));
 
     // Has acceptance criteria.
     assert!(md.contains("- **Acceptance**:"));

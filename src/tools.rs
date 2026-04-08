@@ -184,17 +184,6 @@ pub struct TunnelsTool {
     pub max_depth: Option<u32>,
 }
 
-/// Compute WSJF ranking with blocking analysis.
-#[mcp_tool(
-    name = "bullseye_rank",
-    description = "Compute WSJF ranking of active targets with blocking analysis. Returns targets sorted by effective weight, split into unblocked and blocked."
-)]
-#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
-pub struct RankTool {
-    /// Working directory to discover targets.yaml from.
-    pub cwd: String,
-}
-
 /// Validate the targets file for schema conformance.
 #[mcp_tool(
     name = "bullseye_validate",
@@ -281,7 +270,6 @@ tool_box!(
         FrontierTool,
         ReworkTool,
         TunnelsTool,
-        RankTool,
         ValidateTool,
         GraphTool,
         RenderTool,

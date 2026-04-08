@@ -49,7 +49,7 @@ async fn main() -> SdkResult<()> {
             title: Some("Bullseye — Target Management MCP Server".to_string()),
             description: Some(
                 "Manage targets — desired states expressed as testable properties. \
-                 Provides WSJF ranking, validation, and dependency graph analysis."
+                 Provides frontier computation, validation, and dependency graph analysis."
                     .to_string(),
             ),
             icons: vec![],
@@ -62,8 +62,8 @@ async fn main() -> SdkResult<()> {
         meta: None,
         instructions: Some(
             "Target management. Targets are desired states expressed as testable \
-             properties. Use bullseye_list to see active targets, bullseye_rank \
-             for WSJF-ordered recommendations, bullseye_add/update/retire to manage them."
+             properties. Use bullseye_list to see active targets, bullseye_frontier \
+             for unblocked targets ready for work, bullseye_add/update/retire to manage them."
                 .to_string(),
         ),
         protocol_version: ProtocolVersion::V2025_11_25.into(),
