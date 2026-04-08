@@ -16,20 +16,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T6.3 Copy-pasteable CLAUDE.md snippet for target management
-- **Weight**: 3 (value 3 / cost 1)
-- **Estimated-cost**: 1
-- **Acceptance**:
-  - README and agents-guide include a CLAUDE.md section users can paste into their project
-  - The snippet tells agents to use bullseye tools for target management
-  - Works standalone — doesn't require other skills or setup
-- **Context**: The snippet bridges the gap between "bullseye is installed as an MCP server" and "agents actually use it." Without explicit CLAUDE.md instructions, agents won't know bullseye exists even if it's registered.
-
-- **Parent**: 🎯T6
-- **Tags**: adoption, docs
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T1.3 /cv skill rewrite against MCP tools
 - **Weight**: 3 (value 8 / cost 3)
 - **Estimated-cost**: 3
@@ -59,19 +45,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T6 Seamless new-user adoption
-- **Weight**: 3 (value 8 / cost 3)
-- **Estimated-cost**: 3
-- **Acceptance**:
-  - A new user can go from "found the repo" to "bullseye is running and useful" with minimal friction
-  - No cold-start problem — first interaction produces something useful
-  - CLAUDE.md integration is copy-pasteable
-- **Context**: A new user arriving at the repo faces several friction points: (1) installation is two steps (binary + MCP config), (2) there's no targets.yaml to start with, so the first tool call fails, (3) the real value comes from skill integration but there's no guidance on how to wire that up. Each sub-target removes one of these barriers.
-
-- **Tags**: adoption, ux
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T4.1 mnemo_startup_context tool
 - **Weight**: 2 (value 5 / cost 2)
 - **Estimated-cost**: 2
@@ -83,21 +56,6 @@
 
 - **Parent**: 🎯T4
 - **Tags**: mnemo
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
-### 🎯T6.1 bullseye_init tool creates starter targets.yaml
-- **Weight**: 2 (value 5 / cost 2)
-- **Estimated-cost**: 2
-- **Acceptance**:
-  - bullseye_init creates docs/targets.yaml with a sensible skeleton
-  - Includes a sample target demonstrating the schema
-  - Works from any cwd (creates docs/ directory if needed)
-  - Idempotent — refuses to overwrite an existing file
-- **Context**: Eliminates the cold-start problem. A new user's first interaction with bullseye produces a working targets file they can immediately build on.
-
-- **Parent**: 🎯T6
-- **Tags**: adoption
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
@@ -340,6 +298,38 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 
 ## Achieved
 
+### 🎯T6 Seamless new-user adoption
+- **Weight**: 3 (value 8 / cost 3)
+- **Estimated-cost**: 3
+- **Acceptance**:
+  - A new user can go from "found the repo" to "bullseye is running and useful" with minimal friction
+  - No cold-start problem — first interaction produces something useful
+  - CLAUDE.md integration is copy-pasteable
+- **Context**: A new user arriving at the repo faces several friction points: (1) installation is two steps (binary + MCP config), (2) there's no targets.yaml to start with, so the first tool call fails, (3) the real value comes from skill integration but there's no guidance on how to wire that up. Each sub-target removes one of these barriers.
+
+- **Tags**: adoption, ux
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-08
+- **Actual-cost**: 3
+
+### 🎯T6.1 bullseye_init tool creates starter targets.yaml
+- **Weight**: 2 (value 5 / cost 2)
+- **Estimated-cost**: 2
+- **Acceptance**:
+  - bullseye_init creates docs/targets.yaml with a sensible skeleton
+  - Includes a sample target demonstrating the schema
+  - Works from any cwd (creates docs/ directory if needed)
+  - Idempotent — refuses to overwrite an existing file
+- **Context**: Eliminates the cold-start problem. A new user's first interaction with bullseye produces a working targets file they can immediately build on.
+
+- **Parent**: 🎯T6
+- **Tags**: adoption
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-08
+- **Actual-cost**: 2
+
 ### 🎯T6.2 Auto-create targets.yaml on first bullseye_add
 - **Weight**: 2 (value 3 / cost 2)
 - **Estimated-cost**: 2
@@ -355,6 +345,22 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 - **Discovered**: 2026-04-07
 - **Achieved**: 2026-04-07
 - **Actual-cost**: 2
+
+### 🎯T6.3 Copy-pasteable CLAUDE.md snippet for target management
+- **Weight**: 3 (value 3 / cost 1)
+- **Estimated-cost**: 1
+- **Acceptance**:
+  - README and agents-guide include a CLAUDE.md section users can paste into their project
+  - The snippet tells agents to use bullseye tools for target management
+  - Works standalone — doesn't require other skills or setup
+- **Context**: The snippet bridges the gap between "bullseye is installed as an MCP server" and "agents actually use it." Without explicit CLAUDE.md instructions, agents won't know bullseye exists even if it's registered.
+
+- **Parent**: 🎯T6
+- **Tags**: adoption, docs
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-07
+- **Actual-cost**: 1
 
 ## Graph
 
@@ -380,9 +386,6 @@ graph TD
     T5["Migration from markdown targe…"]
     T5_1["Markdown-to-YAML target conve…"]
     T5_2["Global CLAUDE.md and skill di…"]
-    T6["Seamless new-user adoption"]
-    T6_1["bullseye_init tool creates st…"]
-    T6_3["Copy-pasteable CLAUDE.md snip…"]
     T1 --> T1_1
     T1 --> T1_2
     T1 --> T1_3
@@ -398,8 +401,6 @@ graph TD
     T4 --> T4_2
     T5 --> T5_1
     T5 --> T5_2
-    T6 --> T6_1
-    T6 --> T6_3
     T1_3 -.->|needs| T1_1
     T1_3 -.->|needs| T1_2
     T1_5 -.->|needs| T1_1

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build          # Build the project
-cargo test           # Run all 44 tests
+cargo test           # Run all 46 tests
 cargo test <name>    # Run a single test by name substring
 cargo test --lib     # Unit tests only
 cargo clippy         # Lint

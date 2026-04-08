@@ -142,6 +142,17 @@ manual re-rendering.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 
+### bullseye_init
+
+Create a starter `docs/targets.yaml` with a sample target. Refuses to
+overwrite an existing file — use `bullseye_add` for repos that already
+have targets.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Project root directory |
+| `project_name` | string | directory name | Project name for sample target context |
+
 ## targets.yaml schema
 
 ```yaml
@@ -236,3 +247,49 @@ bullseye_validate(cwd)  → schema conformance
 bullseye_tunnels(cwd)   → unverified work chains
 bullseye_graph(cwd)     → visual dependency map
 ```
+
+## Agent integration
+
+Add the following snippet to your project's `CLAUDE.md` (or
+equivalent agent instructions file) to enable target-driven workflow
+management via Bullseye. The only prerequisite is having the Bullseye
+MCP server registered (see [README.md](../README.md#mcp-client-configuration)).
+
+````markdown
+## Target management
+
+This project uses [Bullseye](https://github.com/marcelocantos/bullseye)
+for target management. Targets are desired project states expressed as
+testable properties, stored in `docs/targets.yaml`.
+
+### Getting started
+
+If this project doesn't have `docs/targets.yaml` yet, call
+`bullseye_init` to create one with a starter template.
+
+### Assessing work
+
+- `bullseye_frontier` — unblocked targets ready for work right now.
+- `bullseye_rank` — full WSJF priority ordering with blocking info.
+- `bullseye_list` — browse all targets (active, achieved, or all).
+
+Before starting work, call `bullseye_frontier` to see what's
+available. Use `bullseye_rank` when you need the full priority picture.
+
+### Managing targets
+
+- `bullseye_add` — create a new target (provide name, value, cost,
+  and acceptance criteria; ID is auto-assigned).
+- `bullseye_update` — change status, value, cost, or other fields on
+  an existing target.
+- `bullseye_retire` — mark a target as achieved.
+
+When you discover something that should be tracked — a bug, a quality
+gap, a missing capability — add it as a target with `bullseye_add`
+rather than leaving a bare TODO.
+
+When you complete work that achieves a target, call `bullseye_retire`
+to mark it done.
+
+All tools accept a `cwd` parameter — pass the project root directory.
+````

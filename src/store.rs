@@ -41,15 +41,63 @@ pub fn create_default(start_dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Create a starter targets file with a sample target at `start_dir/docs/targets.yaml`.
+/// Creates the `docs/` directory if it doesn't exist.
+pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, String> {
+    let docs = start_dir.join("docs");
+    std::fs::create_dir_all(&docs)
+        .map_err(|e| format!("failed to create {}: {e}", docs.display()))?;
+    let path = docs.join("targets.yaml");
+
+    let today = chrono::Local::now().date_naive();
+    let mut targets = std::collections::BTreeMap::new();
+    targets.insert(
+        "T1".to_string(),
+        crate::schema::Target {
+            name: format!("{project_name} has a clear first milestone"),
+            kind: crate::schema::Kind::Work,
+            status: crate::schema::Status::Identified,
+            value: 5.0,
+            cost: 3.0,
+            actual_cost: None,
+            acceptance: vec![
+                "First milestone is defined with measurable success criteria".to_string(),
+                "At least one sub-target breaks the milestone into actionable work".to_string(),
+            ],
+            context: "Starter target — replace with your project's actual first goal.".to_string(),
+            parent: None,
+            gates: Vec::new(),
+            depends_on: Vec::new(),
+            verifies: Vec::new(),
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: Vec::new(),
+            origin: "bullseye_init".to_string(),
+            discovered: today,
+            achieved: None,
+        },
+    );
+
+    let file = TargetsFile {
+        last_evaluated: None,
+        targets,
+    };
+    save(&path, &file)?;
+    Ok(path)
+}
+
 /// Load and parse a targets file.
 pub fn load(path: &Path) -> Result<TargetsFile, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    serde_yaml_ng::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))
+    serde_yaml_ng::from_str(&content)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
 /// Write a targets file back to disk.
 pub fn save(path: &Path, file: &TargetsFile) -> Result<(), String> {
-    let content = serde_yaml_ng::to_string(file).map_err(|e| format!("failed to serialize: {e}"))?;
+    let content =
+        serde_yaml_ng::to_string(file).map_err(|e| format!("failed to serialize: {e}"))?;
     std::fs::write(path, content).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }

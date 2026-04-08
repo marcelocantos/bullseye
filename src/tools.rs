@@ -217,6 +217,21 @@ pub struct GraphTool {
     pub cwd: String,
 }
 
+/// Initialise a new targets file with a starter template.
+#[mcp_tool(
+    name = "bullseye_init",
+    description = "Create a starter docs/targets.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_add for repos that already have targets."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct InitTool {
+    /// Working directory (project root) where docs/targets.yaml will be created.
+    pub cwd: String,
+
+    /// Project name for the sample target context (e.g., "my-app").
+    #[serde(default)]
+    pub project_name: Option<String>,
+}
+
 /// Render targets.md from the YAML source.
 #[mcp_tool(
     name = "bullseye_render",
@@ -250,6 +265,7 @@ tool_box!(
         RankTool,
         ValidateTool,
         GraphTool,
-        RenderTool
+        RenderTool,
+        InitTool
     ]
 );

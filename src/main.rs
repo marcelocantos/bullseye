@@ -84,7 +84,10 @@ async fn main() -> SdkResult<()> {
 }
 
 fn print_help() {
-    println!("bullseye {} — Target Management MCP Server", env!("CARGO_PKG_VERSION"));
+    println!(
+        "bullseye {} — Target Management MCP Server",
+        env!("CARGO_PKG_VERSION")
+    );
     println!();
     println!("USAGE:");
     println!("    bullseye              Start the MCP server (stdio transport)");
