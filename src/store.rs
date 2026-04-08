@@ -91,11 +91,13 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
 pub fn load(path: &Path) -> Result<TargetsFile, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    serde_yaml_ng::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))
+    serde_yaml_ng::from_str(&content)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
 /// Write a targets file back to disk.
 pub fn save(path: &Path, file: &TargetsFile) -> Result<(), String> {
-    let content = serde_yaml_ng::to_string(file).map_err(|e| format!("failed to serialize: {e}"))?;
+    let content =
+        serde_yaml_ng::to_string(file).map_err(|e| format!("failed to serialize: {e}"))?;
     std::fs::write(path, content).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }

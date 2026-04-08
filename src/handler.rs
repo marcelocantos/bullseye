@@ -539,9 +539,10 @@ fn handle_init(t: crate::tools::InitTool) -> ToolResult {
         return err("targets.yaml already exists — use bullseye_add to add targets");
     }
 
-    let project = t
-        .project_name
-        .unwrap_or_else(|| dir.file_name().map_or("my-project".into(), |n| n.to_string_lossy().into_owned()));
+    let project = t.project_name.unwrap_or_else(|| {
+        dir.file_name()
+            .map_or("my-project".into(), |n| n.to_string_lossy().into_owned())
+    });
 
     let path = store::create_starter(dir, &project).map_err(tool_err)?;
     let file = store::load(&path).map_err(tool_err)?;
