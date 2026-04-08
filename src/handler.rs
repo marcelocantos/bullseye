@@ -57,6 +57,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
             TargetTools::RenderTool(t) => handle_render(t),
+            TargetTools::InitTool(t) => handle_init(t),
         }
     }
 }
@@ -528,6 +529,30 @@ fn handle_graph(t: crate::tools::GraphTool) -> ToolResult {
     let (_path, file) = load_file(&t.cwd)?;
     let mermaid = graph::mermaid(&file);
     text_result(format!("```mermaid\n{mermaid}\n```"))
+}
+
+fn handle_init(t: crate::tools::InitTool) -> ToolResult {
+    let dir = Path::new(&t.cwd);
+
+    // Refuse if a targets file already exists.
+    if store::discover(dir).is_some() {
+        return err("targets.yaml already exists — use bullseye_add to add targets");
+    }
+
+    let project = t
+        .project_name
+        .unwrap_or_else(|| dir.file_name().map_or("my-project".into(), |n| n.to_string_lossy().into_owned()));
+
+    let path = store::create_starter(dir, &project).map_err(tool_err)?;
+    let file = store::load(&path).map_err(tool_err)?;
+    render::render_to_file(&path, &file).map_err(tool_err)?;
+
+    text_result(format!(
+        "Created starter targets file at {}\n\
+         Contains 1 sample target (🎯T1) — edit or replace it with your own.\n\
+         Markdown view rendered alongside.",
+        path.display(),
+    ))
 }
 
 fn handle_render(t: crate::tools::RenderTool) -> ToolResult {

@@ -356,9 +356,10 @@ targets:
     discovered: 2026-04-07
   T6:
     name: Seamless new-user adoption
-    status: converging
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - A new user can go from "found the repo" to "bullseye is running and useful" with minimal friction
     - No cold-start problem — first interaction produces something useful
@@ -370,11 +371,13 @@ targets:
     - ux
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-08
   T6.1:
     name: bullseye_init tool creates starter targets.yaml
-    status: identified
+    status: achieved
     value: 5.0
     cost: 2.0
+    actual_cost: 2.0
     acceptance:
     - bullseye_init creates docs/targets.yaml with a sensible skeleton
     - Includes a sample target demonstrating the schema
@@ -387,6 +390,7 @@ targets:
     - adoption
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-08
   T6.2:
     name: Auto-create targets.yaml on first bullseye_add
     status: achieved

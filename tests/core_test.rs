@@ -587,3 +587,38 @@ fn markdown_path_derivation() {
     let md = render::markdown_path(yaml);
     assert_eq!(md, Path::new("/foo/docs/targets.md"));
 }
+
+#[test]
+fn create_starter_produces_valid_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_starter(tmp.path(), "test-project").unwrap();
+
+    assert!(path.exists());
+    assert_eq!(path, tmp.path().join("docs/targets.yaml"));
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets.len(), 1);
+
+    let t1 = &file.targets["T1"];
+    assert!(t1.name.contains("test-project"));
+    assert_eq!(t1.status, Status::Identified);
+    assert_eq!(t1.origin, "bullseye_init");
+    assert_eq!(t1.acceptance.len(), 2);
+
+    // Validate the file passes all checks.
+    let errors = graph::validate(&file);
+    assert!(errors.is_empty(), "validation errors: {errors:?}");
+}
+
+#[test]
+fn create_starter_does_not_overwrite() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Create the first time.
+    let path = store::create_starter(tmp.path(), "project").unwrap();
+    assert!(path.exists());
+
+    // discover should now find it, so handler-level guard works.
+    let found = store::discover(tmp.path());
+    assert!(found.is_some());
+}

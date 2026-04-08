@@ -142,6 +142,17 @@ manual re-rendering.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 
+### bullseye_init
+
+Create a starter `docs/targets.yaml` with a sample target. Refuses to
+overwrite an existing file — use `bullseye_add` for repos that already
+have targets.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Project root directory |
+| `project_name` | string | directory name | Project name for sample target context |
+
 ## targets.yaml schema
 
 ```yaml
@@ -250,6 +261,11 @@ MCP server registered (see [README.md](../README.md#mcp-client-configuration)).
 This project uses [Bullseye](https://github.com/marcelocantos/bullseye)
 for target management. Targets are desired project states expressed as
 testable properties, stored in `docs/targets.yaml`.
+
+### Getting started
+
+If this project doesn't have `docs/targets.yaml` yet, call
+`bullseye_init` to create one with a starter template.
 
 ### Assessing work
 
