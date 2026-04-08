@@ -273,9 +273,10 @@ targets:
     discovered: 2026-04-07
   T4.1:
     name: mnemo_startup_context tool
-    status: converging
+    status: achieved
     value: 5.0
     cost: 2.0
+    actual_cost: 2.0
     acceptance:
     - Returns per-repo summary with session counts, recency, and active targets
     - Formatted for easy agent consumption
@@ -286,6 +287,7 @@ targets:
     - mnemo
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-09
   T4.2:
     name: CLAUDE.md auto-call directive
     status: identified

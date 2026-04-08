@@ -213,19 +213,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T4.1 mnemo_startup_context tool
-- **Value**: 5
-- **Cost**: 2
-- **Acceptance**:
-  - Returns per-repo summary with session counts, recency, and active targets
-  - Formatted for easy agent consumption
-  - Filterable by project (current working directory)
-- **Context**: Wraps mnemo_recent_activity with target-aware enrichment. If the targets MCP server is available, includes frontier targets per repo. Otherwise falls back to session-only data.
-
-- **Tags**: mnemo
-- **Status**: Converging
-- **Discovered**: 2026-04-07
-
 ### 🎯T4.2 CLAUDE.md auto-call directive
 - **Value**: 3
 - **Cost**: 1
@@ -240,6 +227,21 @@
 - **Discovered**: 2026-04-07
 
 ## Achieved
+
+### 🎯T4.1 mnemo_startup_context tool
+- **Value**: 5
+- **Cost**: 2
+- **Acceptance**:
+  - Returns per-repo summary with session counts, recency, and active targets
+  - Formatted for easy agent consumption
+  - Filterable by project (current working directory)
+- **Context**: Wraps mnemo_recent_activity with target-aware enrichment. If the targets MCP server is available, includes frontier targets per repo. Otherwise falls back to session-only data.
+
+- **Tags**: mnemo
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-09
+- **Actual-cost**: 2
 
 ### 🎯T5 Migration from markdown targets to bullseye
 - **Value**: 8
@@ -375,7 +377,6 @@ graph TD
     T3_1["targets_priorities SQLite tab…"]
     T3_2["Protocol Today page Focus sec…"]
     T4["Dynamic session startup conte…"]
-    T4_1["mnemo_startup_context tool"]
     T4_2["CLAUDE.md auto-call directive"]
     T1 -.->|needs| T1_1
     T1 -.->|needs| T1_2
@@ -398,7 +399,5 @@ graph TD
     T3 -.->|needs| T3_2
     T3_1 -.->|needs| T2_3
     T3_2 -.->|needs| T3_1
-    T4 -.->|needs| T4_1
     T4 -.->|needs| T4_2
-    T4_2 -.->|needs| T4_1
 ```
