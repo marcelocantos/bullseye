@@ -32,3 +32,8 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 - **Commit**: `055d997`
 - **Outcome**: Released v0.5.0 (darwin-arm64, linux-amd64, linux-arm64). Fixed parent-to-depends_on migration direction — edges were inverted in v0.4.0. Homebrew formula updated.
+
+## 2026-04-09 -- /release v0.6.0
+
+- **Commit**: `3c19656`
+- **Outcome**: Released v0.6.0 (darwin-arm64, linux-amd64, linux-arm64). Fixed bullseye_import parent-to-depends_on direction inversion (same bug as v0.5.0 data migration, but in the import tool). Homebrew formula updated.
