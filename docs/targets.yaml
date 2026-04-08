@@ -356,7 +356,7 @@ targets:
     discovered: 2026-04-07
   T6:
     name: Seamless new-user adoption
-    status: identified
+    status: converging
     value: 8.0
     cost: 3.0
     acceptance:

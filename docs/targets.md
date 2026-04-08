@@ -55,7 +55,7 @@
 - **Context**: A new user arriving at the repo faces several friction points: (1) installation is two steps (binary + MCP config), (2) there's no targets.yaml to start with, so the first tool call fails, (3) the real value comes from skill integration but there's no guidance on how to wire that up. Each sub-target removes one of these barriers.
 
 - **Tags**: adoption, ux
-- **Status**: Identified
+- **Status**: Converging
 - **Discovered**: 2026-04-07
 
 ### 🎯T4.1 mnemo_startup_context tool
