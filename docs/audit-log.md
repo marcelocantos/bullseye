@@ -17,3 +17,8 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 - **Commit**: `fbcd66c`
 - **Outcome**: Released v0.2.0 (darwin-arm64, linux-amd64, linux-arm64). Auto-create on first add, error message fix, convergence terminology removed from user-facing surfaces. Homebrew formula updated.
+
+## 2026-04-08 -- /release v0.3.0
+
+- **Commit**: (pending)
+- **Outcome**: Released v0.3.0 (darwin-arm64, linux-amd64, linux-arm64). New bullseye_init tool, agent integration CLAUDE.md snippet, CI fix. 🎯T6 (new-user adoption) fully achieved. Homebrew formula updated.
