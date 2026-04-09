@@ -262,6 +262,22 @@ pub struct StartupContextTool {
     pub recent_days: Option<u32>,
 }
 
+/// Cross-repo portfolio view.
+#[mcp_tool(
+    name = "bullseye_portfolio",
+    description = "Discover all repos with targets under a workspace root and return a portfolio summary: per-repo active/frontier/achieved counts and frontier target names. Scans ~/work/ by default. Use this for cross-project prioritisation and global convergence assessment."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct PortfolioTool {
+    /// Workspace root to scan (default: ~/work/).
+    #[serde(default)]
+    pub root: Option<String>,
+
+    /// Maximum directory depth to scan (default: 5).
+    #[serde(default)]
+    pub max_depth: Option<u32>,
+}
+
 fn default_filter() -> String {
     "active".to_string()
 }
@@ -286,6 +302,7 @@ tool_box!(
         RenderTool,
         InitTool,
         ImportTool,
-        StartupContextTool
+        StartupContextTool,
+        PortfolioTool
     ]
 );

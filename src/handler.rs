@@ -16,6 +16,7 @@ use rust_mcp_sdk::schema::{
 use crate::graph;
 use crate::import;
 use crate::ops;
+use crate::portfolio;
 use crate::render;
 use crate::schema::{Status, Target};
 use crate::store;
@@ -60,6 +61,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::InitTool(t) => handle_init(t),
             TargetTools::ImportTool(t) => handle_import(t),
             TargetTools::StartupContextTool(t) => handle_startup_context(t),
+            TargetTools::PortfolioTool(t) => handle_portfolio(t),
         }
     }
 }
@@ -522,6 +524,21 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
     let recent_days = t.recent_days.unwrap_or(14);
     let out = graph::startup_context(&file, &path.display().to_string(), recent_days);
     text_result(out)
+}
+
+fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/marcelo".to_string());
+    let default_root = format!("{home}/work");
+    let root_str = t.root.as_deref().unwrap_or(&default_root);
+    let root = Path::new(root_str);
+
+    if !root.is_dir() {
+        return err(format!("{root_str} is not a directory"));
+    }
+
+    let max_depth = t.max_depth.unwrap_or(5) as usize;
+    let repos = portfolio::discover_repos(root, max_depth);
+    text_result(portfolio::format_portfolio(&repos))
 }
 
 /// Discover a targets.md by walking up from start_dir.

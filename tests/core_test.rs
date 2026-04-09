@@ -563,6 +563,32 @@ fn create_starter_does_not_overwrite() {
     assert!(found.is_some());
 }
 
+// --- Portfolio tests ---
+
+#[test]
+fn portfolio_discovers_fixture() {
+    use bullseye::portfolio;
+
+    let fixture = fixture_path();
+    let repos = portfolio::discover_repos(&fixture, 3);
+    // The fixture has a docs/targets.yaml at its root.
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0].active, 4);
+    assert!(repos[0].frontier > 0);
+    assert_eq!(repos[0].achieved, 1);
+}
+
+#[test]
+fn portfolio_format_includes_frontier_targets() {
+    use bullseye::portfolio;
+
+    let fixture = fixture_path();
+    let repos = portfolio::discover_repos(&fixture, 3);
+    let out = portfolio::format_portfolio(&repos);
+    assert!(out.contains("## Ready for work"));
+    assert!(out.contains("🎯T1"));
+}
+
 // --- Startup context tests ---
 
 #[test]

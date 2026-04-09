@@ -99,19 +99,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T2.1 Cross-repo target discovery
-- **Value**: 5
-- **Cost**: 3
-- **Acceptance**:
-  - Discovers targets.yaml from managed-repos.md and ~/work/ walk
-  - Loads and validates each repo's target graph independently
-  - Handles missing/invalid files gracefully (skip with warning)
-- **Context**: Sources: ~/.claude/managed-repos.md (canonical), ~/work/ walk (fallback), mnemo_repos (enrichment for recently-active repos not in managed list).
-
-- **Tags**: portfolio
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T2.2 Cross-repo dependency edges
 - **Value**: 8
 - **Cost**: 5
@@ -200,6 +187,21 @@
 - **Discovered**: 2026-04-07
 
 ## Achieved
+
+### 🎯T2.1 Cross-repo target discovery
+- **Value**: 5
+- **Cost**: 3
+- **Acceptance**:
+  - Discovers targets.yaml from managed-repos.md and ~/work/ walk
+  - Loads and validates each repo's target graph independently
+  - Handles missing/invalid files gracefully (skip with warning)
+- **Context**: Sources: ~/.claude/managed-repos.md (canonical), ~/work/ walk (fallback), mnemo_repos (enrichment for recently-active repos not in managed list).
+
+- **Tags**: portfolio
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-10
+- **Actual-cost**: 3
 
 ### 🎯T4 Dynamic session startup context
 - **Value**: 8
@@ -373,7 +375,6 @@ graph TD
     T1_4["Target-aware context compacti…"]
     T1_5["Rework diagnosis integration"]
     T2["Global portfolio view across …"]
-    T2_1["Cross-repo target discovery"]
     T2_2["Cross-repo dependency edges"]
     T2_3["Portfolio-level WSJF ranking"]
     T2_4["/cv global mode"]
@@ -388,12 +389,9 @@ graph TD
     T1_3 -.->|needs| T1_1
     T1_3 -.->|needs| T1_2
     T1_5 -.->|needs| T1_1
-    T2 -.->|needs| T2_1
     T2 -.->|needs| T2_2
     T2 -.->|needs| T2_3
     T2 -.->|needs| T2_4
-    T2_2 -.->|needs| T2_1
-    T2_3 -.->|needs| T2_1
     T2_3 -.->|needs| T2_2
     T2_4 -.->|needs| T2_3
     T2_4 -.->|needs| T1_3
