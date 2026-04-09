@@ -109,7 +109,7 @@
 - **Context**: Sources: ~/.claude/managed-repos.md (canonical), ~/work/ walk (fallback), mnemo_repos (enrichment for recently-active repos not in managed list).
 
 - **Tags**: portfolio
-- **Status**: Identified
+- **Status**: Converging
 - **Discovered**: 2026-04-07
 
 ### 🎯T2.2 Cross-repo dependency edges
