@@ -254,9 +254,10 @@ targets:
     discovered: 2026-04-07
   T4:
     name: Dynamic session startup context
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - mnemo_startup_context tool returns structured context for current project
     - Includes recently active repos with session counts and recency
@@ -271,6 +272,7 @@ targets:
     - startup
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-10
   T4.1:
     name: mnemo_startup_context tool
     status: achieved
@@ -290,9 +292,10 @@ targets:
     achieved: 2026-04-09
   T4.2:
     name: CLAUDE.md auto-call directive
-    status: identified
+    status: achieved
     value: 3.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - Global CLAUDE.md instructs agent to call mnemo_startup_context at session start
     - Context is presented to the agent without user intervention
@@ -304,6 +307,7 @@ targets:
     - startup
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-10
   T5:
     name: Migration from markdown targets to bullseye
     status: achieved
