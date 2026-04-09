@@ -127,9 +127,10 @@ targets:
     discovered: 2026-04-07
   T2.1:
     name: Cross-repo target discovery
-    status: converging
+    status: achieved
     value: 5.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - Discovers targets.yaml from managed-repos.md and ~/work/ walk
     - Loads and validates each repo's target graph independently
@@ -140,6 +141,7 @@ targets:
     - portfolio
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-10
   T2.2:
     name: Cross-repo dependency edges
     status: identified
