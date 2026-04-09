@@ -199,6 +199,8 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
+## Achieved
+
 ### 🎯T4 Dynamic session startup context
 - **Value**: 8
 - **Cost**: 3
@@ -210,8 +212,10 @@
 
 - **Depends on**: 🎯T4.1, 🎯T4.2
 - **Tags**: mnemo, startup
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-10
+- **Actual-cost**: 3
 
 ### 🎯T4.2 CLAUDE.md auto-call directive
 - **Value**: 3
@@ -223,10 +227,10 @@
 
 - **Depends on**: 🎯T4.1
 - **Tags**: startup
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-07
-
-## Achieved
+- **Achieved**: 2026-04-10
+- **Actual-cost**: 1
 
 ### 🎯T4.1 mnemo_startup_context tool
 - **Value**: 5
@@ -376,8 +380,6 @@ graph TD
     T3["Protocol app priority sync"]
     T3_1["targets_priorities SQLite tab…"]
     T3_2["Protocol Today page Focus sec…"]
-    T4["Dynamic session startup conte…"]
-    T4_2["CLAUDE.md auto-call directive"]
     T1 -.->|needs| T1_1
     T1 -.->|needs| T1_2
     T1 -.->|needs| T1_3
@@ -399,5 +401,4 @@ graph TD
     T3 -.->|needs| T3_2
     T3_1 -.->|needs| T2_3
     T3_2 -.->|needs| T3_1
-    T4 -.->|needs| T4_2
 ```
