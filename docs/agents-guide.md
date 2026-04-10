@@ -159,6 +159,29 @@ Refuses to overwrite an existing `targets.yaml` unless `force` is set.
 | `path` | string | auto-discover | Explicit path to markdown file |
 | `force` | bool | `false` | Overwrite existing `targets.yaml` |
 
+### bullseye_startup_context
+
+Return a concise startup context for the current project: active target count,
+frontier targets ready for work, recently achieved targets, and any warnings
+(tunnels, validation errors). Designed for agent consumption at session start —
+pair with mnemo_recent_activity for full session context.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `recent_days` | number | `14` | Days to look back for recently achieved targets |
+
+### bullseye_portfolio
+
+Discover all repos with targets under a workspace root and return a portfolio
+summary: per-repo active/frontier/achieved counts and frontier target names.
+Use this for cross-project prioritisation and global convergence assessment.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | `~/work/` | Workspace root to scan |
+| `max_depth` | number | `5` | Maximum directory depth to scan |
+
 ## targets.yaml schema
 
 ```yaml
@@ -247,6 +270,13 @@ bullseye_rework(cwd, id, diagnosis)
 bullseye_validate(cwd)  → schema conformance
 bullseye_tunnels(cwd)   → unverified work chains
 bullseye_graph(cwd)     → visual dependency map
+```
+
+### Session context
+
+```
+bullseye_startup_context(cwd) → project context at session start
+bullseye_portfolio()          → cross-repo portfolio summary
 ```
 
 ## Agent integration

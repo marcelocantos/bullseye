@@ -9,16 +9,16 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.6.0.
+Snapshot as of v0.7.0.
 
 ### MCP tools
 
 | Tool | Status | Notes |
 |------|--------|-------|
-| `bullseye_list(cwd, filter)` | Needs review | Filter values (active/achieved/all) are settled |
+| `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_add(cwd, name, value, cost, acceptance, ...)` | Needs review | Optional fields may expand |
-| `bullseye_update(cwd, id, ...)` | Needs review | Field set may expand |
+| `bullseye_add(cwd, name, value, cost, acceptance, ...)` | Needs review | Optional fields may expand; missing `depends_on` param |
+| `bullseye_update(cwd, id, ...)` | Needs review | Cannot update `depends_on`, `gates`, `verifies`, `rework`, `retry_budget` |
 | `bullseye_retire(cwd, id, actual_cost)` | Stable | |
 | `bullseye_frontier(cwd)` | Stable | |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
@@ -28,10 +28,11 @@ Snapshot as of v0.6.0.
 | `bullseye_render(cwd)` | Stable | |
 | `bullseye_import(cwd, path, force)` | Stable | Markdown-to-YAML migration |
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
+| `bullseye_startup_context(cwd, recent_days)` | Needs review | New in v0.7.0; output format may evolve |
+| `bullseye_portfolio(root, max_depth)` | Needs review | New in v0.7.0; output format may evolve |
 
 Planned additions (not yet implemented):
 - `bullseye_verify` — execute acceptance checks via sawmill
-- `bullseye_portfolio` — cross-repo ranking
 
 ### targets.yaml schema
 
@@ -80,15 +81,18 @@ Planned additions:
 
 - **Tool response format**: Responses are unstructured text. Consider
   returning structured JSON alongside text for programmatic consumers.
-- ~~**Error types**: All errors use `CallToolError::unknown_tool`.~~ Fixed in v0.2.0 — now uses `from_message`.
+- **`bullseye_add` missing `depends_on`**: Cannot set dependencies at
+  creation time — requires a separate manual edit of `targets.yaml`.
+- **`bullseye_update` missing edge parameters**: Cannot update
+  `depends_on`, `gates`, `verifies`, `rework`, or `retry_budget`.
 - **`bullseye_verify`**: Core planned tool not yet implemented. Should
   be present before 1.0.
+- **`bullseye_startup_context` and `bullseye_portfolio` stabilisation**:
+  Both new in v0.7.0; need real-world usage before locking in.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
 
-- Portfolio view (`bullseye_portfolio`) — cross-repo features need
-  real-world validation before stabilising.
 - Protocol app sync — depends on external infrastructure (sqlpipe,
   pigeon).
 - MCP resource support — waiting on protocol maturity.

@@ -46,7 +46,7 @@ The server communicates over stdio using the MCP protocol.
 
 ## Tools
 
-Bullseye exposes 13 MCP tools. All accept a `cwd` parameter to locate
+Bullseye exposes 15 MCP tools. All accept a `cwd` parameter to locate
 the nearest `targets.yaml`.
 
 | Tool | Description |
@@ -64,6 +64,8 @@ the nearest `targets.yaml`.
 | `bullseye_import` | Import targets from markdown into YAML |
 | `bullseye_render` | Re-render docs/targets.md from YAML |
 | `bullseye_init` | Create starter targets.yaml with sample target |
+| `bullseye_startup_context` | Session startup context (frontier, recent achievements, warnings) |
+| `bullseye_portfolio` | Cross-repo portfolio summary with frontier targets |
 
 See [agents-guide.md](docs/agents-guide.md) for detailed tool
 parameters, the targets.yaml schema, usage workflows, and a
@@ -84,7 +86,7 @@ for wiring Bullseye into your project's agent instructions.
 
 ```bash
 cargo build          # Build
-cargo test           # Run all 46 tests
+cargo test           # Run all 59 tests
 cargo clippy         # Lint
 cargo fmt --check    # Check formatting
 ```

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build          # Build the project
-cargo test           # Run all 46 tests
+cargo test           # Run all tests
 cargo test <name>    # Run a single test by name substring
 cargo test --lib     # Unit tests only
 cargo clippy         # Lint
@@ -30,11 +30,12 @@ main.rs        — MCP server entry point (tokio + rust-mcp-sdk stdio transport)
 schema.rs      — Core types: TargetsFile, Target, Status, Kind, GateEdge
 store.rs       — YAML file I/O: discover, load, save
 graph.rs       — Frontier (unblocked leaves), tunnel detection,
-                 validation, Mermaid graph rendering
+                 validation, Mermaid graph rendering, startup context
 ops.rs         — Rework cycle logic (verify failure → re-enter work target)
 handler.rs     — MCP tool request dispatch (routes tool name → implementation)
 tools.rs       — MCP tool definitions via #[mcp_tool] macro
 render.rs      — Markdown rendering of targets for docs/targets.md
+portfolio.rs   — Cross-repo discovery, scanning, and portfolio summary
 ```
 
 **Data flow**: Every MCP tool call receives a `cwd` parameter → `store::discover()` finds `targets.yaml` → `store::load()` deserializes → operation applied → `store::save()` writes back + `render::render()` updates markdown.
@@ -47,7 +48,7 @@ render.rs      — Markdown rendering of targets for docs/targets.md
 
 ## Tests
 
-All tests are integration tests in `tests/core_test.rs` using a fixture at `tests/fixtures/docs/targets.yaml`. Tests cover schema parsing, ranking, frontier, rework cycles, tunnel detection, validation, rendering, and YAML roundtrip.
+Tests are split between unit tests in modules (`portfolio`, `import`) and integration tests in `tests/core_test.rs` using a fixture at `tests/fixtures/docs/targets.yaml`. Tests cover schema parsing, frontier, rework cycles, tunnel detection, validation, rendering, startup context, portfolio discovery, and YAML roundtrip.
 
 ## Delivery
 
