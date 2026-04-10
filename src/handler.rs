@@ -62,6 +62,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::ImportTool(t) => handle_import(t),
             TargetTools::StartupContextTool(t) => handle_startup_context(t),
             TargetTools::PortfolioTool(t) => handle_portfolio(t),
+            TargetTools::SummaryTool(t) => handle_summary(t),
         }
     }
 }
@@ -539,6 +540,13 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
     let max_depth = t.max_depth.unwrap_or(5) as usize;
     let repos = portfolio::discover_repos(root, max_depth);
     text_result(portfolio::format_portfolio(&repos))
+}
+
+fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
+    let (path, file) = load_file(&t.cwd)?;
+    let top_n = t.top_n.unwrap_or(5) as usize;
+    let out = graph::summary(&file, &path.display().to_string(), top_n);
+    text_result(out)
 }
 
 /// Discover a targets.md by walking up from start_dir.

@@ -435,6 +435,250 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
     out
 }
 
+/// Produce a consolidated status overview for agent consumption.
+pub fn summary(file: &TargetsFile, file_path: &str, top_n: usize) -> String {
+    let mut out = String::new();
+
+    let errors = validate(file);
+    let all_targets = &file.targets;
+    let active = file.active();
+    let achieved = file.achieved();
+
+    out.push_str(&format!(
+        "# Summary\nFile: {file_path}\nTotal: {} target(s) — {} active, {} achieved\n\n",
+        all_targets.len(),
+        active.len(),
+        achieved.len(),
+    ));
+
+    // --- 1. Active targets grouped by parent ---
+    out.push_str("## Active targets by group\n\n");
+
+    // Derive parent/child from ID convention: T1.2 is child of T1.
+    // Use all targets (not just active) so we can detect stale parents
+    // whose children are all achieved.
+    let mut parent_children: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut is_child: HashSet<String> = HashSet::new();
+
+    for id in all_targets.keys() {
+        if let Some(dot_pos) = id.rfind('.') {
+            let parent_id = &id[..dot_pos];
+            parent_children
+                .entry(parent_id.to_string())
+                .or_default()
+                .push(id.to_string());
+            is_child.insert(id.to_string());
+        }
+    }
+
+    // Top-level targets: active targets that are not children of another active target.
+    let mut top_level: Vec<&str> = active
+        .keys()
+        .filter(|id| !is_child.contains(**id))
+        .copied()
+        .collect();
+    top_level.sort();
+
+    for id in &top_level {
+        let target = active[*id];
+        // Only show active children in the group display.
+        let children: Vec<&str> = parent_children
+            .get(*id)
+            .map(|c| {
+                c.iter()
+                    .filter(|cid| active.contains_key(cid.as_str()))
+                    .map(|s| s.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let all_children = parent_children.get(*id);
+        let has_children = all_children.is_some_and(|c| !c.is_empty());
+
+        if !has_children {
+            out.push_str(&format!(
+                "🎯{id} {} [{:?}]  v={}, c={}\n",
+                target.name, target.status, target.value, target.cost,
+            ));
+        } else {
+            // Count achieved children (from all targets, not just active).
+            let total_children = all_targets
+                .keys()
+                .filter(|cid| {
+                    cid.starts_with(*id)
+                        && cid.len() > id.len()
+                        && cid.as_bytes().get(id.len()) == Some(&b'.')
+                })
+                .count();
+            let achieved_children = all_targets
+                .iter()
+                .filter(|(cid, t)| {
+                    cid.starts_with(*id)
+                        && cid.len() > id.len()
+                        && cid.as_bytes().get(id.len()) == Some(&b'.')
+                        && t.status == Status::Achieved
+                })
+                .count();
+
+            out.push_str(&format!(
+                "🎯{id} {} [{:?}]  ({achieved_children}/{total_children} achieved)\n",
+                target.name, target.status,
+            ));
+            for cid in &children {
+                let ct = active[cid];
+                out.push_str(&format!(
+                    "  🎯{cid} {} [{:?}]  v={}, c={}\n",
+                    ct.name, ct.status, ct.value, ct.cost,
+                ));
+            }
+        }
+    }
+    out.push('\n');
+
+    // --- 2. Frontier ---
+    if errors.is_empty() {
+        let front = frontier(file);
+        out.push_str("## Frontier (unblocked, ready for work)\n\n");
+        if front.is_empty() {
+            out.push_str("(no targets ready for work)\n");
+        } else {
+            for ft in &front {
+                let kind_label = match ft.kind {
+                    Kind::Work => "",
+                    Kind::Verify => " [verify]",
+                };
+                out.push_str(&format!(
+                    "🎯{} {}{kind_label}  [{:?}]\n",
+                    ft.id, ft.name, ft.status,
+                ));
+            }
+        }
+        out.push('\n');
+
+        // --- 3. Blocked targets ---
+        let front_ids: HashSet<&str> = front.iter().map(|f| f.id.as_str()).collect();
+        let blocked: Vec<(&str, &crate::schema::Target)> = active
+            .iter()
+            .filter(|(id, _)| !front_ids.contains(**id))
+            .map(|(&id, t)| (id, *t))
+            .collect();
+
+        if !blocked.is_empty() {
+            out.push_str("## Blocked targets\n\n");
+            for (id, target) in &blocked {
+                let unmet: Vec<String> = target
+                    .depends_on
+                    .iter()
+                    .filter(|dep| {
+                        all_targets
+                            .get(dep.as_str())
+                            .is_none_or(|d| d.status != Status::Achieved)
+                    })
+                    .map(|dep| format!("🎯{dep}"))
+                    .collect();
+                if unmet.is_empty() {
+                    out.push_str(&format!("🎯{id} {}\n", target.name));
+                } else {
+                    out.push_str(&format!(
+                        "🎯{id} {}  blocked by: {}\n",
+                        target.name,
+                        unmet.join(", "),
+                    ));
+                }
+            }
+            out.push('\n');
+        }
+    } else {
+        out.push_str("## Validation errors\n\n");
+        for e in &errors {
+            out.push_str(&format!("- {e}\n"));
+        }
+        out.push('\n');
+    }
+
+    // --- 4. Stale targets ---
+    let mut stale: Vec<String> = Vec::new();
+
+    for (id, target) in &active {
+        // Parent still converging/identified but all children achieved.
+        if let Some(children) = parent_children.get(*id) {
+            let all_children_achieved = children.iter().all(|cid| {
+                all_targets
+                    .get(cid.as_str())
+                    .is_some_and(|t| t.status == Status::Achieved)
+            });
+            if all_children_achieved && !children.is_empty() && target.status != Status::Achieved {
+                stale.push(format!(
+                    "🎯{id} {}: all sub-targets achieved but parent is {:?}",
+                    target.name, target.status,
+                ));
+            }
+        }
+
+        // Target marked identified but has converging/achieved children.
+        if target.status == Status::Identified
+            && let Some(children) = parent_children.get(*id)
+        {
+            let has_progressed_child = children.iter().any(|cid| {
+                all_targets
+                    .get(cid.as_str())
+                    .is_some_and(|t| t.status != Status::Identified)
+            });
+            if has_progressed_child {
+                stale.push(format!(
+                    "🎯{id} {}: still identified but has progressed sub-targets",
+                    target.name,
+                ));
+            }
+        }
+
+        // Stale discovery: identified with no activity and old discovered date (>90 days).
+        if target.status == Status::Identified {
+            let age = chrono::Local::now().date_naive() - target.discovered;
+            if age.num_days() > 90 {
+                stale.push(format!(
+                    "🎯{id} {}: identified for {} days with no progress",
+                    target.name,
+                    age.num_days(),
+                ));
+            }
+        }
+    }
+
+    if !stale.is_empty() {
+        out.push_str("## Stale targets\n\n");
+        for s in &stale {
+            out.push_str(&format!("- {s}\n"));
+        }
+        out.push('\n');
+    }
+
+    // --- 5. WSJF ranking ---
+    let mut ranked: Vec<(&str, &crate::schema::Target, f64)> = active
+        .iter()
+        .filter(|(_, t)| t.cost > 0.0)
+        .map(|(&id, t)| (id, *t, t.value / t.cost))
+        .collect();
+    ranked.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(top_n);
+
+    if !ranked.is_empty() {
+        out.push_str(&format!("## WSJF ranking (top {})\n\n", ranked.len()));
+        for (i, (id, target, wsjf)) in ranked.iter().enumerate() {
+            out.push_str(&format!(
+                "{}. 🎯{id} {} — WSJF {wsjf:.1} (v={}, c={})\n",
+                i + 1,
+                target.name,
+                target.value,
+                target.cost,
+            ));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
 fn mermaid_node(id: &str) -> String {
     id.replace('.', "_")
 }

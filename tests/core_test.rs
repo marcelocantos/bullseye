@@ -640,6 +640,185 @@ fn startup_context_shows_tunnel_warnings() {
     assert!(ctx.contains("lack nearby verification"));
 }
 
+// --- Summary tests ---
+
+#[test]
+fn summary_shows_totals_and_sections() {
+    let file = load_fixture();
+    let out = graph::summary(&file, "test/docs/targets.yaml", 5);
+
+    // Header with counts.
+    assert!(out.contains("Total: 5 target(s)"));
+    assert!(out.contains("4 active"));
+    assert!(out.contains("1 achieved"));
+
+    // Has key sections.
+    assert!(out.contains("## Active targets by group"));
+    assert!(out.contains("## Frontier"));
+    assert!(out.contains("## WSJF ranking"));
+}
+
+#[test]
+fn summary_shows_frontier_targets() {
+    let file = load_fixture();
+    let out = graph::summary(&file, "test", 5);
+
+    // Frontier should include T1, T2, T3 (unblocked).
+    let frontier_section = out.split("## Frontier").nth(1).unwrap();
+    let frontier_end = frontier_section
+        .find("\n## ")
+        .unwrap_or(frontier_section.len());
+    let frontier_text = &frontier_section[..frontier_end];
+    assert!(frontier_text.contains("🎯T1"));
+    assert!(frontier_text.contains("🎯T2"));
+    assert!(frontier_text.contains("🎯T3"));
+}
+
+#[test]
+fn summary_shows_blocked_targets() {
+    let file = load_fixture();
+    let out = graph::summary(&file, "test", 5);
+
+    // T5 depends on T1+T3 (not achieved), so it's blocked.
+    assert!(out.contains("## Blocked targets"));
+    assert!(out.contains("🎯T5"));
+    assert!(out.contains("blocked by"));
+}
+
+#[test]
+fn summary_wsjf_ranking_ordered() {
+    let file = load_fixture();
+    let out = graph::summary(&file, "test", 5);
+
+    // T5: v=3, c=1, WSJF=3.0
+    // T1: v=8, c=3, WSJF=2.67
+    // T3: v=5, c=5, WSJF=1.0 (but also has gate on T1)
+    // T2: v=3, c=2, WSJF=1.5
+    // Order should be T5(3.0), T1(2.67), T2(1.5), T3(1.0)
+    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
+    let t5_pos = wsjf_section.find("🎯T5").unwrap();
+    let t1_pos = wsjf_section.find("🎯T1").unwrap();
+    let t2_pos = wsjf_section.find("🎯T2").unwrap();
+    let t3_pos = wsjf_section.find("🎯T3").unwrap();
+    assert!(t5_pos < t1_pos, "T5 (WSJF 3.0) should rank above T1 (2.67)");
+    assert!(t1_pos < t2_pos, "T1 (WSJF 2.67) should rank above T2 (1.5)");
+    assert!(t2_pos < t3_pos, "T2 (WSJF 1.5) should rank above T3 (1.0)");
+}
+
+#[test]
+fn summary_top_n_limits_wsjf() {
+    let file = load_fixture();
+    let out = graph::summary(&file, "test", 2);
+
+    // Should only show top 2.
+    assert!(out.contains("## WSJF ranking (top 2)"));
+    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
+    // Should have T5 and T1 but not T2 or T3.
+    assert!(wsjf_section.contains("🎯T5"));
+    assert!(wsjf_section.contains("🎯T1"));
+    assert!(!wsjf_section.contains("🎯T2"));
+    assert!(!wsjf_section.contains("🎯T3"));
+}
+
+#[test]
+fn summary_stale_parent_all_children_achieved() {
+    use bullseye::schema::Target;
+    use chrono::NaiveDate;
+
+    let mut file = load_fixture();
+    let date = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+
+    // Add sub-targets T1.1 and T1.2, both achieved.
+    for sub in ["T1.1", "T1.2"] {
+        file.targets.insert(
+            sub.to_string(),
+            Target {
+                name: format!("Sub {sub}"),
+                kind: Kind::Work,
+                status: Status::Achieved,
+                value: 2.0,
+                cost: 1.0,
+                actual_cost: None,
+                acceptance: vec!["done".to_string()],
+                context: String::new(),
+                gates: vec![],
+                depends_on: vec![],
+                verifies: vec![],
+                rework: None,
+                retry_budget: None,
+                retries: 0,
+                tags: vec![],
+                origin: "test".to_string(),
+                discovered: date,
+                achieved: Some(date),
+            },
+        );
+    }
+
+    // T1 is converging but both children are achieved — stale.
+    let out = graph::summary(&file, "test", 5);
+    assert!(out.contains("## Stale targets"));
+    assert!(out.contains("all sub-targets achieved"));
+}
+
+#[test]
+fn summary_shows_grouped_children() {
+    use bullseye::schema::Target;
+    use chrono::NaiveDate;
+
+    let mut file = load_fixture();
+    let date = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+
+    // Add sub-target T1.1 (active).
+    file.targets.insert(
+        "T1.1".to_string(),
+        Target {
+            name: "Sub-target of T1".to_string(),
+            kind: Kind::Work,
+            status: Status::Identified,
+            value: 2.0,
+            cost: 1.0,
+            actual_cost: None,
+            acceptance: vec!["done".to_string()],
+            context: String::new(),
+            gates: vec![],
+            depends_on: vec![],
+            verifies: vec![],
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        },
+    );
+
+    let out = graph::summary(&file, "test", 5);
+    // T1 should show a rollup count.
+    assert!(out.contains("achieved)"));
+    // T1.1 should appear indented under T1.
+    assert!(out.contains("🎯T1.1"));
+}
+
+#[test]
+fn summary_with_validation_errors_skips_frontier() {
+    let mut file = load_fixture();
+    // Create a dangling depends_on reference.
+    file.targets
+        .get_mut("T1")
+        .unwrap()
+        .depends_on
+        .push("T99".to_string());
+
+    let out = graph::summary(&file, "test", 5);
+    assert!(out.contains("## Validation errors"));
+    assert!(out.contains("T99"));
+    // Should NOT have frontier or blocked sections.
+    assert!(!out.contains("## Frontier"));
+    assert!(!out.contains("## Blocked"));
+}
+
 #[test]
 fn startup_context_shows_validation_errors() {
     let mut file = load_fixture();

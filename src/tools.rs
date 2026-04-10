@@ -286,6 +286,21 @@ fn default_origin() -> String {
     "manual".to_string()
 }
 
+/// Consolidated status overview: grouped targets, frontier, blocked, stale, WSJF ranking.
+#[mcp_tool(
+    name = "bullseye_summary",
+    description = "Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets, blocked targets with blockers, stale targets with inconsistent graph state, and top-N WSJF-ranked targets. Replaces multiple calls to list/frontier/validate for status assessment."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct SummaryTool {
+    /// Working directory to discover targets.yaml from.
+    pub cwd: String,
+
+    /// How many WSJF-ranked targets to include (default: 5).
+    #[serde(default)]
+    pub top_n: Option<u32>,
+}
+
 tool_box!(
     TargetTools,
     [
@@ -303,6 +318,7 @@ tool_box!(
         InitTool,
         ImportTool,
         StartupContextTool,
-        PortfolioTool
+        PortfolioTool,
+        SummaryTool
     ]
 );
