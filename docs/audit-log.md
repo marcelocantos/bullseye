@@ -40,5 +40,5 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 ## 2026-04-10 -- /release v0.7.0
 
-- **Commit**: TBD
+- **Commit**: `f63af1d`
 - **Outcome**: Released v0.7.0 (darwin-arm64, linux-amd64, linux-arm64). Two new tools: bullseye_startup_context (session start enrichment) and bullseye_portfolio (cross-repo target discovery). Import parser fix for code fences and em dashes. Targets achieved: 🎯T4 (dynamic session startup context), 🎯T2.1 (cross-repo discovery). Homebrew formula updated.
