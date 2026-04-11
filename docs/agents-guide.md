@@ -189,7 +189,7 @@ start, or inside `/cv`).
 The optional `momentum` parameter folds external recency/frequency
 signals into the WSJF ranking. When provided, each target's WSJF score
 is multiplied by its momentum value before sorting; targets missing from
-the map default to 1.0 (no-op). Bullseye never calls other MCP servers,
+the list default to 1.0 (no-op). Bullseye never calls other MCP servers,
 so the caller (typically `/cv`) is responsible for computing momentum
 from e.g. `mnemo_recent_activity` and passing it in — composition
 happens at the skill layer, the formula is external, and tuning the
@@ -199,7 +199,7 @@ momentum factor doesn't require touching bullseye.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `top_n` | number | `5` | Maximum targets in the WSJF ranking section |
-| `momentum` | object | null | Optional per-target multipliers, keyed by target ID (e.g. `{"T1": 1.6, "T3": 0.8}`). Values > 1.0 boost, < 1.0 suppress, 1.0 is identity. Absent targets default to 1.0. |
+| `momentum` | array | null | Optional per-target multipliers, as a list of `{id, multiplier}` objects (e.g. `[{"id": "T1", "multiplier": 1.6}, {"id": "T3", "multiplier": 0.8}]`). Values > 1.0 boost, < 1.0 suppress, 1.0 is identity. Targets not listed default to 1.0. Duplicate ids use the last multiplier seen. |
 
 When `momentum` is present, the ranking section heading is
 `## WSJF ranking, momentum-adjusted (top N)` and each boosted or
