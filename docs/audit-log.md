@@ -63,3 +63,8 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 - **Commit**: `f6575d9`
 - **Outcome**: Released v0.10.0 (darwin-arm64, linux-amd64, linux-arm64). Hotfix for the broken v0.9.0 `bullseye_summary.momentum` schema. Reshaped the parameter from a keyed map to a list of `{id, multiplier}` entries — JSON arrays of scalar-field objects always emit valid Draft 2020-12 schema. Added `every_tool_emits_valid_json_schema` regression test that scans all tool schemas for forbidden `type` values; would have caught v0.9.0 before release. No other functional changes. Users on v0.9.0 must upgrade. Homebrew formula updated.
+
+## 2026-04-11 -- /release v0.11.0
+
+- **Commit**: pending
+- **Outcome**: Released v0.11.0 (darwin-arm64, linux-amd64, linux-arm64). Two structural changes via #19: WSJF ranking purged from `bullseye_summary` (it had quietly crept back in v0.7.0 after being officially removed in v0.4.0); new `bullseye_convergence` tool that collapses the old `/cv` worker's multi-round-trip pattern into a single stateless tool call — runs `make bullseye` / `mk bullseye` for standing invariants, scans git for unreleased fixes, emits the target summary with inline frontier details, and computes a deterministic next-action recommendation. Missing-hook case degrades gracefully with embedded setup instructions rather than erroring. Frontier is now ordered by `focus = value × momentum` directly; `top_n` parameter dropped. Project dogfoods its own convergence via a new `Makefile` with a `bullseye:` rule. 92 tests passing (+8). Homebrew formula updated.
