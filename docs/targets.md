@@ -161,6 +161,8 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
+## Achieved
+
 ### 🎯T8 bullseye_put refuses silent mutation of achieved targets
 - **Value**: 5
 - **Cost**: 2
@@ -172,10 +174,10 @@
   - Test covers: content patch on achieved rejected with expected error; content patch on identified succeeds; status-only transition on achieved allowed; retirement path unaffected
 - **Context**: On 2026-04-11 the agent ran bullseye_put(id=T4) intending to create a new top-level target, but T4 already existed as an achieved historical target ("Dynamic session startup context"). bullseye_put silently patched name/acceptance/context/value/cost/tags while leaving status: achieved intact, producing a Frankenstein target that required manual git reset + re-creation under a fresh ID (T7) to recover. Root cause: patch semantics on bullseye_put treat achieved targets the same as identified ones. Achieved targets are historical artifacts and their content should be immutable unless the human explicitly re-opens them. This target closes the footgun without changing the happy-path ergonomics.
 - **Tags**: safety, ergonomics
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-12
-
-## Achieved
+- **Achieved**: 2026-04-12
+- **Actual-cost**: 2
 
 ### 🎯T1.1 Executable acceptance checks via sawmill
 - **Value**: 8
@@ -416,7 +418,6 @@ graph TD
     T3["Protocol app priority sync"]
     T3_1["targets_priorities SQLite tab…"]
     T3_2["Protocol Today page Focus sec…"]
-    T8["bullseye_put refuses silent m…"]
     T1 -.->|needs| T1_2
     T1 -.->|needs| T1_3
     T1 -.->|needs| T1_4

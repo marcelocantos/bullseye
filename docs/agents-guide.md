@@ -43,19 +43,31 @@ handler decides create-vs-patch based on whether the ID exists.
 On create, `name`, `value`, `cost`, and `acceptance` are required.
 On patch, all fields are optional; only the ones provided are changed.
 
+**Achieved targets are immutable.** As of v0.13.0 `bullseye_put`
+rejects content edits (name/acceptance/context/value/cost/tags/
+depends_on/verifies/observable) on a target whose current status
+is `achieved`. Achieved targets are historical artifacts. To
+modify one, re-open it first by patching `status: identified`
+— either in a prior call, or atomically in the same call
+alongside the content edits (the reopen applies first, then
+the content lands on the now-identified target). Status-only
+transitions on achieved targets remain allowed, and
+`bullseye_retire` is unchanged.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | null | Target ID (omit to auto-assign a new top-level ID) |
 | `name` | string | null | Desired state assertion (required on create) |
-| `value` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create) |
-| `cost` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create) |
+| `value` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create). **Portfolio-scope input only** — not consumed by repo-level ordering. |
+| `cost` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create). **Portfolio-scope input only** — not consumed by repo-level ordering. |
 | `acceptance` | string[] | null | How to verify the target is achieved (required on create) |
 | `context` | string | null | Why this target matters |
 | `kind` | string | `"work"` on create | `"work"` or `"verify"`; settable only on create |
 | `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"` |
+| `observable` | bool | `false` on create, unchanged on patch | Mark a work target as producing a human-observable checkpoint. Verify-kind targets are observable by definition; this flag only matters for work-kind targets. Drives repo-level ordering and `bullseye_tunnels` membership. |
 | `depends_on` | string[] | null | IDs of targets this one depends on (must be achieved first) |
-| `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work |
+| `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work. Refuses to inject into achieved targets (same rule as content patches). |
 | `verifies` | string[] | null | For verify targets: IDs of targets this verifies |
 | `origin` | string | `"manual"` on create | How the target was created |
 | `tags` | string[] | null | Freeform tags |
@@ -70,10 +82,44 @@ Mark a target achieved.
 | `id` | string | required | Target ID |
 | `actual_cost` | number | null | Actual cost for calibration |
 
+### bullseye_verify
+
+Emit a structured execution plan that maps each of a target's
+`checks` entries to a sawmill tool invocation. **Bullseye does
+not execute the plan** — the calling agent runs each check
+against sawmill and folds the results back into a report. This
+preserves the MCP cross-server constraint (servers don't call
+each other; the agent composes).
+
+The response is a markdown document with a human-readable plan
+plus a JSON block containing the structured plan and a pending
+report template. Checks come in three shapes, matching the
+`checks` field of the target:
+
+- `convention: <name>` → maps to sawmill `check_conventions`
+- `query: {kind, pattern?, exclude_path?, expect}` → maps to sawmill `query`
+- `invariant: <name>` → maps to sawmill `check_invariants` (phase 2, requires sawmill T19)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `id` | string | required | Target ID whose `checks` field should be planned |
+
 ### bullseye_frontier
 
 Compute unblocked leaf targets ready for work. Validates the target
 graph first and returns errors if invalid.
+
+As of v0.13.0, the frontier is ordered by the **repo-level signal**:
+ascending distance to the nearest observable target, tiebroken by
+descending unblocking fanout (count of active targets that depend
+on this one), then ascending ID. Per-target `value`/`cost` and
+`momentum` are **not consumed** — those are portfolio-scope inputs.
+When every frontier target has no observable reachable at all,
+`bullseye_convergence`'s next-action emits a `**Blocked**: … reshape`
+recommendation instead of auto-selecting, prompting the human to
+add an intermediate observable target or promote an existing
+downstream work target with `observable: true`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -93,8 +139,13 @@ verify target to identified.
 
 ### bullseye_tunnels
 
-Detect work targets that have no verification checkpoint within N
-hops.
+Detect work targets that have no **observable checkpoint** reachable
+within N hops along the forward dependency graph. As of v0.13.0 a
+target is observable iff `kind: verify` OR the new `observable: true`
+flag is set; previous releases defined observability strictly as
+verification reachability. Legacy targets files carry no observable
+work targets until the human opts in, so on a freshly-upgraded repo
+most work targets will be flagged — the reshape signal is the point.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -179,25 +230,24 @@ Use this for cross-project prioritisation and global convergence assessment.
 
 ### bullseye_summary
 
-Return a consolidated status overview in one call: active targets grouped
-by parent with rollup counts, frontier (unblocked) targets ordered by
-focus (`value × momentum`), blocked targets with blockers, and stale
-targets with inconsistent graph state. Replaces separate calls to
+Return a consolidated status overview in one call: active targets
+grouped by parent with rollup counts, frontier (unblocked) targets
+ordered by the repo-level signal (distance-to-observable then
+unblocking fanout), blocked targets with blockers, and stale targets
+with inconsistent graph state. Replaces separate calls to
 `bullseye_list`, `bullseye_frontier`, and `bullseye_validate` when you
 want a single snapshot.
 
-Bullseye has no separate "ranking" concept any more — frontier-first
-scheduling is the model, and the frontier section itself is the
-prioritised list. Momentum is an advisory reordering signal, not a
-ranking algorithm.
+Each frontier entry is annotated with `dist=N, fanout=M` showing the
+two sort keys, so the ordering is always visible and debuggable.
 
-The optional `momentum` parameter scales each frontier target's value
-before sorting: `focus = value × momentum_lookup(id, 1.0)`. Targets
-missing from the list default to 1.0 (no boost). Bullseye never calls
-other MCP servers, so the caller (typically `/cv`) is responsible for
-computing momentum from e.g. `mnemo_recent_activity` and passing it in —
-composition happens at the skill layer, the formula is external, and
-tuning the momentum factor doesn't require touching bullseye.
+The optional `momentum` parameter is **retained for wire
+compatibility but not consumed at repo scope** as of v0.13.0.
+Repo-level ordering no longer uses `value`/`cost`/`momentum` — those
+are portfolio-scope inputs. A future `bullseye_portfolio` WSJF
+ranking (🎯T2.3) will consume momentum at the portfolio layer.
+Callers that still pass `momentum` at repo scope get no error, just
+a no-op.
 
 `frontier_details: true` expands each frontier entry with its full
 acceptance criteria, context, and edges — useful when you would
@@ -207,22 +257,8 @@ otherwise round-trip `bullseye_get` on every frontier target.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
-| `momentum` | array | null | Optional per-target multipliers, as a list of `{id, multiplier}` objects (e.g. `[{"id": "T1", "multiplier": 1.6}, {"id": "T3", "multiplier": 0.8}]`). Values > 1.0 boost, < 1.0 suppress, 1.0 is identity. Targets not listed default to 1.0. Duplicate ids use the last multiplier seen. |
+| `momentum` | array | null | Optional per-target multipliers (wire-compat only at repo scope; see above). List of `{id, multiplier}` objects. |
 | `frontier_details` | bool | `false` | Expand each frontier entry with full acceptance, context, and edges. |
-
-When momentum is provided, each frontier entry shows its focus score:
-`🎯T1 name  [Status] — focus 12.0 (v=8 × momentum 1.50)`. Baseline
-entries (no explicit momentum entry, so multiplier defaults to 1.0)
-elide the `× momentum` clause but still show the focus score so the
-caller can see the full ordering math.
-
-A reasonable caller-side formula (from `docs/mcp-triad.md` §2):
-
-```
-momentum = 1.0 + 0.3 * log(1 + recent_sessions) * exp(-days_since_last / 7)
-```
-
-— or anything else the caller wants. Bullseye just multiplies.
 
 ### bullseye_convergence
 
@@ -307,14 +343,32 @@ targets:
     name: "All tests pass on CI"          # desired state assertion (required)
     kind: work                            # work (default) or verify
     status: converging                    # identified, converging, achieved
-    value: 8                              # Fibonacci: 1, 2, 3, 5, 8, 13, 20
-    cost: 3                               # Fibonacci: 1, 2, 3, 5, 8, 13, 20
+    value: 8                              # Fibonacci (portfolio-scope input only)
+    cost: 3                               # Fibonacci (portfolio-scope input only)
     actual_cost: 5                        # recorded on retirement (optional)
+    observable: true                      # v0.13.0: mark work target as producing
+                                          # a human-visible checkpoint (optional,
+                                          # default false, omitted when false)
     acceptance:                           # how to verify achievement (required)
       - CI green on all platforms
       - No test skips without documented reason
+    checks:                               # v0.13.0: executable checks (optional)
+      - convention: no-skipped-tests      # sawmill convention name
+      - query:                            # sawmill query tool invocation
+          kind: attribute
+          pattern: "#\\[ignore\\]"
+          exclude_path: tests/fixtures/
+          expect: 0
+      - invariant: ci-green               # sawmill invariant name (phase 2)
     context: "Cross-platform CI is a project goal."  # optional
     depends_on: [T3]                      # hard blockers (optional)
+    cross_depends:                        # v0.13.0: advisory cross-repo deps
+      - repo: marcelocantos/sawmill       # (optional, doesn't block frontier)
+        target: T19
+        note: "Needs structural invariants"
+    cross_enables:                        # v0.13.0: advisory cross-repo enablers
+      - repo: marcelocantos/mnemo         # (optional, feeds portfolio ranking)
+        capability: "Session startup context"
     verifies: [T4, T5]                    # verify targets only (optional)
     rework: T4                            # re-entry on verify failure (optional)
     retry_budget: 3                       # max rework cycles (optional)
@@ -324,6 +378,39 @@ targets:
     discovered: 2026-03-01                # date discovered (required)
     achieved: 2026-03-15                  # date achieved (optional)
 ```
+
+### Phase-boundary hypothesis (v0.13.0)
+
+Bullseye uses different prioritisation engines at repo and portfolio
+scopes (`docs/mcp-triad.md` §9):
+
+- **Repo-level** (sub-week horizon, human as decision-maker): ordering
+  rewards shortest path to the next **observable checkpoint**,
+  tiebroken by unblocking fanout. Per-target `value`/`cost` and the
+  `momentum` input are **not consumed** at this layer. The point is
+  to drive work toward the next human decision point as quickly as
+  possible, and to flag opaque tunnels where the graph has no
+  checkpoint to head toward.
+- **Portfolio-level** (weekly-plus horizon, human as bottleneck
+  allocator): WSJF with momentum and cross-repo enabler propagation
+  earns its keep. This is where `value`/`cost`/`momentum`/
+  `cross_enables` are consumed. 🎯T2.3 is the portfolio engine;
+  v0.13.0 has the schema fields in place but weighted propagation
+  is still pending.
+
+The phase boundary means per-target `value` and `cost` should be
+thought of as portfolio-scope inputs — they don't drive repo-level
+ordering even though they continue to round-trip cleanly through
+the schema.
+
+### Achieved targets are immutable
+
+As of v0.13.0, `bullseye_put` refuses content patches on achieved
+targets. Re-open with `status: identified` first (either in a
+prior call or atomically in the same call alongside content edits).
+`bullseye_retire` is unchanged. The `blocks: [T]` sugar into an
+achieved target is also rejected (it would mutate T's `depends_on`,
+which is a content edit in disguise). See 🎯T8.
 
 ### Target IDs
 
@@ -392,8 +479,17 @@ bullseye_rework(cwd, id, diagnosis)
 
 ```
 bullseye_validate(cwd)  → schema conformance
-bullseye_tunnels(cwd)   → unverified work chains
+bullseye_tunnels(cwd)   → work chains with no observable checkpoint
 bullseye_graph(cwd)     → visual dependency map
+```
+
+### Execute acceptance checks
+
+```
+bullseye_verify(cwd, id) → structured plan mapping the target's
+                           `checks` entries to sawmill tool calls.
+                           The agent runs the plan against sawmill
+                           and folds results into a pass/fail report.
 ```
 
 ### Session context

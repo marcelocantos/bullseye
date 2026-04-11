@@ -478,9 +478,10 @@ targets:
     achieved: 2026-04-11
   T8:
     name: bullseye_put refuses silent mutation of achieved targets
-    status: identified
+    status: achieved
     value: 5.0
     cost: 2.0
+    actual_cost: 2.0
     acceptance:
     - bullseye_put rejects name/acceptance/context/value/cost/tags/kind/depends_on/verifies edits on a target with status `achieved`, returning an explanatory error
     - 'Error message indicates the remedy: re-open the target first by patching `status: identified`, then apply content changes'
@@ -493,3 +494,4 @@ targets:
     - ergonomics
     origin: manual
     discovered: 2026-04-12
+    achieved: 2026-04-12
