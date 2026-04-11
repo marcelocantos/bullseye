@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod convergence;
 pub mod graph;
 pub mod handler;
 pub mod import;

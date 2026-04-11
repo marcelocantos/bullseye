@@ -62,6 +62,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::StartupContextTool(t) => handle_startup_context(t),
             TargetTools::PortfolioTool(t) => handle_portfolio(t),
             TargetTools::SummaryTool(t) => handle_summary(t),
+            TargetTools::ConvergenceTool(t) => handle_convergence(t),
         }
     }
 }
@@ -636,9 +637,54 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
     text_result(portfolio::format_portfolio(&scan))
 }
 
+fn handle_convergence(t: crate::tools::ConvergenceTool) -> ToolResult {
+    use crate::convergence;
+
+    // Locate the targets file AND the repo root. The repo root is the
+    // directory containing targets.yaml's parent (i.e. where docs/
+    // lives), not the targets.yaml directory itself — Makefile/mkfile
+    // and .git all live at the repo root, one level above docs/.
+    //
+    // If there's no targets file at all, fall back to a no-targets
+    // startup-context-style response — a project can't converge
+    // without targets, but the caller still deserves a useful
+    // response, not an error.
+    let dir = Path::new(&t.cwd);
+    let Some(path) = store::discover(dir) else {
+        return text_result(graph::startup_context_no_file(&dir.display().to_string()));
+    };
+    // path is `<repo_root>/docs/targets.yaml`; step up twice.
+    let repo_root = path
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(dir)
+        .to_path_buf();
+
+    // Convergence handles missing-hook / parse-error / etc. internally
+    // — no short-circuits here. The only hard-error path is the schema
+    // version check, which must always be surfaced loudly.
+    let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
+    let momentum_map: Option<std::collections::BTreeMap<String, f64>> =
+        t.momentum.as_ref().map(|entries| {
+            let mut map = std::collections::BTreeMap::new();
+            for entry in entries {
+                map.insert(entry.id.clone(), entry.multiplier);
+            }
+            map
+        });
+
+    let out = convergence::convergence(
+        &file,
+        &path,
+        &repo_root,
+        momentum_map.as_ref(),
+        t.skip_invariants.unwrap_or(false),
+    );
+    text_result(out)
+}
+
 fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
-    let top_n = t.top_n.unwrap_or(5) as usize;
     // The wire format is a list of `{id, multiplier}` entries (because
     // the rust-mcp-sdk derive can't schema-ify a keyed map), but
     // `graph::summary` still takes the canonical keyed form. Flatten
@@ -655,8 +701,8 @@ fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
     let out = graph::summary(
         &file,
         &path.display().to_string(),
-        top_n,
         momentum_map.as_ref(),
+        t.frontier_details.unwrap_or(false),
     );
     text_result(out)
 }

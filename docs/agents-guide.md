@@ -180,31 +180,41 @@ Use this for cross-project prioritisation and global convergence assessment.
 ### bullseye_summary
 
 Return a consolidated status overview in one call: active targets grouped
-by parent with rollup counts, frontier (unblocked) targets, blocked
-targets with blockers, stale targets, and a top-N WSJF ranking. Replaces
-separate calls to `bullseye_list`, `bullseye_frontier`, and
-`bullseye_validate` when you want a single snapshot (e.g. at session
-start, or inside `/cv`).
+by parent with rollup counts, frontier (unblocked) targets ordered by
+focus (`value × momentum`), blocked targets with blockers, and stale
+targets with inconsistent graph state. Replaces separate calls to
+`bullseye_list`, `bullseye_frontier`, and `bullseye_validate` when you
+want a single snapshot.
 
-The optional `momentum` parameter folds external recency/frequency
-signals into the WSJF ranking. When provided, each target's WSJF score
-is multiplied by its momentum value before sorting; targets missing from
-the list default to 1.0 (no-op). Bullseye never calls other MCP servers,
-so the caller (typically `/cv`) is responsible for computing momentum
-from e.g. `mnemo_recent_activity` and passing it in — composition
-happens at the skill layer, the formula is external, and tuning the
-momentum factor doesn't require touching bullseye.
+Bullseye has no separate "ranking" concept any more — frontier-first
+scheduling is the model, and the frontier section itself is the
+prioritised list. Momentum is an advisory reordering signal, not a
+ranking algorithm.
+
+The optional `momentum` parameter scales each frontier target's value
+before sorting: `focus = value × momentum_lookup(id, 1.0)`. Targets
+missing from the list default to 1.0 (no boost). Bullseye never calls
+other MCP servers, so the caller (typically `/cv`) is responsible for
+computing momentum from e.g. `mnemo_recent_activity` and passing it in —
+composition happens at the skill layer, the formula is external, and
+tuning the momentum factor doesn't require touching bullseye.
+
+`frontier_details: true` expands each frontier entry with its full
+acceptance criteria, context, and edges — useful when you would
+otherwise round-trip `bullseye_get` on every frontier target.
+`bullseye_convergence` uses this internally.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
-| `top_n` | number | `5` | Maximum targets in the WSJF ranking section |
 | `momentum` | array | null | Optional per-target multipliers, as a list of `{id, multiplier}` objects (e.g. `[{"id": "T1", "multiplier": 1.6}, {"id": "T3", "multiplier": 0.8}]`). Values > 1.0 boost, < 1.0 suppress, 1.0 is identity. Targets not listed default to 1.0. Duplicate ids use the last multiplier seen. |
+| `frontier_details` | bool | `false` | Expand each frontier entry with full acceptance, context, and edges. |
 
-When `momentum` is present, the ranking section heading is
-`## WSJF ranking, momentum-adjusted (top N)` and each boosted or
-suppressed entry is annotated with `(WSJF X × momentum Y, ...)` so the
-original score and the applied multiplier are both visible.
+When momentum is provided, each frontier entry shows its focus score:
+`🎯T1 name  [Status] — focus 12.0 (v=8 × momentum 1.50)`. Baseline
+entries (no explicit momentum entry, so multiplier defaults to 1.0)
+elide the `× momentum` clause but still show the focus score so the
+caller can see the full ordering math.
 
 A reasonable caller-side formula (from `docs/mcp-triad.md` §2):
 
@@ -213,6 +223,74 @@ momentum = 1.0 + 0.3 * log(1 + recent_sessions) * exp(-days_since_last / 7)
 ```
 
 — or anything else the caller wants. Bullseye just multiplies.
+
+### bullseye_convergence
+
+Answer "what's the next most-valuable thing to work on?" in a single
+tool call. Consolidates the old `/cv` worker's many round-trips
+(standing-invariants check, unreleased-fix scan, target summary,
+per-target details, frontier ranking, recommendation) into one.
+
+The response has the shape:
+
+```
+# Convergence
+File: …
+Total: N target(s) — X active, Y achieved
+
+## Invariants
+<stdout of `make bullseye` or `mk bullseye`, verbatim>
+Status: ✓ all green / ✗ failed (exit N) / ⚠ unknown (hook not configured) / skipped
+
+## Unreleased fixes
+<commits since the last tag whose subjects contain fix markers, or "(none)">
+
+## Active targets by group
+## Frontier (unblocked, ready for work)
+  <each frontier target with full acceptance, context, tags, edges inline>
+## Blocked targets
+## Stale targets
+
+## Next action
+**Execute now**: Work on 🎯T… <name>         ← or …
+**Execute now**: Run `/release` to ship N unreleased fix(es)  ← or …
+**Blocked**: invariants failing (exit N). See above.
+```
+
+The `## Next action` line is deterministic: bullseye picks the
+recommendation based on invariants state, unreleased-fix count, and
+the focus-ordered frontier. The calling skill (`/cv`) relays the
+output verbatim and executes the instruction if it starts with
+`**Execute now**`; anything else (`**Blocked**`, `**Parallel**`) is
+presented to the user for decision.
+
+**Standing-invariants hook**: bullseye_convergence requires a
+`bullseye` rule in the project's `Makefile` or `mkfile`. The rule
+runs whatever checks the project considers "green" — tests, lints,
+clean tree, anything. Exit code 0 = all green, non-zero = at least
+one violation. Stdout is relayed verbatim into the Invariants section.
+Example for a Rust project:
+
+```make
+bullseye:
+\t@cargo fmt --check >/dev/null && echo "✓ fmt"
+\t@cargo clippy --quiet --all-targets -- -D warnings >/dev/null 2>&1 && echo "✓ clippy"
+\t@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
+\t@test -z "$(git status --porcelain)" && echo "✓ clean tree" || \\
+\t (echo "✗ dirty tree:"; git status --short; exit 1)
+```
+
+If the hook is missing, convergence still runs to completion — the
+Invariants section carries a setup warning with an example rule, the
+frontier recommendation still fires, and the Next action ends with a
+"standing invariants are unknown" warning so the agent proceeds with
+appropriate caution.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `momentum` | array | null | Same shape as `bullseye_summary` — optional per-target multipliers. |
+| `skip_invariants` | bool | `false` | Skip the `make bullseye` / `mk bullseye` invocation. Lightweight scan mode that omits the hook but still runs the summary and frontier recommendation. |
 
 ## targets.yaml schema
 
