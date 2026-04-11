@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use crate::graph;
-use crate::schema::{Kind, Target, TargetsFile};
+use crate::schema::{CrossEdge, Kind, Target, TargetsFile};
 
 /// Render a TargetsFile to the standard targets.md markdown format.
 pub fn render_markdown(file: &TargetsFile) -> String {
@@ -79,6 +79,20 @@ fn render_target(out: &mut String, id: &str, t: &Target) {
         writeln!(out, "- **Depends on**: {}", deps.join(", ")).unwrap();
     }
 
+    if !t.cross_depends.is_empty() {
+        out.push_str("- **Cross-depends**:\n");
+        for edge in &t.cross_depends {
+            render_cross_edge(out, edge);
+        }
+    }
+
+    if !t.cross_enables.is_empty() {
+        out.push_str("- **Cross-enables**:\n");
+        for edge in &t.cross_enables {
+            render_cross_edge(out, edge);
+        }
+    }
+
     if !t.verifies.is_empty() {
         let vs: Vec<String> = t.verifies.iter().map(|v| format!("🎯{v}")).collect();
         writeln!(out, "- **Verifies**: {}", vs.join(", ")).unwrap();
@@ -114,6 +128,18 @@ fn render_target(out: &mut String, id: &str, t: &Target) {
     if let Some(actual) = t.actual_cost {
         writeln!(out, "- **Actual-cost**: {actual}").unwrap();
     }
+}
+
+/// Render a single cross-repo edge as a nested bullet line.
+fn render_cross_edge(out: &mut String, edge: &CrossEdge) {
+    let ref_ = edge.reference();
+    let mut line = format!("  - {ref_} @ `{}`", edge.repo);
+    if let Some(ref note) = edge.note {
+        line.push_str(" — ");
+        line.push_str(note);
+    }
+    line.push('\n');
+    out.push_str(&line);
 }
 
 /// Derive the markdown path from the YAML path.

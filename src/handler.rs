@@ -249,6 +249,8 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             context: t.context.clone().unwrap_or_default(),
             gates: Vec::new(),
             depends_on: t.depends_on.clone().unwrap_or_default(),
+            cross_depends: Vec::new(),
+            cross_enables: Vec::new(),
             verifies: t.verifies.clone().unwrap_or_default(),
             rework: None,
             retry_budget: None,

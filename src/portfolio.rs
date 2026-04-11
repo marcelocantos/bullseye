@@ -4,8 +4,37 @@
 use std::path::{Path, PathBuf};
 
 use crate::graph;
-use crate::schema::TargetsFile;
+use crate::schema::{CrossEdge, TargetsFile};
 use crate::store;
+
+/// A single cross-repo edge as it appears in portfolio output — the
+/// edge itself plus the source target that owns it. Collected during
+/// scanning and surfaced in [`format_portfolio`].
+#[derive(Debug, Clone)]
+pub struct CrossRepoEdgeRef {
+    /// ID of the target in this repo that owns the edge (e.g. `"T2.2"`).
+    pub source_target: String,
+    /// The cross-repo edge payload (target repo + target/capability + note).
+    pub edge: CrossEdge,
+}
+
+/// A frontier target within a portfolio summary. Carries the bits
+/// `format_portfolio` needs to render with priority boosts: value,
+/// cross-enables count, and the target name.
+#[derive(Debug, Clone)]
+pub struct PortfolioFrontierTarget {
+    /// Target ID (e.g. `"T1"`, `"T1.2"`).
+    pub id: String,
+    /// Target name.
+    pub name: String,
+    /// Target value (for ordering).
+    pub value: f64,
+    /// Number of cross-repo enablers attached to the target. A
+    /// non-zero count boosts the target's rank in the portfolio view:
+    /// finishing it unblocks work in other repos, so it deserves
+    /// visibility ahead of targets that only pay out locally.
+    pub cross_enables_count: usize,
+}
 
 /// A discovered repo with its targets summary.
 #[derive(Debug, Clone)]
@@ -20,8 +49,14 @@ pub struct RepoSummary {
     pub frontier: usize,
     /// Number of achieved targets.
     pub achieved: usize,
-    /// Names and IDs of frontier targets.
-    pub frontier_targets: Vec<(String, String)>,
+    /// Frontier targets, ordered by portfolio priority: targets with
+    /// `cross_enables` first (value propagates across repos), then by
+    /// plain value desc, then by ID for stable tiebreaks.
+    pub frontier_targets: Vec<PortfolioFrontierTarget>,
+    /// All `cross_depends` edges from any active target in this repo.
+    pub cross_depends: Vec<CrossRepoEdgeRef>,
+    /// All `cross_enables` edges from any active target in this repo.
+    pub cross_enables: Vec<CrossRepoEdgeRef>,
 }
 
 /// A repo that was discovered during a portfolio scan but could not
@@ -183,6 +218,26 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
     let active_count = active.len();
     let achieved_count = file.achieved().len();
 
+    // Collect cross-repo edges across every active target so the
+    // portfolio view can surface them. Inactive (achieved) targets
+    // are skipped — their cross-refs no longer represent live work.
+    let mut cross_depends: Vec<CrossRepoEdgeRef> = Vec::new();
+    let mut cross_enables: Vec<CrossRepoEdgeRef> = Vec::new();
+    for (id, t) in &active {
+        for edge in &t.cross_depends {
+            cross_depends.push(CrossRepoEdgeRef {
+                source_target: id.to_string(),
+                edge: edge.clone(),
+            });
+        }
+        for edge in &t.cross_enables {
+            cross_enables.push(CrossRepoEdgeRef {
+                source_target: id.to_string(),
+                edge: edge.clone(),
+            });
+        }
+    }
+
     // Only compute frontier if validation passes.
     let errors = graph::validate(&file);
     let frontier_targets = if errors.is_empty() {
@@ -191,10 +246,41 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
         Vec::new()
     };
 
-    let frontier_named: Vec<(String, String)> = frontier_targets
+    // Turn frontier entries into PortfolioFrontierTarget and order
+    // them: targets with `cross_enables` first (their value
+    // propagates across repos and so gets priority in the portfolio
+    // view), then by target value desc, then by ID for stability.
+    let mut frontier_named: Vec<PortfolioFrontierTarget> = frontier_targets
         .iter()
-        .map(|ft| (ft.id.clone(), ft.name.clone()))
+        .map(|ft| {
+            let (value, cross_enables_count) = file
+                .targets
+                .get(&ft.id)
+                .map(|t| (t.value, t.cross_enables.len()))
+                .unwrap_or((0.0, 0));
+            PortfolioFrontierTarget {
+                id: ft.id.clone(),
+                name: ft.name.clone(),
+                value,
+                cross_enables_count,
+            }
+        })
         .collect();
+    frontier_named.sort_by(|a, b| {
+        let a_has = a.cross_enables_count > 0;
+        let b_has = b.cross_enables_count > 0;
+        // Cross-enablers first.
+        b_has
+            .cmp(&a_has)
+            // Then higher value first.
+            .then_with(|| {
+                b.value
+                    .partial_cmp(&a.value)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            // Stable tiebreak on ID.
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     Ok(RepoSummary {
         repo: repo_name_from_path(repo_root),
@@ -203,6 +289,8 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
         frontier: frontier_named.len(),
         achieved: achieved_count,
         frontier_targets: frontier_named,
+        cross_depends,
+        cross_enables,
     })
 }
 
@@ -273,8 +361,61 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
                 "**{}** — {} active, {} frontier\n",
                 repo.repo, repo.active, repo.frontier,
             ));
-            for (id, name) in &repo.frontier_targets {
-                out.push_str(&format!("  🎯{id} {name}\n"));
+            for ft in &repo.frontier_targets {
+                // Annotate cross-enabler targets so the caller can see
+                // at a glance which frontier entries propagate value to
+                // other repos. These targets also sort to the top of
+                // the per-repo frontier list.
+                if ft.cross_enables_count > 0 {
+                    out.push_str(&format!(
+                        "  ★ 🎯{id} {name}  [enables {n} cross-repo]\n",
+                        id = ft.id,
+                        name = ft.name,
+                        n = ft.cross_enables_count,
+                    ));
+                } else {
+                    out.push_str(&format!("  🎯{id} {name}\n", id = ft.id, name = ft.name));
+                }
+            }
+            out.push('\n');
+        }
+    }
+
+    // Cross-repo edges section — surfaces every `cross_depends` and
+    // `cross_enables` edge across the portfolio so the user sees the
+    // coupling that bullseye deliberately does not enforce via the
+    // frontier graph. Dangling refs are fine; they just show up as-is.
+    let repos_with_cross: Vec<&RepoSummary> = repos
+        .iter()
+        .filter(|r| !r.cross_depends.is_empty() || !r.cross_enables.is_empty())
+        .collect();
+    if !repos_with_cross.is_empty() {
+        out.push_str("## Cross-repo edges\n\n");
+        for repo in &repos_with_cross {
+            out.push_str(&format!("**{}**\n", repo.repo));
+            for edge_ref in &repo.cross_depends {
+                out.push_str(&format!(
+                    "  🎯{src} depends on {ref_} @ {repo}",
+                    src = edge_ref.source_target,
+                    ref_ = edge_ref.edge.reference(),
+                    repo = edge_ref.edge.repo,
+                ));
+                if let Some(ref note) = edge_ref.edge.note {
+                    out.push_str(&format!(" — {note}"));
+                }
+                out.push('\n');
+            }
+            for edge_ref in &repo.cross_enables {
+                out.push_str(&format!(
+                    "  🎯{src} enables {ref_} @ {repo}",
+                    src = edge_ref.source_target,
+                    ref_ = edge_ref.edge.reference(),
+                    repo = edge_ref.edge.repo,
+                ));
+                if let Some(ref note) = edge_ref.edge.note {
+                    out.push_str(&format!(" — {note}"));
+                }
+                out.push('\n');
             }
             out.push('\n');
         }
@@ -319,6 +460,18 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
 mod tests {
     use super::*;
 
+    /// Build a minimal [`PortfolioFrontierTarget`] without
+    /// cross-repo metadata — used by tests that predate the
+    /// cross-enabler priority boost.
+    fn pft(id: &str, name: &str, value: f64) -> PortfolioFrontierTarget {
+        PortfolioFrontierTarget {
+            id: id.to_string(),
+            name: name.to_string(),
+            value,
+            cross_enables_count: 0,
+        }
+    }
+
     #[test]
     fn repo_name_github() {
         let p = Path::new("/Users/marcelo/work/github.com/marcelocantos/bullseye");
@@ -355,9 +508,11 @@ mod tests {
                     frontier: 2,
                     achieved: 1,
                     frontier_targets: vec![
-                        ("T1".to_string(), "First target".to_string()),
-                        ("T2".to_string(), "Second target".to_string()),
+                        pft("T1", "First target", 5.0),
+                        pft("T2", "Second target", 3.0),
                     ],
+                    cross_depends: Vec::new(),
+                    cross_enables: Vec::new(),
                 },
                 RepoSummary {
                     repo: "org/repo-b".to_string(),
@@ -366,6 +521,8 @@ mod tests {
                     frontier: 0,
                     achieved: 5,
                     frontier_targets: vec![],
+                    cross_depends: Vec::new(),
+                    cross_enables: Vec::new(),
                 },
             ],
             warnings: Vec::new(),
@@ -396,7 +553,9 @@ mod tests {
                 active: 1,
                 frontier: 1,
                 achieved: 0,
-                frontier_targets: vec![("T1".to_string(), "A target".to_string())],
+                frontier_targets: vec![pft("T1", "A target", 3.0)],
+                cross_depends: Vec::new(),
+                cross_enables: Vec::new(),
             }],
             warnings: vec![RepoWarning {
                 repo: "org/future-repo".to_string(),
@@ -438,5 +597,124 @@ mod tests {
         assert!(out.contains("bad indent at line 7"));
         // No version-mismatch section when there aren't any.
         assert!(!out.contains("Schema version mismatch"));
+    }
+
+    #[test]
+    fn format_portfolio_surfaces_cross_repo_edges() {
+        // A repo with both cross_depends and cross_enables edges must
+        // see them rendered in a dedicated section with source target,
+        // direction, referenced repo, and (when present) a note.
+        let edge_dep = CrossRepoEdgeRef {
+            source_target: "T1".to_string(),
+            edge: CrossEdge {
+                repo: "marcelocantos/jevon".to_string(),
+                target: None,
+                capability: Some("Manager API".to_string()),
+                note: Some("needed for summarizer lifecycle".to_string()),
+            },
+        };
+        let edge_enable = CrossRepoEdgeRef {
+            source_target: "T2".to_string(),
+            edge: CrossEdge {
+                repo: "marcelocantos/targets".to_string(),
+                target: Some("T1.4".to_string()),
+                capability: None,
+                note: None,
+            },
+        };
+
+        let scan = PortfolioScan {
+            repos: vec![RepoSummary {
+                repo: "org/linker".to_string(),
+                path: PathBuf::from("/work/org/linker"),
+                active: 2,
+                frontier: 2,
+                achieved: 0,
+                // Already in portfolio priority order: cross-enabler
+                // first, then by value. `summarize_repo` populates this
+                // list in this same order; tests that build summaries
+                // by hand must respect the invariant.
+                frontier_targets: vec![
+                    PortfolioFrontierTarget {
+                        id: "T2".to_string(),
+                        name: "Cross-repo enabler".to_string(),
+                        value: 3.0,
+                        cross_enables_count: 1,
+                    },
+                    PortfolioFrontierTarget {
+                        id: "T1".to_string(),
+                        name: "Plain work".to_string(),
+                        value: 5.0,
+                        cross_enables_count: 0,
+                    },
+                ],
+                cross_depends: vec![edge_dep],
+                cross_enables: vec![edge_enable],
+            }],
+            warnings: Vec::new(),
+        };
+
+        let out = format_portfolio(&scan);
+
+        // Dedicated cross-repo section appears.
+        assert!(out.contains("## Cross-repo edges"));
+        // cross_depends line: source → dep (capability form) @ repo — note.
+        assert!(
+            out.contains("🎯T1 depends on Manager API @ marcelocantos/jevon"),
+            "expected cross_depends line; got:\n{out}"
+        );
+        assert!(out.contains("needed for summarizer lifecycle"));
+        // cross_enables line: source → dep (target form) @ repo.
+        assert!(
+            out.contains("🎯T2 enables 🎯T1.4 @ marcelocantos/targets"),
+            "expected cross_enables line; got:\n{out}"
+        );
+
+        // Frontier rendering: cross-enabler is marked and boosted above
+        // the plain higher-value target.
+        let ready = out
+            .split("## Ready for work")
+            .nth(1)
+            .expect("ready section exists");
+        let end = ready.find("\n## ").unwrap_or(ready.len());
+        let ready_text = &ready[..end];
+        let t2_pos = ready_text.find("🎯T2").expect("T2 in ready section");
+        let t1_pos = ready_text.find("🎯T1").expect("T1 in ready section");
+        assert!(
+            t2_pos < t1_pos,
+            "T2 (cross-enabler, v=3) should rank above T1 (v=5) in portfolio; got:\n{ready_text}"
+        );
+        assert!(
+            ready_text.contains("★ 🎯T2"),
+            "cross-enabler should be marked with ★; got:\n{ready_text}"
+        );
+        assert!(
+            ready_text.contains("[enables 1 cross-repo]"),
+            "cross-enabler should be annotated; got:\n{ready_text}"
+        );
+    }
+
+    #[test]
+    fn format_portfolio_no_cross_section_when_empty() {
+        // A portfolio with no cross-repo edges must not emit an empty
+        // "Cross-repo edges" section.
+        let scan = PortfolioScan {
+            repos: vec![RepoSummary {
+                repo: "org/plain".to_string(),
+                path: PathBuf::from("/work/org/plain"),
+                active: 1,
+                frontier: 1,
+                achieved: 0,
+                frontier_targets: vec![pft("T1", "Plain", 5.0)],
+                cross_depends: Vec::new(),
+                cross_enables: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        };
+
+        let out = format_portfolio(&scan);
+        assert!(!out.contains("## Cross-repo edges"));
+        // And plain frontier targets don't get the ★ marker.
+        assert!(!out.contains("★"));
     }
 }
