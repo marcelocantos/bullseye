@@ -61,5 +61,5 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 ## 2026-04-11 -- /release v0.10.0
 
-- **Commit**: pending
+- **Commit**: `f6575d9`
 - **Outcome**: Released v0.10.0 (darwin-arm64, linux-amd64, linux-arm64). Hotfix for the broken v0.9.0 `bullseye_summary.momentum` schema. Reshaped the parameter from a keyed map to a list of `{id, multiplier}` entries — JSON arrays of scalar-field objects always emit valid Draft 2020-12 schema. Added `every_tool_emits_valid_json_schema` regression test that scans all tool schemas for forbidden `type` values; would have caught v0.9.0 before release. No other functional changes. Users on v0.9.0 must upgrade. Homebrew formula updated.
