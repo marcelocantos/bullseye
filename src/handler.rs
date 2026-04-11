@@ -587,7 +587,17 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
 }
 
 fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
-    let (path, file) = load_file(&t.cwd)?;
+    // Unlike most tools, startup_context is meant to be called
+    // automatically at session start — possibly from a harness hook
+    // that runs before the agent knows whether the repo uses bullseye.
+    // Failing the tool call with "no targets.yaml found" disrupts the
+    // session start and tells the agent nothing useful, so return a
+    // graceful informational response instead.
+    let dir = Path::new(&t.cwd);
+    let Some(path) = store::discover(dir) else {
+        return text_result(graph::startup_context_no_file(&dir.display().to_string()));
+    };
+    let file = store::load(&path).map_err(tool_err)?;
     let recent_days = t.recent_days.unwrap_or(14);
     let out = graph::startup_context(&file, &path.display().to_string(), recent_days);
     text_result(out)
