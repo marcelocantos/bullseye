@@ -9,24 +9,28 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.11.0. Two structural changes since v0.10.0:
+Snapshot as of v0.12.0. One breaking change since v0.11.0:
 
-1. **WSJF ranking purged.** The `## WSJF ranking (top N)` section in
-   `bullseye_summary` — which had quietly reappeared in v0.7.0 after
-   being removed in v0.4.0 — is gone. Frontier-first scheduling is
-   the model. The frontier section itself is now the prioritised
-   list, ordered by `focus = value × momentum`. The `top_n` parameter
-   on `bullseye_summary` is removed. Momentum stays as an advisory
-   reordering signal, not a ranking primitive.
-2. **`bullseye_convergence` added.** Single-call convergence
-   evaluation that runs `make bullseye` for standing invariants,
-   scans git for unreleased fixes, emits the target summary with
-   inline frontier details, and computes a deterministic next-action
-   recommendation. Replaces the multi-call `/cv` worker pattern.
+- **`bullseye_assert` renamed to `bullseye_put`.** The old name
+  implied "verify a condition, crash if false" (the standard
+  programming connotation of `assert`), but the semantics were
+  always upsert — create-or-replace, idempotent, REST-style.
+  `put` captures that correctly and is familiar to anyone who
+  has worked with HTTP APIs. Old callers that passed a JSON tool
+  call with `"name": "bullseye_assert"` will need to switch.
 
-Both are breaking changes to `bullseye_summary`'s output format (no
-more WSJF section, `top_n` parameter gone), acceptable pre-1.0. The
-settling clock for 1.0 eligibility continues from v0.8.0.
+Earlier structural changes still in effect (snapshotted v0.11.0):
+1. WSJF ranking purged — frontier-first scheduling is the model,
+   the frontier section itself carries the prioritised list, ordered
+   by `focus = value × momentum`. `top_n` parameter on `bullseye_summary`
+   gone. Momentum remains as an advisory reordering signal.
+2. `bullseye_convergence` — single-call convergence evaluation that
+   runs `make bullseye` for standing invariants, scans git for
+   unreleased fixes, emits the target summary with inline frontier
+   details, and computes a deterministic next-action recommendation.
+   Replaces the multi-call `/cv` worker pattern.
+
+The settling clock for 1.0 eligibility restarts from v0.12.0.
 
 ### MCP tools
 
@@ -34,7 +38,7 @@ settling clock for 1.0 eligibility continues from v0.8.0.
 |------|--------|-------|
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_assert(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | New in v0.8.0 — unified add/update upsert; optional fields may expand |
+| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0 because "assert" carries a verify-or-crash connotation in most programming contexts, while the tool's semantics are REST-style create-or-replace. |
 | `bullseye_retire(cwd, id, actual_cost)` | Stable | |
 | `bullseye_frontier(cwd)` | Stable | |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
@@ -50,8 +54,11 @@ settling clock for 1.0 eligibility continues from v0.8.0.
 | `bullseye_convergence(cwd, momentum?, skip_invariants?)` | Needs review | New in v0.11.0. Single-call convergence evaluation: invariants via `make bullseye` / `mk bullseye`, git-based unreleased-fix detection, summary with inline frontier details, and a deterministic next-action recommendation. Absorbs most of the old `/cv` worker logic into a stateless tool call. Missing hook degrades gracefully with embedded setup instructions; frontier recommendation still fires. |
 
 **Removed in v0.8.0** (breaking):
-- `bullseye_add` — replaced by `bullseye_assert` (upsert)
-- `bullseye_update` — replaced by `bullseye_assert` (upsert)
+- `bullseye_add` — replaced by the upsert tool (`bullseye_put` as of v0.12.0; was `bullseye_assert` in v0.8.0–v0.11.0)
+- `bullseye_update` — replaced by the upsert tool (same)
+
+**Renamed in v0.12.0** (breaking):
+- `bullseye_assert` → `bullseye_put`
 
 Planned additions (not yet implemented):
 - `bullseye_verify` — execute acceptance checks via sawmill
@@ -108,13 +115,15 @@ Planned additions:
 - **`bullseye_startup_context`, `bullseye_portfolio`, `bullseye_summary`
   stabilisation**: All three are new and their output formats may evolve
   with real-world usage.
-- **`bullseye_assert` stabilisation**: New in v0.8.0 as a unified upsert
-  replacing add/update. Needs real-world usage before locking in the
-  parameter set — the `blocks` sugar field in particular may see
-  iteration (e.g., symmetric `gated_by`, `verified_by` sugars).
-- **Settling threshold reset**: The v0.8.0 release removes `bullseye_add`
-  and `bullseye_update` and retires the `gates` schema field, both
-  breaking changes. The settling clock restarts from v0.8.0.
+- **`bullseye_put` stabilisation**: Unified upsert replacing add/update.
+  Needs real-world usage before locking in the parameter set — the
+  `blocks` sugar field in particular may see iteration (e.g., symmetric
+  `gated_by`, `verified_by` sugars).
+- **Settling threshold reset**: v0.8.0 removed `bullseye_add` and
+  `bullseye_update` and retired the `gates` schema field; v0.12.0
+  renamed `bullseye_assert` to `bullseye_put`. Each of these is a
+  breaking change to the MCP tool surface. The settling clock
+  restarts from v0.12.0.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0

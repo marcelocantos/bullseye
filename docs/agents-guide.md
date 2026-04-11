@@ -32,7 +32,7 @@ Get a single target by ID.
 | `cwd` | string | required | Working directory |
 | `id` | string | required | Target ID (e.g., `"T1"`, `"T1.2"`) |
 
-### bullseye_assert
+### bullseye_put
 
 Upsert a target: create if the ID doesn't exist, patch if it does.
 Omit `id` to create a new target with an auto-assigned top-level ID
@@ -131,7 +131,7 @@ manual re-rendering.
 ### bullseye_init
 
 Create a starter `docs/targets.yaml` with a sample target. Refuses to
-overwrite an existing file — use `bullseye_assert` for repos that
+overwrite an existing file — use `bullseye_put` for repos that
 already have targets.
 
 | Parameter | Type | Default | Description |
@@ -328,7 +328,7 @@ targets:
 ### Target IDs
 
 Targets use `T<N>` (e.g., `T1`, `T2`). IDs are assigned
-automatically by `bullseye_assert` when `id` is omitted.
+automatically by `bullseye_put` when `id` is omitted.
 Sub-target IDs (`T1.2`) can be created by passing an explicit
 `id` — the assert tool creates-if-missing or patches-if-present.
 
@@ -363,9 +363,9 @@ bullseye_frontier(cwd) → unblocked targets ready for work
 ### Add and track a target
 
 ```
-bullseye_assert(cwd, name, value, cost, acceptance)
+bullseye_put(cwd, name, value, cost, acceptance)
   → creates target with auto-assigned ID
-bullseye_assert(cwd, id, status: "converging")
+bullseye_put(cwd, id, status: "converging")
   → mark as in progress (patch by ID)
 bullseye_retire(cwd, id, actual_cost)
   → mark as achieved
@@ -374,7 +374,7 @@ bullseye_retire(cwd, id, actual_cost)
 ### Add a new prerequisite above existing work
 
 ```
-bullseye_assert(cwd, name, value, cost, acceptance, blocks: [T5, T7])
+bullseye_put(cwd, name, value, cost, acceptance, blocks: [T5, T7])
   → creates a new target and injects it into T5 and T7's depends_on,
     so both become blocked on the new prerequisite in one call
 ```
@@ -432,7 +432,7 @@ available.
 
 ### Managing targets
 
-- `bullseye_assert` — upsert a target. Omit `id` to create a new
+- `bullseye_put` — upsert a target. Omit `id` to create a new
   target with an auto-assigned ID (provide `name`, `value`, `cost`,
   `acceptance`). Provide `id` to create at a specific ID (sub-targets
   like `T1.2`) or to patch an existing target (only the provided
@@ -441,7 +441,7 @@ available.
 - `bullseye_retire` — mark a target as achieved.
 
 When you discover something that should be tracked — a bug, a quality
-gap, a missing capability — add it as a target with `bullseye_assert`
+gap, a missing capability — add it as a target with `bullseye_put`
 rather than leaving a bare TODO.
 
 When you complete work that achieves a target, call `bullseye_retire`

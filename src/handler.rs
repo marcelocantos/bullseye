@@ -49,7 +49,7 @@ impl ServerHandler for TargetHandler {
         match tool {
             TargetTools::ListTool(t) => handle_list(t),
             TargetTools::GetTool(t) => handle_get(t),
-            TargetTools::AssertTool(t) => handle_assert(t),
+            TargetTools::PutTool(t) => handle_put(t),
             TargetTools::RetireTool(t) => handle_retire(t),
             TargetTools::FrontierTool(t) => handle_frontier(t),
             TargetTools::ReworkTool(t) => handle_rework(t),
@@ -197,7 +197,7 @@ fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
     format!("T{}", max_num + 1)
 }
 
-fn handle_assert(t: crate::tools::AssertTool) -> ToolResult {
+fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     let (path, mut file) = load_or_create_file(&t.cwd)?;
 
     // Resolve target ID. None → auto-assign a new top-level ID.
@@ -506,7 +506,7 @@ fn handle_init(t: crate::tools::InitTool) -> ToolResult {
 
     // Refuse if a targets file already exists.
     if store::discover(dir).is_some() {
-        return err("targets.yaml already exists — use bullseye_assert to add targets");
+        return err("targets.yaml already exists — use bullseye_put to add targets");
     }
 
     let project = t.project_name.unwrap_or_else(|| {
@@ -540,7 +540,7 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
     if !t.force && store::discover(dir).is_some() {
         return err(
             "targets.yaml already exists — use force: true to overwrite, \
-             or use bullseye_assert to modify existing targets",
+             or use bullseye_put to modify existing targets",
         );
     }
 
