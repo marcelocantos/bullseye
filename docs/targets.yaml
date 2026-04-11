@@ -458,9 +458,10 @@ targets:
     achieved: 2026-04-07
   T7:
     name: Repo-level prioritisation by observable checkpoint path
-    status: identified
+    status: achieved
     value: 8.0
     cost: 5.0
+    actual_cost: 5.0
     acceptance:
     - 'Target schema adds `observable: bool` field (default false, omitted from YAML when false)'
     - '`bullseye_tunnels` generalised: a target is observable iff `kind: verify` OR `observable: true`; a tunnel is a work target with no observable target reachable within max_depth hops'
@@ -474,3 +475,4 @@ targets:
     - priority
     origin: manual
     discovered: 2026-04-11
+    achieved: 2026-04-11

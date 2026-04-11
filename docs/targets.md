@@ -161,21 +161,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T7 Repo-level prioritisation by observable checkpoint path
-- **Value**: 8
-- **Cost**: 5
-- **Acceptance**:
-  - Target schema adds `observable: bool` field (default false, omitted from YAML when false)
-  - `bullseye_tunnels` generalised: a target is observable iff `kind: verify` OR `observable: true`; a tunnel is a work target with no observable target reachable within max_depth hops
-  - Repo-level frontier ordering in `bullseye_frontier`, `bullseye_convergence`, and the `/cv` next-action logic is driven by distance-to-nearest-observable-target, tiebreaking by unblocking fanout (downstream dependant count)
-  - Per-target `value`/`cost` fields are documented as portfolio-scope inputs and are not consumed by any repo-level ordering path
-  - `bullseye_convergence` surfaces tunnel warnings inline and, when the top frontier choice would extend a tunnel, recommends graph reshaping rather than auto-selecting
-  - `docs/mcp-triad.md` documents the phase-boundary hypothesis: repo engine = shortest path to next observable checkpoint (flow + uncertainty); portfolio engine = WSJF under human-as-bottleneck (value/cost + momentum + cross-repo propagation)
-- **Context**: Repo-scale work has sub-week horizons; value/cost throughput optimisation is noise there. The meaningful signal is "what moves us as quickly as possible toward and through the chain of critical human decision points?" — decomposing into unblocking flow and uncertainty reduction. Decision points are observable outputs the human can look at and react to. Sometimes they emerge naturally ("new subcommand ready to play with"); other times the graph needs intentional shaping to avoid long opaque tunnels. This target replaces the current repo-level ranking (which leaks portfolio-scope WSJF maths into the repo engine) with an observability-path basis, and generalises the existing `bullseye_tunnels` analysis from verification-reachability to observability-reachability.
-- **Tags**: core, priority
-- **Status**: Identified
-- **Discovered**: 2026-04-11
-
 ## Achieved
 
 ### 🎯T1.1 Executable acceptance checks via sawmill
@@ -206,6 +191,23 @@
 - **Tags**: portfolio
 - **Status**: Achieved
 - **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 5
+
+### 🎯T7 Repo-level prioritisation by observable checkpoint path
+- **Value**: 8
+- **Cost**: 5
+- **Acceptance**:
+  - Target schema adds `observable: bool` field (default false, omitted from YAML when false)
+  - `bullseye_tunnels` generalised: a target is observable iff `kind: verify` OR `observable: true`; a tunnel is a work target with no observable target reachable within max_depth hops
+  - Repo-level frontier ordering in `bullseye_frontier`, `bullseye_convergence`, and the `/cv` next-action logic is driven by distance-to-nearest-observable-target, tiebreaking by unblocking fanout (downstream dependant count)
+  - Per-target `value`/`cost` fields are documented as portfolio-scope inputs and are not consumed by any repo-level ordering path
+  - `bullseye_convergence` surfaces tunnel warnings inline and, when the top frontier choice would extend a tunnel, recommends graph reshaping rather than auto-selecting
+  - `docs/mcp-triad.md` documents the phase-boundary hypothesis: repo engine = shortest path to next observable checkpoint (flow + uncertainty); portfolio engine = WSJF under human-as-bottleneck (value/cost + momentum + cross-repo propagation)
+- **Context**: Repo-scale work has sub-week horizons; value/cost throughput optimisation is noise there. The meaningful signal is "what moves us as quickly as possible toward and through the chain of critical human decision points?" — decomposing into unblocking flow and uncertainty reduction. Decision points are observable outputs the human can look at and react to. Sometimes they emerge naturally ("new subcommand ready to play with"); other times the graph needs intentional shaping to avoid long opaque tunnels. This target replaces the current repo-level ranking (which leaks portfolio-scope WSJF maths into the repo engine) with an observability-path basis, and generalises the existing `bullseye_tunnels` analysis from verification-reachability to observability-reachability.
+- **Tags**: core, priority
+- **Status**: Achieved
+- **Discovered**: 2026-04-11
 - **Achieved**: 2026-04-11
 - **Actual-cost**: 5
 
@@ -400,7 +402,6 @@ graph TD
     T3["Protocol app priority sync"]
     T3_1["targets_priorities SQLite tab…"]
     T3_2["Protocol Today page Focus sec…"]
-    T7["Repo-level prioritisation by …"]
     T1 -.->|needs| T1_2
     T1 -.->|needs| T1_3
     T1 -.->|needs| T1_4
@@ -408,7 +409,6 @@ graph TD
     T1_3 -.->|needs| T1_2
     T2 -.->|needs| T2_3
     T2 -.->|needs| T2_4
-    T2_3 -.->|needs| T7
     T2_4 -.->|needs| T2_3
     T2_4 -.->|needs| T1_3
     T3 -.->|needs| T3_1
