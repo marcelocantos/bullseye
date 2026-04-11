@@ -951,6 +951,25 @@ fn summary_with_validation_errors_skips_frontier() {
 }
 
 #[test]
+fn startup_context_no_file_is_graceful() {
+    // A repo with no targets.yaml must not make startup_context fail
+    // outright — the session-start hook that typically invokes it runs
+    // before the agent knows whether the repo uses bullseye. Return a
+    // friendly "not using bullseye yet" message instead.
+    let tmp = tempfile::tempdir().unwrap();
+    // Sanity check: discover returns None on a fresh empty dir.
+    assert!(store::discover(tmp.path()).is_none());
+
+    let out = graph::startup_context_no_file(&tmp.path().display().to_string());
+    assert!(out.contains("# Startup context"));
+    assert!(out.contains("no targets.yaml found"));
+    assert!(out.contains("bullseye_init"));
+    // Must not look like an error string — agents should be able to
+    // keep going.
+    assert!(!out.to_lowercase().contains("error"));
+}
+
+#[test]
 fn startup_context_shows_validation_errors() {
     let mut file = load_fixture();
     // Create a dangling depends_on reference.

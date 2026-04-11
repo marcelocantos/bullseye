@@ -404,6 +404,22 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
     out
 }
 
+/// Produce the startup-context response for a project that has no
+/// `targets.yaml`. Unlike most tools, startup_context is often called
+/// automatically at session start before the caller knows whether the
+/// repo uses bullseye, so it needs to degrade gracefully instead of
+/// failing the tool call.
+pub fn startup_context_no_file(cwd: &str) -> String {
+    format!(
+        "# Startup context\n\
+         File: (no targets.yaml found under {cwd})\n\
+         \n\
+         This project is not using bullseye yet. Run `bullseye_init` to \
+         create a starter `docs/targets.yaml`, or ignore this notice if \
+         targets aren't appropriate for this repo.\n",
+    )
+}
+
 /// Produce a consolidated status overview for agent consumption.
 ///
 /// If `momentum` is `Some`, the WSJF ranking section multiplies each
