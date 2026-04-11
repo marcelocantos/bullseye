@@ -172,7 +172,9 @@ fn parse_kind(s: &str) -> Result<crate::schema::Kind, CallToolError> {
     match s {
         "work" => Ok(crate::schema::Kind::Work),
         "verify" => Ok(crate::schema::Kind::Verify),
-        other => Err(tool_err(format!("unknown kind: {other} (use work or verify)"))),
+        other => Err(tool_err(format!(
+            "unknown kind: {other} (use work or verify)"
+        ))),
     }
 }
 
@@ -260,10 +262,7 @@ fn handle_assert(t: crate::tools::AssertTool) -> ToolResult {
         file.targets.insert(id.clone(), target);
     } else {
         // Patch path — only provided fields change.
-        let target = file
-            .targets
-            .get_mut(&id)
-            .expect("existence checked above");
+        let target = file.targets.get_mut(&id).expect("existence checked above");
 
         if let Some(ref name) = t.name {
             target.name = name.clone();
