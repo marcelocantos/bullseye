@@ -6,9 +6,34 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+/// Current schema version written by this build of bullseye.
+///
+/// Bumped whenever a breaking schema change lands (new required field,
+/// edge-type rework, semantic change to an existing field). Callers
+/// that need format stability should read this constant instead of
+/// hard-coding the number.
+///
+/// Versions in the wild:
+/// - `None` on disk → legacy pre-v0.9.0 file; treated as v1 on load.
+/// - `Some(1)` → v0.9.0+ format: single `depends_on` edge type,
+///   `verifies`/`rework` edges, optional `momentum` parameter on
+///   `bullseye_summary`. The gates-field and parent-field migrations
+///   from v0.4.0 and v0.8.0 continue to run transparently on load,
+///   so older on-disk files are still accepted.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 /// Top-level targets file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetsFile {
+    /// Schema version. Written by bullseye on every save so that an
+    /// older binary loading a file produced by a newer binary can
+    /// detect the mismatch and refuse to proceed rather than
+    /// silently misinterpreting new fields. Absent on legacy files
+    /// from before v0.9.0; those are treated as v1 at load time and
+    /// upgraded in place on the next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<u32>,
+
     /// Git SHA at which targets were last evaluated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_evaluated: Option<String>,
