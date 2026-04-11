@@ -268,7 +268,49 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         file.targets.insert(id.clone(), target);
     } else {
         // Patch path — only provided fields change.
+
+        // Kind is creation-only; reject early so the error surfaces
+        // regardless of any other field state.
+        if t.kind.is_some() {
+            return err("kind can only be set when creating a target");
+        }
+
+        // Parse the optional new status upfront so the
+        // achieved-immutability check below and the field application
+        // below share a single parse.
+        let new_status: Option<Status> = match t.status.as_deref() {
+            Some(s) => Some(parse_status(s)?),
+            None => None,
+        };
+
+        // Safety — reject content edits on achieved targets unless
+        // the same call is simultaneously re-opening them. Achieved
+        // targets are historical artifacts; their content is
+        // immutable until the human explicitly re-opens them by
+        // patching `status: identified`. See 🎯T8.
         let target = file.targets.get_mut(&id).expect("existence checked above");
+        let target_currently_achieved = target.status == Status::Achieved;
+        let would_remain_achieved = match new_status {
+            Some(s) => s == Status::Achieved,
+            None => target_currently_achieved,
+        };
+        let content_edits_present = t.name.is_some()
+            || t.value.is_some()
+            || t.cost.is_some()
+            || t.acceptance.is_some()
+            || t.context.is_some()
+            || t.tags.is_some()
+            || t.origin.is_some()
+            || t.depends_on.is_some()
+            || t.verifies.is_some()
+            || t.observable.is_some();
+        if target_currently_achieved && would_remain_achieved && content_edits_present {
+            return err(format!(
+                "🎯{id} is achieved — its content is immutable. Re-open it first by \
+                 calling bullseye_put with `status: identified`, then apply content \
+                 changes in a separate call. (Achieved targets are historical artifacts.)"
+            ));
+        }
 
         if let Some(ref name) = t.name {
             target.name = name.clone();
@@ -300,15 +342,11 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         if let Some(ref verifies) = t.verifies {
             target.verifies = verifies.clone();
         }
-        if let Some(ref status_str) = t.status {
-            let status = parse_status(status_str)?;
+        if let Some(status) = new_status {
             target.status = status;
             if status == Status::Achieved && target.achieved.is_none() {
                 target.achieved = Some(Local::now().date_naive());
             }
-        }
-        if t.kind.is_some() {
-            return err("kind can only be set when creating a target");
         }
     }
 
@@ -324,6 +362,12 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                     "blocks target {other_id} does not exist (cannot add dependency)"
                 ))
             })?;
+            if other.status == Status::Achieved {
+                return err(format!(
+                    "cannot inject dependency into 🎯{other_id} — it is achieved. \
+                     Re-open it first by patching `status: identified`. See 🎯T8."
+                ));
+            }
             if !other.depends_on.contains(&id) {
                 other.depends_on.push(id.clone());
                 injected_into.push(other_id.clone());
@@ -779,4 +823,167 @@ fn discover_markdown(start_dir: &Path) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::PutTool;
+
+    /// Minimal targets.yaml with one achieved target (T1) and one
+    /// identified target (T2). Exercises the achieved-immutability
+    /// rule in [`handle_put`] (see 🎯T8).
+    const FIXTURE_YAML: &str = r#"schema_version: 1
+targets:
+  T1:
+    name: Old achieved target
+    kind: work
+    status: achieved
+    value: 5
+    cost: 3
+    acceptance:
+      - Did the thing
+    context: Historical target, should be immutable
+    origin: manual
+    discovered: 2026-01-01
+    achieved: 2026-02-01
+  T2:
+    name: Active target
+    kind: work
+    status: identified
+    value: 8
+    cost: 5
+    acceptance:
+      - Do the other thing
+    origin: manual
+    discovered: 2026-03-01
+"#;
+
+    fn fixture() -> (tempfile::TempDir, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let docs = tmp.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("targets.yaml"), FIXTURE_YAML).unwrap();
+        let cwd = tmp.path().to_string_lossy().to_string();
+        (tmp, cwd)
+    }
+
+    fn put(cwd: &str, id: &str) -> PutTool {
+        PutTool {
+            cwd: cwd.to_string(),
+            id: Some(id.to_string()),
+            name: None,
+            value: None,
+            cost: None,
+            acceptance: None,
+            context: None,
+            kind: None,
+            status: None,
+            depends_on: None,
+            observable: None,
+            blocks: None,
+            verifies: None,
+            origin: None,
+            tags: None,
+        }
+    }
+
+    fn load_target(cwd: &str, id: &str) -> Target {
+        let dir = Path::new(cwd);
+        let path = store::discover(dir).unwrap();
+        let file = store::load(&path).unwrap();
+        file.targets.get(id).unwrap().clone()
+    }
+
+    #[test]
+    fn achieved_content_patch_is_rejected() {
+        let (_tmp, cwd) = fixture();
+        let mut t = put(&cwd, "T1");
+        t.name = Some("Sneaky rename".to_string());
+        let result = handle_put(t);
+        let err = result.expect_err("content patch on achieved must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("achieved") && msg.contains("immutable"),
+            "error should mention achieved + immutable: {msg}"
+        );
+        // File unchanged.
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.name, "Old achieved target");
+        assert_eq!(t1.status, Status::Achieved);
+    }
+
+    #[test]
+    fn identified_content_patch_is_allowed() {
+        let (_tmp, cwd) = fixture();
+        let mut t = put(&cwd, "T2");
+        t.name = Some("Renamed active target".to_string());
+        handle_put(t).expect("content patch on identified must succeed");
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.name, "Renamed active target");
+        assert_eq!(t2.status, Status::Identified);
+    }
+
+    #[test]
+    fn achieved_status_only_transition_is_allowed() {
+        let (_tmp, cwd) = fixture();
+        let mut t = put(&cwd, "T1");
+        t.status = Some("identified".to_string());
+        handle_put(t).expect("status-only transition on achieved must succeed");
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.status, Status::Identified);
+        // Name and other content fields preserved.
+        assert_eq!(t1.name, "Old achieved target");
+    }
+
+    #[test]
+    fn achieved_atomic_reopen_with_content_is_allowed() {
+        // A single call that both re-opens an achieved target AND
+        // applies content edits is allowed — the reopen is applied
+        // first, and the content edits land on the now-identified
+        // target. This is the recovery path for a fat-fingered
+        // historical ID: one call instead of two.
+        let (_tmp, cwd) = fixture();
+        let mut t = put(&cwd, "T1");
+        t.status = Some("identified".to_string());
+        t.name = Some("Re-opened and renamed".to_string());
+        handle_put(t).expect("atomic reopen + content must succeed");
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.status, Status::Identified);
+        assert_eq!(t1.name, "Re-opened and renamed");
+    }
+
+    #[test]
+    fn blocks_injection_into_achieved_target_is_rejected() {
+        // `blocks: [T1]` mutates T1.depends_on — a content edit on
+        // an achieved target, just via the sugar. Same rule applies.
+        let (_tmp, cwd) = fixture();
+        let mut t = put(&cwd, "T2");
+        t.blocks = Some(vec!["T1".to_string()]);
+        let result = handle_put(t);
+        let err = result.expect_err("blocks into achieved must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("achieved"),
+            "error should mention achieved: {msg}"
+        );
+        // T1's depends_on unchanged.
+        let t1 = load_target(&cwd, "T1");
+        assert!(t1.depends_on.is_empty());
+    }
+
+    #[test]
+    fn kind_patch_is_still_rejected() {
+        // Regression: the pre-existing "kind only on create" rule
+        // must still fire on the patch path. This test also pins
+        // the error ordering — kind rejection should happen before
+        // the achieved-immutability check.
+        let (_tmp, cwd) = fixture();
+        let mut t = put(&cwd, "T2");
+        t.kind = Some("verify".to_string());
+        let result = handle_put(t);
+        let err = result.expect_err("kind patch must be rejected");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("kind"), "error should mention kind: {msg}");
+    }
 }
