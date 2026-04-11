@@ -420,6 +420,28 @@ pub fn startup_context_no_file(cwd: &str) -> String {
     )
 }
 
+/// Produce the startup-context response for a project whose
+/// `targets.yaml` exists but can't be read or parsed. Surfaces the
+/// underlying error for the user to diagnose, but intentionally
+/// does **not** make the tool call fail — session start should
+/// continue regardless of whether the targets file is momentarily
+/// broken (e.g. mid-edit, rebase conflict, permission glitch).
+///
+/// The error text itself comes from [`crate::store::LoadError`].
+pub fn startup_context_broken_file(file_path: &str, error: &str) -> String {
+    format!(
+        "# Startup context\n\
+         File: {file_path}\n\
+         \n\
+         ⚠ targets.yaml could not be loaded: {error}\n\
+         \n\
+         Session start is continuing without target context. Fix the \
+         file (common causes: YAML syntax error, unresolved rebase \
+         marker, permission issue) and re-run `bullseye_startup_context` \
+         to recover.\n",
+    )
+}
+
 /// Produce a consolidated status overview for agent consumption.
 ///
 /// If `momentum` is `Some`, the WSJF ranking section multiplies each
