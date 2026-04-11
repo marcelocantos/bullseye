@@ -53,7 +53,7 @@ the nearest `targets.yaml`.
 |------|-------------|
 | `bullseye_list` | List targets (active/achieved/all) |
 | `bullseye_get` | Get a single target by ID with full detail |
-| `bullseye_assert` | Upsert a target — create (auto- or explicit ID) or patch in one call |
+| `bullseye_put` | Upsert a target — create (auto- or explicit ID) or patch in one call |
 | `bullseye_retire` | Mark a target achieved |
 | `bullseye_frontier` | Unblocked leaf targets ready for work |
 | `bullseye_rework` | Trigger rework from a failed verification |

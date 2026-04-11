@@ -63,7 +63,7 @@ async fn main() -> SdkResult<()> {
         instructions: Some(
             "Target management. Targets are desired states expressed as testable \
              properties. Use bullseye_list to see active targets, bullseye_frontier \
-             for unblocked targets ready for work, bullseye_assert to create or \
+             for unblocked targets ready for work, bullseye_put to create or \
              patch targets, and bullseye_retire to mark them achieved."
                 .to_string(),
         ),

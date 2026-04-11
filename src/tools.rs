@@ -39,8 +39,16 @@ pub struct GetTool {
 /// omit it to create a new target with an auto-assigned ID, provide it
 /// to upsert at a specific ID (useful for sub-targets like T1.2). When
 /// the target already exists, only the provided fields are changed.
+///
+/// Named `put` after the HTTP idiom — the verb is familiar to anyone
+/// who has worked with REST APIs and carries the right semantics
+/// (idempotent create-or-replace). The pre-v0.12.0 name was `assert`,
+/// which was confusing because in most programming contexts "assert"
+/// means "verify a condition, crash if false" rather than "create or
+/// update a resource". The upsert-style verb was the right idea;
+/// "assert" was the wrong word for it.
 #[mcp_tool(
-    name = "bullseye_assert",
+    name = "bullseye_put",
     description = "Upsert a target: create if the ID doesn't exist, patch if it does. \
         Omit `id` to create a new target with an auto-assigned ID. \
         Provide `id` (e.g., 'T1.2') to create a sub-target at a specific ID or to patch an existing one. \
@@ -48,7 +56,7 @@ pub struct GetTool {
         Use `depends_on` to declare this target's blockers, or `blocks` (sugar) to inject this target into other targets' depends_on lists — handy when adding a new prerequisite above existing work."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
-pub struct AssertTool {
+pub struct PutTool {
     /// Working directory to discover targets.yaml from.
     pub cwd: String,
 
@@ -196,7 +204,7 @@ pub struct GraphTool {
 /// Initialise a new targets file with a starter template.
 #[mcp_tool(
     name = "bullseye_init",
-    description = "Create a starter docs/targets.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_assert for repos that already have targets."
+    description = "Create a starter docs/targets.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_put for repos that already have targets."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct InitTool {
@@ -361,7 +369,7 @@ tool_box!(
     [
         ListTool,
         GetTool,
-        AssertTool,
+        PutTool,
         RetireTool,
         FrontierTool,
         ReworkTool,

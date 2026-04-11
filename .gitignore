@@ -4,3 +4,6 @@
 *.orig
 .idea/
 .vscode/
+
+# Claude Code per-project local settings (auto-generated)
+.claude/settings.local.json
