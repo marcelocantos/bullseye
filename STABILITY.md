@@ -9,7 +9,11 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.8.0.
+Snapshot as of v0.9.0. The MCP tool surface is additive since v0.8.0:
+`bullseye_summary` gained an optional `momentum` parameter (#11), and
+`bullseye_startup_context` no longer hard-errors on missing/broken
+targets files (#12, #14). No tool was removed or renamed. The
+settling clock for 1.0 eligibility continues from v0.8.0.
 
 ### MCP tools
 
@@ -27,9 +31,9 @@ Snapshot as of v0.8.0.
 | `bullseye_render(cwd)` | Stable | |
 | `bullseye_import(cwd, path, force)` | Stable | Markdown-to-YAML migration |
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
-| `bullseye_startup_context(cwd, recent_days)` | Needs review | New in v0.7.0; output format may evolve |
-| `bullseye_portfolio(root, max_depth)` | Needs review | New in v0.7.0; output format may evolve |
-| `bullseye_summary(cwd, top_n)` | Needs review | New in v0.7.0; output format may evolve |
+| `bullseye_startup_context(cwd, recent_days)` | Needs review | v0.9.0 degrades gracefully on missing / unreadable / unparsable files; still fails loudly on `schema_version` mismatch. |
+| `bullseye_portfolio(root, max_depth)` | Needs review | v0.9.0 surfaces load warnings (especially `schema_version` mismatches) under a `## ⚠ Warnings` section instead of silently dropping affected repos. |
+| `bullseye_summary(cwd, top_n, momentum?)` | Needs review | New `momentum` map (target ID → multiplier) in v0.9.0; scales WSJF before ranking. Absent = identity. Composition happens at the skill layer; bullseye never calls mnemo. |
 
 **Removed in v0.8.0** (breaking):
 - `bullseye_add` — replaced by `bullseye_assert` (upsert)
@@ -42,7 +46,7 @@ Planned additions (not yet implemented):
 
 | Field | Status | Notes |
 |-------|--------|-------|
-| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `1`. Absent on legacy files (treated as v1 on load). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for a `brew upgrade`. Incremented only on breaking schema changes. |
+| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `1`. Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. |
 | `targets` (map) | Stable | |
 | `last_evaluated` | Stable | |
 | `name` | Stable | |
