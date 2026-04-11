@@ -9,11 +9,15 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.9.0. The MCP tool surface is additive since v0.8.0:
-`bullseye_summary` gained an optional `momentum` parameter (#11), and
-`bullseye_startup_context` no longer hard-errors on missing/broken
-targets files (#12, #14). No tool was removed or renamed. The
-settling clock for 1.0 eligibility continues from v0.8.0.
+Snapshot as of v0.10.0. v0.9.0 shipped a broken `bullseye_summary`
+schema (the `momentum` parameter used a keyed map that the
+rust-mcp-sdk derive can't schema-ify, producing `type: "unknown"` —
+rejected by the Anthropic API). v0.10.0 reshapes the parameter to a
+list of `{id, multiplier}` entries, which generates a valid Draft
+2020-12 schema. A new regression test asserts that no tool emits a
+schema with a forbidden `type` value, so this class of bug can't
+ship again. The MCP tool surface is otherwise additive since v0.8.0.
+The settling clock for 1.0 eligibility continues from v0.8.0.
 
 ### MCP tools
 
@@ -33,7 +37,7 @@ settling clock for 1.0 eligibility continues from v0.8.0.
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
 | `bullseye_startup_context(cwd, recent_days)` | Needs review | v0.9.0 degrades gracefully on missing / unreadable / unparsable files; still fails loudly on `schema_version` mismatch. |
 | `bullseye_portfolio(root, max_depth)` | Needs review | v0.9.0 surfaces load warnings (especially `schema_version` mismatches) under a `## ⚠ Warnings` section instead of silently dropping affected repos. |
-| `bullseye_summary(cwd, top_n, momentum?)` | Needs review | New `momentum` map (target ID → multiplier) in v0.9.0; scales WSJF before ranking. Absent = identity. Composition happens at the skill layer; bullseye never calls mnemo. |
+| `bullseye_summary(cwd, top_n, momentum?)` | Needs review | `momentum` added in v0.9.0, reshaped in v0.10.0 to a list of `{id, multiplier}` entries (the keyed-map form in v0.9.0 produced an invalid tool schema). Scales WSJF before ranking; absent entries default to 1.0. Composition happens at the skill layer; bullseye never calls mnemo. |
 
 **Removed in v0.8.0** (breaking):
 - `bullseye_add` — replaced by `bullseye_assert` (upsert)

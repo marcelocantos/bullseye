@@ -273,11 +273,30 @@ fn default_filter() -> String {
     "active".to_string()
 }
 
+/// A single entry in the `momentum` parameter of [`SummaryTool`].
+///
+/// Pair of `target_id → multiplier`. The parameter is a list of
+/// these rather than a JSON object keyed by target ID because the
+/// rust-mcp-sdk `JsonSchema` derive does not emit Draft 2020-12
+/// compliant schema for keyed-map types (it falls back to
+/// `type: "unknown"`, which the Anthropic API rejects on tool-list
+/// submission). A list of objects with scalar fields always produces
+/// valid schema.
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct MomentumEntry {
+    /// Target ID the multiplier applies to (e.g. `"T1"`, `"T1.2"`).
+    pub id: String,
+    /// Multiplier applied to the target's WSJF score during ranking.
+    /// `1.0` is identity (no boost), values `> 1.0` promote, values
+    /// `< 1.0` suppress.
+    pub multiplier: f64,
+}
+
 /// Consolidated status overview: grouped targets, frontier, blocked, stale, WSJF ranking.
 #[mcp_tool(
     name = "bullseye_summary",
     description = "Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets, blocked targets with blockers, stale targets with inconsistent graph state, and top-N WSJF-ranked targets. \
-        Optionally accepts a `momentum` map (target ID -> multiplier) that scales each target's WSJF score before ranking; this lets a caller fold recency/frequency from mnemo_recent_activity (or any external signal) into the ordering without bullseye having to know about the source. Targets missing from the map default to 1.0 (no boost). \
+        Optionally accepts a `momentum` list ([{id, multiplier}, ...]) that scales each target's WSJF score before ranking; this lets a caller fold recency/frequency from mnemo_recent_activity (or any external signal) into the ordering without bullseye having to know about the source. Targets missing from the list default to 1.0 (no boost). \
         Replaces multiple calls to list/frontier/validate for status assessment."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -289,18 +308,20 @@ pub struct SummaryTool {
     #[serde(default)]
     pub top_n: Option<u32>,
 
-    /// Optional per-target momentum multipliers keyed by target ID.
-    /// When provided, each target's WSJF score is multiplied by its
-    /// momentum value (default 1.0 for targets not in the map) before
-    /// ranking. Targets with higher momentum rise; values below 1.0
-    /// suppress stale targets. The caller (typically the /cv skill)
-    /// computes these values from mnemo_recent_activity or any other
-    /// external signal — bullseye never calls mnemo directly, so
-    /// composition happens at the skill layer. The momentum formula
-    /// itself is the caller's responsibility and is therefore
-    /// tunable without touching bullseye.
+    /// Optional per-target momentum multipliers, as a list of
+    /// `{id, multiplier}` entries. When provided, each target's WSJF
+    /// score is multiplied by its listed multiplier (default 1.0 for
+    /// targets not in the list) before ranking. Targets with higher
+    /// multipliers rise; values below 1.0 suppress stale targets.
+    /// The caller (typically the /cv skill) computes these values
+    /// from `mnemo_recent_activity` or any other external signal —
+    /// bullseye never calls mnemo directly, so composition happens
+    /// at the skill layer. The multiplier formula itself is the
+    /// caller's responsibility and is therefore tunable without
+    /// touching bullseye. Duplicate `id` entries use the last
+    /// multiplier seen.
     #[serde(default)]
-    pub momentum: Option<std::collections::BTreeMap<String, f64>>,
+    pub momentum: Option<Vec<MomentumEntry>>,
 }
 
 tool_box!(

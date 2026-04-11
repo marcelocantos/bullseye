@@ -639,11 +639,24 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
 fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
     let top_n = t.top_n.unwrap_or(5) as usize;
+    // The wire format is a list of `{id, multiplier}` entries (because
+    // the rust-mcp-sdk derive can't schema-ify a keyed map), but
+    // `graph::summary` still takes the canonical keyed form. Flatten
+    // here. Duplicate ids keep the last multiplier — documented on
+    // `MomentumEntry`.
+    let momentum_map: Option<std::collections::BTreeMap<String, f64>> =
+        t.momentum.as_ref().map(|entries| {
+            let mut map = std::collections::BTreeMap::new();
+            for entry in entries {
+                map.insert(entry.id.clone(), entry.multiplier);
+            }
+            map
+        });
     let out = graph::summary(
         &file,
         &path.display().to_string(),
         top_n,
-        t.momentum.as_ref(),
+        momentum_map.as_ref(),
     );
     text_result(out)
 }
