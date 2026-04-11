@@ -45,5 +45,5 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 ## 2026-04-11 -- /release v0.8.0
 
-- **Commit**: pending
+- **Commit**: `afd2ae5`
 - **Outcome**: Released v0.8.0 (darwin-arm64, linux-amd64, linux-arm64). Breaking: retired the `gates` schema field in favour of single-edge-type `depends_on` (legacy files self-migrate on load); merged `bullseye_add` and `bullseye_update` into a unified `bullseye_assert` upsert tool with `blocks` sugar for upstream-declared dependencies and support for explicit sub-target IDs at creation. Settling clock reset for 1.0 eligibility. Homebrew formula updated.
