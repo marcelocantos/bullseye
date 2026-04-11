@@ -99,6 +99,22 @@ pub struct Target {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
 
+    /// Cross-repo dependencies: capabilities or targets in other repos
+    /// that this target depends on. Advisory only — does NOT block
+    /// frontier computation (the dependency lives outside this repo's
+    /// target graph, so bullseye can't authoritatively know when it's
+    /// satisfied). Surfaced in `bullseye_portfolio` so the human sees
+    /// the coupling.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cross_depends: Vec<CrossEdge>,
+
+    /// Cross-repo enablers: targets or capabilities in other repos
+    /// that this target unblocks. Used for value propagation — targets
+    /// with non-empty `cross_enables` get a priority boost in the
+    /// portfolio view since completing them unblocks work elsewhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cross_enables: Vec<CrossEdge>,
+
     /// For verify targets: which upstream targets this verifies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verifies: Vec<String>,
@@ -132,6 +148,59 @@ pub struct Target {
     /// Date the target was achieved (filled on retirement).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub achieved: Option<NaiveDate>,
+}
+
+/// A cross-repo edge — a link from a target in this repo to a target
+/// or capability in another repo. Used for both `cross_depends` (this
+/// target needs something from another repo) and `cross_enables`
+/// (completing this target unblocks work in another repo).
+///
+/// Either `target` (a specific target ID like `"T1.4"`) or `capability`
+/// (a free-form description of an API or feature) must be set — both
+/// are optional in the struct so callers can pick the shape that fits
+/// the reality of the reference, but [`crate::graph::validate`]
+/// rejects edges where neither is set. Setting both is allowed for
+/// edges that point at a specific target that also provides a named
+/// capability.
+///
+/// Cross-repo refs are intentionally not validated against a scanned
+/// portfolio: the reference may point at a repo the user hasn't asked
+/// bullseye to scan, or at a target that doesn't yet exist. Dangling
+/// refs stay valid; they just don't light up any cross-checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrossEdge {
+    /// Repository identifier (e.g. `"marcelocantos/jevon"`). Required;
+    /// `bullseye_portfolio` uses this to group edges and to match
+    /// against discovered repos.
+    pub repo: String,
+
+    /// Specific target ID in the referenced repo (e.g. `"T1.4"`).
+    /// Optional — leave unset when the reference is to a named
+    /// capability rather than a concrete target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+
+    /// Free-form capability name (e.g. `"Manager API"`). Optional —
+    /// leave unset when the reference is to a specific target ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
+
+    /// Human-readable note explaining the edge. Optional, free-form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl CrossEdge {
+    /// Human-readable reference: `target` if present, else `capability`,
+    /// else `"?"`. Used for rendering and error messages.
+    pub fn reference(&self) -> String {
+        match (&self.target, &self.capability) {
+            (Some(t), Some(c)) => format!("🎯{t} ({c})"),
+            (Some(t), None) => format!("🎯{t}"),
+            (None, Some(c)) => c.clone(),
+            (None, None) => "?".to_string(),
+        }
+    }
 }
 
 /// Legacy gate edge from older targets files. The edge is upstream→downstream

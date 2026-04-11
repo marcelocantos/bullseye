@@ -259,6 +259,27 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
             }
         }
 
+        // Cross-repo edges: format-only validation. We intentionally
+        // do NOT check that the referenced repo or target exists — the
+        // whole point of cross-repo edges is to track references that
+        // live outside this repo's graph, possibly outside any scanned
+        // portfolio. But each edge must carry a non-empty `repo` and
+        // at least one of `target` / `capability`, otherwise it's
+        // structurally meaningless.
+        for edge in t.cross_depends.iter().chain(t.cross_enables.iter()) {
+            if edge.repo.trim().is_empty() {
+                errors.push(format!("{id}: cross-repo edge has empty repo"));
+            }
+            if edge.target.as_deref().unwrap_or("").is_empty()
+                && edge.capability.as_deref().unwrap_or("").is_empty()
+            {
+                errors.push(format!(
+                    "{id}: cross-repo edge to {} must set `target` or `capability`",
+                    edge.repo,
+                ));
+            }
+        }
+
         // Verify targets must have verifies non-empty; work targets must not.
         if t.kind == Kind::Verify && t.verifies.is_empty() {
             errors.push(format!("{id}: verify target must have non-empty verifies"));

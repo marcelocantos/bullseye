@@ -152,6 +152,8 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 context,
                 gates: fields.gates,
                 depends_on: fields.depends_on,
+                cross_depends: Vec::new(),
+                cross_enables: Vec::new(),
                 verifies: fields.verifies,
                 rework: fields.rework,
                 retry_budget: fields.retry_budget,

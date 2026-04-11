@@ -120,6 +120,8 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
             context: "Starter target — replace with your project's actual first goal.".to_string(),
             gates: Vec::new(),
             depends_on: Vec::new(),
+            cross_depends: Vec::new(),
+            cross_enables: Vec::new(),
             verifies: Vec::new(),
             rework: None,
             retry_budget: None,
