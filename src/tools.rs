@@ -292,36 +292,68 @@ pub struct MomentumEntry {
     pub multiplier: f64,
 }
 
-/// Consolidated status overview: grouped targets, frontier, blocked, stale, WSJF ranking.
+/// Consolidated status overview: grouped targets, focus-ordered frontier, blocked, stale.
 #[mcp_tool(
     name = "bullseye_summary",
-    description = "Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets, blocked targets with blockers, stale targets with inconsistent graph state, and top-N WSJF-ranked targets. \
-        Optionally accepts a `momentum` list ([{id, multiplier}, ...]) that scales each target's WSJF score before ranking; this lets a caller fold recency/frequency from mnemo_recent_activity (or any external signal) into the ordering without bullseye having to know about the source. Targets missing from the list default to 1.0 (no boost). \
-        Replaces multiple calls to list/frontier/validate for status assessment."
+    description = "Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets ordered by focus (value × momentum), blocked targets with blockers, and stale targets with inconsistent graph state. \
+        Optionally accepts a `momentum` list ([{id, multiplier}, ...]) that scales each target's value before sorting the frontier; caller supplies the multipliers (e.g. from mnemo_recent_activity). Targets missing from the list default to 1.0 (no boost). \
+        `frontier_details: true` expands each frontier entry with its full acceptance criteria, context, and edges — useful when you would otherwise round-trip `bullseye_get` on every frontier target. \
+        Replaces multiple calls to list/frontier/validate/get for status assessment."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct SummaryTool {
     /// Working directory to discover targets.yaml from.
     pub cwd: String,
 
-    /// How many WSJF-ranked targets to include (default: 5).
-    #[serde(default)]
-    pub top_n: Option<u32>,
-
     /// Optional per-target momentum multipliers, as a list of
-    /// `{id, multiplier}` entries. When provided, each target's WSJF
-    /// score is multiplied by its listed multiplier (default 1.0 for
-    /// targets not in the list) before ranking. Targets with higher
-    /// multipliers rise; values below 1.0 suppress stale targets.
+    /// `{id, multiplier}` entries. When provided, each frontier
+    /// target's value is multiplied by its listed multiplier (default
+    /// 1.0 for targets not in the list) before sorting, so
+    /// recently-active targets rise and stale ones sink. Targets with
+    /// higher multipliers rank higher; values below 1.0 suppress.
     /// The caller (typically the /cv skill) computes these values
     /// from `mnemo_recent_activity` or any other external signal —
     /// bullseye never calls mnemo directly, so composition happens
-    /// at the skill layer. The multiplier formula itself is the
-    /// caller's responsibility and is therefore tunable without
-    /// touching bullseye. Duplicate `id` entries use the last
+    /// at the skill layer. Duplicate `id` entries use the last
     /// multiplier seen.
     #[serde(default)]
     pub momentum: Option<Vec<MomentumEntry>>,
+
+    /// When true, expand each frontier entry with its full detail:
+    /// acceptance criteria, context, depends_on, verifies, rework,
+    /// and tags. Useful for callers that would otherwise round-trip
+    /// `bullseye_get` on every frontier target. Default: false.
+    #[serde(default)]
+    pub frontier_details: Option<bool>,
+}
+
+/// End-to-end convergence evaluation: invariants + unreleased fixes + targets + recommendation.
+#[mcp_tool(
+    name = "bullseye_convergence",
+    description = "Answer \"what's the next most-valuable thing to work on?\" in a single tool call. \
+        Runs the project's `make bullseye` (or `mk bullseye`) rule to check standing invariants, \
+        scans git for unreleased bug-fix commits since the last tag, emits the full target summary \
+        with frontier details inline, and computes a deterministic next-action recommendation \
+        (\"Execute now\" / \"Blocked\"). \
+        Consolidates the old /cv worker's many round-trips into one call. Requires a `bullseye` \
+        target in Makefile or mkfile; returns setup instructions if missing."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ConvergenceTool {
+    /// Working directory to discover targets.yaml and the build file from.
+    pub cwd: String,
+
+    /// Optional per-target momentum multipliers (same shape as
+    /// `bullseye_summary`). Caller computes these from external signal;
+    /// bullseye never calls mnemo directly.
+    #[serde(default)]
+    pub momentum: Option<Vec<MomentumEntry>>,
+
+    /// When true, skip the `make bullseye` / `mk bullseye` invocation
+    /// and omit the invariants check. Useful for a lightweight scan
+    /// that just reports the target graph state. Default: false.
+    #[serde(default)]
+    pub skip_invariants: Option<bool>,
 }
 
 tool_box!(
@@ -341,6 +373,7 @@ tool_box!(
         ImportTool,
         StartupContextTool,
         PortfolioTool,
-        SummaryTool
+        SummaryTool,
+        ConvergenceTool
     ]
 );

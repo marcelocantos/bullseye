@@ -9,15 +9,24 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.10.0. v0.9.0 shipped a broken `bullseye_summary`
-schema (the `momentum` parameter used a keyed map that the
-rust-mcp-sdk derive can't schema-ify, producing `type: "unknown"` —
-rejected by the Anthropic API). v0.10.0 reshapes the parameter to a
-list of `{id, multiplier}` entries, which generates a valid Draft
-2020-12 schema. A new regression test asserts that no tool emits a
-schema with a forbidden `type` value, so this class of bug can't
-ship again. The MCP tool surface is otherwise additive since v0.8.0.
-The settling clock for 1.0 eligibility continues from v0.8.0.
+Snapshot as of v0.11.0. Two structural changes since v0.10.0:
+
+1. **WSJF ranking purged.** The `## WSJF ranking (top N)` section in
+   `bullseye_summary` — which had quietly reappeared in v0.7.0 after
+   being removed in v0.4.0 — is gone. Frontier-first scheduling is
+   the model. The frontier section itself is now the prioritised
+   list, ordered by `focus = value × momentum`. The `top_n` parameter
+   on `bullseye_summary` is removed. Momentum stays as an advisory
+   reordering signal, not a ranking primitive.
+2. **`bullseye_convergence` added.** Single-call convergence
+   evaluation that runs `make bullseye` for standing invariants,
+   scans git for unreleased fixes, emits the target summary with
+   inline frontier details, and computes a deterministic next-action
+   recommendation. Replaces the multi-call `/cv` worker pattern.
+
+Both are breaking changes to `bullseye_summary`'s output format (no
+more WSJF section, `top_n` parameter gone), acceptable pre-1.0. The
+settling clock for 1.0 eligibility continues from v0.8.0.
 
 ### MCP tools
 
@@ -37,7 +46,8 @@ The settling clock for 1.0 eligibility continues from v0.8.0.
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
 | `bullseye_startup_context(cwd, recent_days)` | Needs review | v0.9.0 degrades gracefully on missing / unreadable / unparsable files; still fails loudly on `schema_version` mismatch. |
 | `bullseye_portfolio(root, max_depth)` | Needs review | v0.9.0 surfaces load warnings (especially `schema_version` mismatches) under a `## ⚠ Warnings` section instead of silently dropping affected repos. |
-| `bullseye_summary(cwd, top_n, momentum?)` | Needs review | `momentum` added in v0.9.0, reshaped in v0.10.0 to a list of `{id, multiplier}` entries (the keyed-map form in v0.9.0 produced an invalid tool schema). Scales WSJF before ranking; absent entries default to 1.0. Composition happens at the skill layer; bullseye never calls mnemo. |
+| `bullseye_summary(cwd, momentum?, frontier_details?)` | Needs review | `momentum` added in v0.9.0, reshaped in v0.10.0 to a list of `{id, multiplier}` entries. WSJF-ranking section removed in v0.11.0 — frontier-first scheduling is the model, and the frontier section itself is the prioritised list (ordered by `value × momentum`). `frontier_details: true` expands each frontier entry with full acceptance, context, and edges. Composition happens at the skill layer; bullseye never calls mnemo. |
+| `bullseye_convergence(cwd, momentum?, skip_invariants?)` | Needs review | New in v0.11.0. Single-call convergence evaluation: invariants via `make bullseye` / `mk bullseye`, git-based unreleased-fix detection, summary with inline frontier details, and a deterministic next-action recommendation. Absorbs most of the old `/cv` worker logic into a stateless tool call. Missing hook degrades gracefully with embedded setup instructions; frontier recommendation still fires. |
 
 **Removed in v0.8.0** (breaking):
 - `bullseye_add` — replaced by `bullseye_assert` (upsert)

@@ -46,7 +46,7 @@ The server communicates over stdio using the MCP protocol.
 
 ## Tools
 
-Bullseye exposes 15 MCP tools. All accept a `cwd` parameter to locate
+Bullseye exposes 16 MCP tools. All accept a `cwd` parameter to locate
 the nearest `targets.yaml`.
 
 | Tool | Description |
@@ -65,7 +65,8 @@ the nearest `targets.yaml`.
 | `bullseye_init` | Create starter targets.yaml with sample target |
 | `bullseye_startup_context` | Session startup context (frontier, recent achievements, warnings) |
 | `bullseye_portfolio` | Cross-repo portfolio summary with frontier targets |
-| `bullseye_summary` | Consolidated status overview (groups, frontier, blocked, stale, WSJF) |
+| `bullseye_summary` | Consolidated status overview: groups, focus-ordered frontier, blocked, stale. Optional `momentum` parameter and `frontier_details` expansion. |
+| `bullseye_convergence` | End-to-end convergence evaluation: runs `make bullseye` for invariants, scans git for unreleased fixes, emits summary with frontier detail inline, and computes a deterministic next-action recommendation. Single call, replaces the old multi-tool `/cv` worker. |
 
 See [agents-guide.md](docs/agents-guide.md) for detailed tool
 parameters, the targets.yaml schema, usage workflows, and a

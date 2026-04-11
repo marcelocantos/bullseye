@@ -444,18 +444,22 @@ pub fn startup_context_broken_file(file_path: &str, error: &str) -> String {
 
 /// Produce a consolidated status overview for agent consumption.
 ///
-/// If `momentum` is `Some`, the WSJF ranking section multiplies each
-/// target's raw WSJF score by its momentum multiplier before sorting.
-/// Targets missing from the map default to 1.0 (no boost), preserving
-/// backward compatibility for callers that don't supply momentum data.
-/// The caller is responsible for computing momentum values from any
-/// external signal (typically `mnemo_recent_activity`); bullseye
-/// itself never calls out to mnemo.
+/// The frontier section is ordered by `focus = value × momentum`
+/// descending. If `momentum` is `Some`, each frontier target's value
+/// is multiplied by its listed multiplier (default 1.0 for targets
+/// not in the map) before sorting, so recently-active targets rise
+/// and stale ones sink. The multiplier formula itself is the caller's
+/// responsibility — bullseye never calls out to mnemo.
+///
+/// When `frontier_details` is true, each frontier entry is expanded
+/// with its full acceptance criteria, context, tags, and related edges.
+/// This is what `bullseye_convergence` uses to avoid a `bullseye_get`
+/// loop on the frontier; plain `bullseye_summary` leaves it off.
 pub fn summary(
     file: &TargetsFile,
     file_path: &str,
-    top_n: usize,
     momentum: Option<&BTreeMap<String, f64>>,
+    frontier_details: bool,
 ) -> String {
     let mut out = String::new();
 
@@ -555,28 +559,78 @@ pub fn summary(
     }
     out.push('\n');
 
-    // --- 2. Frontier ---
+    // --- 2. Frontier (ordered by focus = value × momentum) ---
+    //
+    // Momentum folds directly into frontier ordering instead of a
+    // separate ranking section. `focus = value × momentum_lookup(id, 1.0)`,
+    // sorted descending. When momentum is absent, the multiplier
+    // defaults to 1.0 for every target, so the sort reduces to
+    // "by value desc" with stable ID-order tiebreaks.
+    let has_momentum = momentum.is_some();
     if errors.is_empty() {
         let front = frontier(file);
+        let mut scored: Vec<(FrontierTarget, f64, f64, f64)> = front
+            .iter()
+            .map(|ft| {
+                let value = all_targets.get(&ft.id).map(|t| t.value).unwrap_or(0.0);
+                let m = momentum
+                    .and_then(|mm| mm.get(&ft.id).copied())
+                    .unwrap_or(1.0);
+                let focus = value * m;
+                (ft.clone(), value, m, focus)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+
         out.push_str("## Frontier (unblocked, ready for work)\n\n");
-        if front.is_empty() {
+        if scored.is_empty() {
             out.push_str("(no targets ready for work)\n");
         } else {
-            for ft in &front {
+            for (ft, value, m, focus) in &scored {
                 let kind_label = match ft.kind {
                     Kind::Work => "",
                     Kind::Verify => " [verify]",
                 };
-                out.push_str(&format!(
-                    "🎯{} {}{kind_label}  [{:?}]\n",
-                    ft.id, ft.name, ft.status,
-                ));
+                // Annotate format depends on whether a momentum map was
+                // provided at all. When it was, every entry shows its
+                // focus score so the caller can see the full ordering
+                // math; when it wasn't, render the plain baseline shape.
+                if has_momentum {
+                    if (m - 1.0).abs() < 1e-6 {
+                        out.push_str(&format!(
+                            "🎯{id} {name}{kind}  [{status:?}] — focus {focus:.1} (v={value})\n",
+                            id = ft.id,
+                            name = ft.name,
+                            kind = kind_label,
+                            status = ft.status,
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "🎯{id} {name}{kind}  [{status:?}] — focus {focus:.1} (v={value} × momentum {m:.2})\n",
+                            id = ft.id,
+                            name = ft.name,
+                            kind = kind_label,
+                            status = ft.status,
+                        ));
+                    }
+                } else {
+                    out.push_str(&format!(
+                        "🎯{id} {name}{kind}  [{status:?}]  v={value}\n",
+                        id = ft.id,
+                        name = ft.name,
+                        kind = kind_label,
+                        status = ft.status,
+                    ));
+                }
+                if frontier_details {
+                    render_frontier_detail(&mut out, &ft.id, all_targets);
+                }
             }
         }
         out.push('\n');
 
         // --- 3. Blocked targets ---
-        let front_ids: HashSet<&str> = front.iter().map(|f| f.id.as_str()).collect();
+        let front_ids: HashSet<&str> = scored.iter().map(|(f, _, _, _)| f.id.as_str()).collect();
         let blocked: Vec<(&str, &crate::schema::Target)> = active
             .iter()
             .filter(|(id, _)| !front_ids.contains(**id))
@@ -673,62 +727,54 @@ pub fn summary(
         out.push('\n');
     }
 
-    // --- 5. WSJF ranking (optionally momentum-adjusted) ---
-    // For each active target with cost > 0, compute (wsjf, adjusted),
-    // where `adjusted = wsjf * momentum[id].unwrap_or(1.0)`. Sorting
-    // is by the adjusted score so that momentum can move targets up
-    // or down the ranking; when no momentum is provided, `adjusted`
-    // equals `wsjf` and the ordering is identical to the legacy
-    // pure-WSJF behaviour.
-    let mut ranked: Vec<(&str, &crate::schema::Target, f64, f64)> = active
-        .iter()
-        .filter(|(_, t)| t.cost > 0.0)
-        .map(|(&id, t)| {
-            let wsjf = t.value / t.cost;
-            let m = momentum.and_then(|mm| mm.get(id).copied()).unwrap_or(1.0);
-            (id, *t, wsjf, wsjf * m)
-        })
-        .collect();
-    ranked.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
-    ranked.truncate(top_n);
-
-    if !ranked.is_empty() {
-        let heading = if momentum.is_some() {
-            format!(
-                "## WSJF ranking, momentum-adjusted (top {})\n\n",
-                ranked.len()
-            )
-        } else {
-            format!("## WSJF ranking (top {})\n\n", ranked.len())
-        };
-        out.push_str(&heading);
-        for (i, (id, target, wsjf, adjusted)) in ranked.iter().enumerate() {
-            let momentum_mul = adjusted / wsjf;
-            // Hide the momentum annotation when it's a pure 1.0 (either
-            // no momentum map, or this target had the default) so the
-            // baseline output stays uncluttered.
-            if (momentum_mul - 1.0).abs() < 1e-6 {
-                out.push_str(&format!(
-                    "{}. 🎯{id} {} — WSJF {wsjf:.1} (v={}, c={})\n",
-                    i + 1,
-                    target.name,
-                    target.value,
-                    target.cost,
-                ));
-            } else {
-                out.push_str(&format!(
-                    "{}. 🎯{id} {} — {adjusted:.1} (WSJF {wsjf:.1} × momentum {momentum_mul:.2}, v={}, c={})\n",
-                    i + 1,
-                    target.name,
-                    target.value,
-                    target.cost,
-                ));
-            }
-        }
-        out.push('\n');
-    }
-
     out
+}
+
+/// Render the detail block for a single frontier target — acceptance
+/// criteria, context, tags, and relevant edges. Used when
+/// `frontier_details` is true on [`summary`] (via `bullseye_convergence`),
+/// so the caller gets the same information a `bullseye_get` would
+/// return for each frontier entry, without round-tripping.
+fn render_frontier_detail(
+    out: &mut String,
+    id: &str,
+    all_targets: &BTreeMap<String, crate::schema::Target>,
+) {
+    let Some(t) = all_targets.get(id) else {
+        return;
+    };
+    if !t.acceptance.is_empty() {
+        out.push_str("    Acceptance:\n");
+        for line in &t.acceptance {
+            out.push_str(&format!("      - {line}\n"));
+        }
+    }
+    if !t.context.is_empty() {
+        // Indent context to keep it visually nested under its target.
+        // Multi-line context is flattened to a single indented block.
+        let indented = t
+            .context
+            .lines()
+            .map(|l| format!("      {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push_str(&format!("    Context:\n{indented}\n"));
+    }
+    if !t.depends_on.is_empty() {
+        let deps: Vec<String> = t.depends_on.iter().map(|d| format!("🎯{d}")).collect();
+        out.push_str(&format!("    Depends on: {}\n", deps.join(", ")));
+    }
+    if !t.verifies.is_empty() {
+        let vs: Vec<String> = t.verifies.iter().map(|v| format!("🎯{v}")).collect();
+        out.push_str(&format!("    Verifies: {}\n", vs.join(", ")));
+    }
+    if let Some(ref rework) = t.rework {
+        out.push_str(&format!("    Rework: 🎯{rework}\n"));
+    }
+    if !t.tags.is_empty() {
+        out.push_str(&format!("    Tags: {}\n", t.tags.join(", ")));
+    }
+    out.push('\n');
 }
 
 fn mermaid_node(id: &str) -> String {

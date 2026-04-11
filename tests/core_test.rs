@@ -841,23 +841,25 @@ fn startup_context_shows_tunnel_warnings() {
 #[test]
 fn summary_shows_totals_and_sections() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test/docs/targets.yaml", 5, None);
+    let out = graph::summary(&file, "test/docs/targets.yaml", None, false);
 
     // Header with counts.
     assert!(out.contains("Total: 5 target(s)"));
     assert!(out.contains("4 active"));
     assert!(out.contains("1 achieved"));
 
-    // Has key sections.
+    // Has key sections. No WSJF ranking section any more — frontier
+    // itself carries the focus ordering.
     assert!(out.contains("## Active targets by group"));
     assert!(out.contains("## Frontier"));
-    assert!(out.contains("## WSJF ranking"));
+    assert!(!out.contains("## WSJF ranking"));
+    assert!(!out.contains("WSJF"));
 }
 
 #[test]
 fn summary_shows_frontier_targets() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test", 5, None);
+    let out = graph::summary(&file, "test", None, false);
 
     // Frontier should include T1, T2, T3 (unblocked).
     let frontier_section = out.split("## Frontier").nth(1).unwrap();
@@ -873,7 +875,7 @@ fn summary_shows_frontier_targets() {
 #[test]
 fn summary_shows_blocked_targets() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test", 5, None);
+    let out = graph::summary(&file, "test", None, false);
 
     // T5 depends on T1+T3 (not achieved), so it's blocked.
     assert!(out.contains("## Blocked targets"));
@@ -882,38 +884,324 @@ fn summary_shows_blocked_targets() {
 }
 
 #[test]
-fn summary_wsjf_ranking_ordered() {
+fn summary_frontier_ordered_by_value() {
+    // No momentum → focus = value, so the frontier is sorted by
+    // target value desc. The fixture's frontier is T1 (v=8), T3 (v=5),
+    // T2 (v=3). T5 is a verify target blocked on T1+T3 so it's not
+    // in the frontier; T4 is achieved.
     let file = load_fixture();
-    let out = graph::summary(&file, "test", 5, None);
+    let out = graph::summary(&file, "test", None, false);
 
-    // T5: v=3, c=1, WSJF=3.0
-    // T1: v=8, c=3, WSJF=2.67
-    // T3: v=5, c=5, WSJF=1.0 (but also has gate on T1)
-    // T2: v=3, c=2, WSJF=1.5
-    // Order should be T5(3.0), T1(2.67), T2(1.5), T3(1.0)
-    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
-    let t5_pos = wsjf_section.find("🎯T5").unwrap();
-    let t1_pos = wsjf_section.find("🎯T1").unwrap();
-    let t2_pos = wsjf_section.find("🎯T2").unwrap();
-    let t3_pos = wsjf_section.find("🎯T3").unwrap();
-    assert!(t5_pos < t1_pos, "T5 (WSJF 3.0) should rank above T1 (2.67)");
-    assert!(t1_pos < t2_pos, "T1 (WSJF 2.67) should rank above T2 (1.5)");
-    assert!(t2_pos < t3_pos, "T2 (WSJF 1.5) should rank above T3 (1.0)");
+    let frontier_section = out
+        .split("## Frontier")
+        .nth(1)
+        .expect("frontier section exists");
+    let end = frontier_section
+        .find("\n## ")
+        .unwrap_or(frontier_section.len());
+    let frontier_text = &frontier_section[..end];
+
+    let t1_pos = frontier_text.find("🎯T1").expect("T1 in frontier");
+    let t3_pos = frontier_text.find("🎯T3").expect("T3 in frontier");
+    let t2_pos = frontier_text.find("🎯T2").expect("T2 in frontier");
+
+    assert!(
+        t1_pos < t3_pos,
+        "T1 (v=8) should rank above T3 (v=5); got: {frontier_text}"
+    );
+    assert!(
+        t3_pos < t2_pos,
+        "T3 (v=5) should rank above T2 (v=3); got: {frontier_text}"
+    );
+    // Without momentum, the plain baseline shape is used.
+    assert!(frontier_text.contains("v=8"));
+    assert!(!frontier_text.contains("focus"));
+    assert!(!frontier_text.contains("momentum"));
+}
+
+// --- Convergence integration tests ---
+
+fn write_project(tmp: &std::path::Path, makefile: &str, targets_yaml: &str) {
+    use std::io::Write;
+    let docs = tmp.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    write!(
+        std::fs::File::create(docs.join("targets.yaml")).unwrap(),
+        "{targets_yaml}"
+    )
+    .unwrap();
+    write!(
+        std::fs::File::create(tmp.join("Makefile")).unwrap(),
+        "{makefile}"
+    )
+    .unwrap();
+}
+
+const SIMPLE_TARGETS_YAML: &str = r#"
+schema_version: 1
+targets:
+  T1:
+    name: Primary deliverable
+    status: identified
+    value: 8
+    cost: 3
+    acceptance:
+      - Produces the primary artifact
+      - Tests cover the happy path
+    context: The highest-value thing in the project.
+    discovered: 2026-04-01
+  T2:
+    name: Secondary polish
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - Rough edges smoothed
+    discovered: 2026-04-01
+"#;
+
+#[test]
+fn convergence_end_to_end_green_invariants_picks_top_frontier() {
+    // Full integration: real temp project, real Makefile that exits 0,
+    // real targets.yaml, real convergence pipeline. Verifies the whole
+    // path from hook invocation to recommendation text.
+    let tmp = tempfile::tempdir().unwrap();
+    // `true` is a trivial program that exits 0 — standing invariants green.
+    let makefile = "bullseye:\n\t@true\n";
+    write_project(tmp.path(), makefile, SIMPLE_TARGETS_YAML);
+
+    let path = tmp.path().join("docs/targets.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+
+    assert!(out.contains("# Convergence"));
+    assert!(out.contains("## Invariants"));
+    assert!(
+        out.contains("Status: ✓ all green"),
+        "expected green status; got:\n{out}"
+    );
+    assert!(out.contains("## Unreleased fixes"));
+    // No git history in the temp dir → no tag → no unreleased fixes reported.
+    assert!(out.contains("(none"));
+    assert!(out.contains("## Frontier"));
+    // Frontier should include both targets with full details inline.
+    assert!(out.contains("🎯T1 Primary deliverable"));
+    assert!(out.contains("🎯T2 Secondary polish"));
+    assert!(
+        out.contains("Produces the primary artifact"),
+        "frontier details should include acceptance criteria; got:\n{out}"
+    );
+    assert!(
+        out.contains("The highest-value thing in the project."),
+        "frontier details should include context; got:\n{out}"
+    );
+    assert!(out.contains("## Next action"));
+    assert!(
+        out.contains("**Execute now**: Work on 🎯T1 Primary deliverable"),
+        "expected top-focus target as next action; got:\n{out}"
+    );
+    // No WSJF references anywhere in the convergence output.
+    assert!(!out.to_lowercase().contains("wsjf"));
 }
 
 #[test]
-fn summary_top_n_limits_wsjf() {
-    let file = load_fixture();
-    let out = graph::summary(&file, "test", 2, None);
+fn convergence_end_to_end_red_invariants_blocks() {
+    let tmp = tempfile::tempdir().unwrap();
+    // `false` exits 1 — standing invariants red.
+    let makefile = "bullseye:\n\t@echo 'tests failing'; false\n";
+    write_project(tmp.path(), makefile, SIMPLE_TARGETS_YAML);
 
-    // Should only show top 2.
-    assert!(out.contains("## WSJF ranking (top 2)"));
-    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
-    // Should have T5 and T1 but not T2 or T3.
-    assert!(wsjf_section.contains("🎯T5"));
-    assert!(wsjf_section.contains("🎯T1"));
-    assert!(!wsjf_section.contains("🎯T2"));
-    assert!(!wsjf_section.contains("🎯T3"));
+    let path = tmp.path().join("docs/targets.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+
+    assert!(out.contains("Status: ✗ failed"));
+    assert!(out.contains("tests failing"));
+    let next = out
+        .split("## Next action")
+        .nth(1)
+        .expect("next action section");
+    assert!(
+        next.contains("**Blocked**"),
+        "blocked recommendation expected; got:\n{next}"
+    );
+    assert!(next.contains("invariants failing"));
+    // Crucially: the Execute now path must NOT fire when invariants fail,
+    // even though there are perfectly good frontier targets.
+    assert!(!next.contains("**Execute now**"));
+}
+
+#[test]
+fn convergence_end_to_end_skip_invariants_flag_bypasses_hook() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Red Makefile — but we're skipping, so it should never run.
+    let makefile = "bullseye:\n\t@echo 'would have failed'; false\n";
+    write_project(tmp.path(), makefile, SIMPLE_TARGETS_YAML);
+
+    let path = tmp.path().join("docs/targets.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, true);
+
+    assert!(out.contains("(skipped"));
+    assert!(!out.contains("would have failed"));
+    assert!(!out.contains("Status: ✗"));
+    // With invariants skipped and no unreleased fixes, we should go
+    // straight to the frontier-based recommendation.
+    let next = out
+        .split("## Next action")
+        .nth(1)
+        .expect("next action section");
+    assert!(
+        next.contains("**Execute now**: Work on 🎯T1"),
+        "expected top-focus target as next action; got:\n{next}"
+    );
+}
+
+#[test]
+fn convergence_missing_makefile_degrades_gracefully() {
+    // A repo with targets.yaml but no Makefile. Convergence must
+    // still run to completion — emit the target snapshot, mark
+    // invariants as unknown with setup instructions embedded, and
+    // still produce a frontier recommendation.
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    use std::io::Write;
+    write!(
+        std::fs::File::create(docs.join("targets.yaml")).unwrap(),
+        "{SIMPLE_TARGETS_YAML}"
+    )
+    .unwrap();
+    // Note: NO Makefile.
+
+    let path = docs.join("targets.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+
+    // Full convergence shape is present.
+    assert!(out.contains("# Convergence"));
+    assert!(out.contains("## Invariants"));
+    assert!(out.contains("## Unreleased fixes"));
+    assert!(out.contains("## Frontier"));
+    assert!(out.contains("## Next action"));
+
+    // Invariants section includes the setup warning inline.
+    let invariants_section = out
+        .split("## Invariants")
+        .nth(1)
+        .expect("invariants section");
+    let end = invariants_section
+        .find("\n## ")
+        .unwrap_or(invariants_section.len());
+    let invariants_text = &invariants_section[..end];
+    assert!(invariants_text.contains("⚠"));
+    assert!(invariants_text.contains("not configured"));
+    assert!(invariants_text.contains("Makefile"));
+    assert!(invariants_text.contains("bullseye:"));
+    assert!(invariants_text.contains("unknown"));
+
+    // Target snapshot still renders — the frontier has details.
+    assert!(out.contains("🎯T1 Primary deliverable"));
+    assert!(out.contains("Produces the primary artifact"));
+
+    // Next action still fires — frontier recommendation — with a
+    // prominent note that invariants are unknown.
+    let next = out.split("## Next action").nth(1).expect("next action");
+    assert!(
+        next.contains("**Execute now**: Work on 🎯T1"),
+        "frontier recommendation should still fire when hook is missing; got:\n{next}"
+    );
+    assert!(
+        next.contains("standing invariants are **unknown**"),
+        "should warn that invariants are unknown; got:\n{next}"
+    );
+}
+
+#[test]
+fn convergence_makefile_without_bullseye_rule_degrades_gracefully() {
+    // Same shape as the no-Makefile case, but with a Makefile that
+    // exists but has no `bullseye` target. The setup warning should
+    // identify the specific build file so the fix is obvious.
+    let tmp = tempfile::tempdir().unwrap();
+    write_project(tmp.path(), "all:\n\t@echo hello\n", SIMPLE_TARGETS_YAML);
+
+    let path = tmp.path().join("docs/targets.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+
+    let invariants_section = out
+        .split("## Invariants")
+        .nth(1)
+        .expect("invariants section");
+    let end = invariants_section
+        .find("\n## ")
+        .unwrap_or(invariants_section.len());
+    let invariants_text = &invariants_section[..end];
+    assert!(invariants_text.contains("found `Makefile`"));
+    assert!(invariants_text.contains("no `bullseye` target"));
+
+    // Frontier recommendation still fires.
+    let next = out.split("## Next action").nth(1).expect("next action");
+    assert!(next.contains("**Execute now**: Work on 🎯T1"));
+}
+
+#[test]
+fn convergence_unreleased_fixes_detected_in_git_repo() {
+    // Initialise a real git repo in a temp dir, tag it, then add a
+    // "Fix ..." commit so convergence sees an unreleased fix.
+    use std::process::Command;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path();
+    write_project(path, "bullseye:\n\t@true\n", SIMPLE_TARGETS_YAML);
+
+    // Minimal git init + config + tag + commit sequence.
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+    };
+    git(&["init", "-q", "-b", "master"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "Initial"]);
+    git(&["tag", "v0.1.0"]);
+
+    // Touch a file and make a fix commit.
+    std::fs::write(path.join("README.md"), "hello\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-q", "-m", "Fix missing README for v0.1.0"]);
+
+    let yaml_path = path.join("docs/targets.yaml");
+    let file = store::load(&yaml_path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &yaml_path, path, None, false);
+
+    let unreleased_section = out
+        .split("## Unreleased fixes")
+        .nth(1)
+        .expect("unreleased section exists");
+    assert!(
+        unreleased_section.contains("Fix missing README"),
+        "expected fix commit in unreleased section; got:\n{unreleased_section}"
+    );
+    // Priority 2: unreleased fixes take precedence — expect /release as next action.
+    let next = out
+        .split("## Next action")
+        .nth(1)
+        .expect("next action section");
+    assert!(
+        next.contains("**Execute now**: Run `/release`"),
+        "expected /release next action; got:\n{next}"
+    );
 }
 
 #[test]
@@ -955,88 +1243,110 @@ fn every_tool_emits_valid_json_schema() {
 }
 
 #[test]
-fn summary_momentum_reorders_ranking() {
+fn summary_momentum_reorders_frontier() {
     use std::collections::BTreeMap;
 
-    // Baseline: T5(3.0) > T1(2.67) > T2(1.5) > T3(1.0).
-    // Give T3 a 5x momentum boost → adjusted 5.0, should jump to the top.
-    // Give T1 a 0.5x suppression → adjusted 1.33, should drop below T2(1.5).
-    // Expected order: T3(5.0), T5(3.0), T2(1.5), T1(1.33).
+    // Baseline frontier ordering (value desc): T1 (v=8), T3 (v=5), T2 (v=3).
+    // Apply momentum:
+    //   T3 × 5.0 → focus 25.0 (jumps to top)
+    //   T1 × 0.5 → focus  4.0 (drops below T2)
+    //   T2 × 1.0 → focus  3.0 (default, no explicit entry)
+    // Expected order desc: T3 (25), T1 (4), T2 (3).
     let file = load_fixture();
     let mut momentum = BTreeMap::new();
     momentum.insert("T3".to_string(), 5.0);
     momentum.insert("T1".to_string(), 0.5);
-    let out = graph::summary(&file, "test", 5, Some(&momentum));
+    let out = graph::summary(&file, "test", Some(&momentum), false);
 
-    // Section heading is labelled momentum-adjusted so consumers can
-    // distinguish from the baseline rendering.
-    assert!(out.contains("## WSJF ranking, momentum-adjusted"));
+    // No WSJF section at all.
+    assert!(!out.contains("## WSJF ranking"));
+    assert!(!out.contains("WSJF"));
 
-    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
-    let t3_pos = wsjf_section.find("🎯T3").expect("T3 in ranking");
-    let t5_pos = wsjf_section.find("🎯T5").expect("T5 in ranking");
-    let t2_pos = wsjf_section.find("🎯T2").expect("T2 in ranking");
-    let t1_pos = wsjf_section.find("🎯T1").expect("T1 in ranking");
+    let frontier_section = out
+        .split("## Frontier")
+        .nth(1)
+        .expect("frontier section exists");
+    let end = frontier_section
+        .find("\n## ")
+        .unwrap_or(frontier_section.len());
+    let frontier_text = &frontier_section[..end];
+
+    let t3_pos = frontier_text.find("🎯T3").expect("T3 in frontier");
+    let t1_pos = frontier_text.find("🎯T1").expect("T1 in frontier");
+    let t2_pos = frontier_text.find("🎯T2").expect("T2 in frontier");
 
     assert!(
-        t3_pos < t5_pos,
-        "T3 (boosted to 5.0) should rank above T5 (3.0). Got: {wsjf_section}"
+        t3_pos < t1_pos,
+        "T3 (focus 25.0) should rank above T1 (focus 4.0). Got:\n{frontier_text}"
     );
-    assert!(t5_pos < t2_pos, "T5 (3.0) should rank above T2 (1.5)");
     assert!(
-        t2_pos < t1_pos,
-        "T2 (1.5) should rank above T1 (suppressed to 1.33). Got: {wsjf_section}"
+        t1_pos < t2_pos,
+        "T1 (focus 4.0) should rank above T2 (focus 3.0). Got:\n{frontier_text}"
     );
 
-    // Adjusted entries should show the momentum annotation; T2 (no
-    // entry in the map) should render with the plain WSJF form.
-    assert!(wsjf_section.contains("momentum 5.00"));
-    assert!(wsjf_section.contains("momentum 0.50"));
-    // T2 has no momentum entry — default 1.0 → plain form, no
-    // "momentum 1.00" annotation in its line.
-    let t2_line_end = wsjf_section[t2_pos..]
+    // Boosted and suppressed targets show both focus and momentum
+    // annotations. Baseline entries (no explicit momentum entry) show
+    // focus but elide the "× momentum" clause.
+    assert!(frontier_text.contains("focus 25.0"));
+    assert!(frontier_text.contains("focus 4.0"));
+    assert!(frontier_text.contains("focus 3.0"));
+    assert!(frontier_text.contains("momentum 5.00"));
+    assert!(frontier_text.contains("momentum 0.50"));
+
+    // T2 has no momentum entry — its line shows "(v=3)" without the
+    // "× momentum" clause.
+    let t2_line_end = frontier_text[t2_pos..]
         .find('\n')
         .map(|n| t2_pos + n)
-        .unwrap_or(wsjf_section.len());
-    let t2_line = &wsjf_section[t2_pos..t2_line_end];
+        .unwrap_or(frontier_text.len());
+    let t2_line = &frontier_text[t2_pos..t2_line_end];
     assert!(
-        !t2_line.contains("momentum"),
-        "T2 has no momentum entry and should render without the annotation: {t2_line}"
+        !t2_line.contains("× momentum"),
+        "T2 has no momentum entry and should not show × momentum clause: {t2_line}"
+    );
+    assert!(
+        t2_line.contains("focus 3.0"),
+        "T2 line should still show focus when a momentum map is provided: {t2_line}"
     );
 }
 
 #[test]
-fn summary_momentum_missing_entries_default_to_one() {
+fn summary_momentum_map_with_no_frontier_matches_is_baseline_order() {
     use std::collections::BTreeMap;
 
-    // Only T5 has a momentum entry, and it's exactly 1.0. The result
-    // must be identical to the baseline ordering — a no-op multiplier
-    // on one target, default 1.0 on the rest.
+    // Only T5 (a verify target, blocked — NOT in frontier) has a
+    // momentum entry. No frontier target is affected, so the
+    // frontier order is identical to the no-momentum baseline.
+    // But the annotation format switches to the "focus X (v=Y)" shape
+    // because a momentum map was provided.
     let file = load_fixture();
     let mut momentum = BTreeMap::new();
-    momentum.insert("T5".to_string(), 1.0);
-    let out = graph::summary(&file, "test", 5, Some(&momentum));
+    momentum.insert("T5".to_string(), 3.0);
+    let out = graph::summary(&file, "test", Some(&momentum), false);
 
-    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
-    let t5_pos = wsjf_section.find("🎯T5").unwrap();
-    let t1_pos = wsjf_section.find("🎯T1").unwrap();
-    let t2_pos = wsjf_section.find("🎯T2").unwrap();
-    let t3_pos = wsjf_section.find("🎯T3").unwrap();
-    // Identical baseline order: T5 > T1 > T2 > T3.
-    assert!(t5_pos < t1_pos);
-    assert!(t1_pos < t2_pos);
-    assert!(t2_pos < t3_pos);
-}
+    let frontier_section = out
+        .split("## Frontier")
+        .nth(1)
+        .expect("frontier section exists");
+    let end = frontier_section
+        .find("\n## ")
+        .unwrap_or(frontier_section.len());
+    let frontier_text = &frontier_section[..end];
 
-#[test]
-fn summary_without_momentum_matches_baseline_heading() {
-    // When `momentum` is None, the heading stays as the legacy
-    // "## WSJF ranking (top N)" form — unchanged from pre-v0.9.0
-    // callers that didn't pass the new argument.
-    let file = load_fixture();
-    let out = graph::summary(&file, "test", 5, None);
-    assert!(out.contains("## WSJF ranking (top "));
-    assert!(!out.contains("momentum-adjusted"));
+    // Order is baseline: T1 (v=8) > T3 (v=5) > T2 (v=3).
+    let t1_pos = frontier_text.find("🎯T1").expect("T1 in frontier");
+    let t3_pos = frontier_text.find("🎯T3").expect("T3 in frontier");
+    let t2_pos = frontier_text.find("🎯T2").expect("T2 in frontier");
+    assert!(t1_pos < t3_pos);
+    assert!(t3_pos < t2_pos);
+
+    // Annotation format is the has-momentum baseline shape: "focus X
+    // (v=Y)". No "× momentum" clause because no frontier entry has a
+    // non-default multiplier.
+    assert!(frontier_text.contains("focus 8"));
+    assert!(frontier_text.contains("focus 5"));
+    assert!(frontier_text.contains("focus 3"));
+    assert!(!frontier_text.contains("× momentum"));
 }
 
 #[test]
@@ -1075,7 +1385,7 @@ fn summary_stale_parent_all_children_achieved() {
     }
 
     // T1 is converging but both children are achieved — stale.
-    let out = graph::summary(&file, "test", 5, None);
+    let out = graph::summary(&file, "test", None, false);
     assert!(out.contains("## Stale targets"));
     assert!(out.contains("all sub-targets achieved"));
 }
@@ -1113,7 +1423,7 @@ fn summary_shows_grouped_children() {
         },
     );
 
-    let out = graph::summary(&file, "test", 5, None);
+    let out = graph::summary(&file, "test", None, false);
     // T1 should show a rollup count.
     assert!(out.contains("achieved)"));
     // T1.1 should appear indented under T1.
@@ -1130,7 +1440,7 @@ fn summary_with_validation_errors_skips_frontier() {
         .depends_on
         .push("T99".to_string());
 
-    let out = graph::summary(&file, "test", 5, None);
+    let out = graph::summary(&file, "test", None, false);
     assert!(out.contains("## Validation errors"));
     assert!(out.contains("T99"));
     // Should NOT have frontier or blocked sections.
