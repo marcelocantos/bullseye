@@ -526,6 +526,101 @@ fn markdown_path_derivation() {
 }
 
 #[test]
+fn load_accepts_legacy_file_without_schema_version() {
+    use bullseye::schema::CURRENT_SCHEMA_VERSION;
+    use std::io::Write;
+    // A targets.yaml written before schema_version was introduced must
+    // still load cleanly. The loader treats the missing field as the
+    // current (v1) schema and fills it in so the next save stamps it.
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let path = docs.join("targets.yaml");
+
+    let legacy_yaml = r#"
+targets:
+  T1:
+    name: Legacy target
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - it works
+    discovered: 2026-04-01
+"#;
+    write!(std::fs::File::create(&path).unwrap(), "{legacy_yaml}").unwrap();
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.schema_version, Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(file.targets.len(), 1);
+}
+
+#[test]
+fn load_rejects_newer_schema_version_with_upgrade_prompt() {
+    use std::io::Write;
+    // A targets.yaml declaring a schema_version higher than this
+    // binary supports must fail fast with a clear upgrade message,
+    // not silently drop or misinterpret unknown fields.
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let path = docs.join("targets.yaml");
+
+    let future_yaml = r#"
+schema_version: 999
+targets:
+  T1:
+    name: From the future
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - it works
+    discovered: 2026-04-01
+"#;
+    write!(std::fs::File::create(&path).unwrap(), "{future_yaml}").unwrap();
+
+    let err = store::load(&path).unwrap_err();
+    assert!(err.contains("schema_version 999"), "got: {err}");
+    assert!(err.contains("Upgrade bullseye"), "got: {err}");
+}
+
+#[test]
+fn save_stamps_current_schema_version() {
+    use bullseye::schema::CURRENT_SCHEMA_VERSION;
+    use std::io::Write;
+    // Loading a legacy file and re-saving must produce a file with
+    // the current schema_version on disk, so legacy files self-upgrade
+    // on first contact with a v0.9.0+ bullseye.
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let path = docs.join("targets.yaml");
+
+    let legacy_yaml = r#"
+targets:
+  T1:
+    name: Legacy target
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - it works
+    discovered: 2026-04-01
+"#;
+    write!(std::fs::File::create(&path).unwrap(), "{legacy_yaml}").unwrap();
+
+    let file = store::load(&path).unwrap();
+    store::save(&path, &file).unwrap();
+
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        after.contains(&format!("schema_version: {CURRENT_SCHEMA_VERSION}")),
+        "expected schema_version stamp; got:\n{after}"
+    );
+}
+
+#[test]
 fn load_migrates_legacy_gates_to_depends_on() {
     use std::io::Write;
     // Write a legacy YAML with the old `gates` field and verify that

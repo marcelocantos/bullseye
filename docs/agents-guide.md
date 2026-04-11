@@ -217,6 +217,11 @@ momentum = 1.0 + 0.3 * log(1 + recent_sessions) * exp(-days_since_last / 7)
 ## targets.yaml schema
 
 ```yaml
+schema_version: 1          # required going forward; legacy files
+                           # without it are accepted and stamped on
+                           # next save. Bullseye refuses to load a
+                           # file whose schema_version is higher than
+                           # the binary supports (prompts for upgrade).
 last_evaluated: <git-sha>  # optional, last /cv evaluation point
 
 targets:

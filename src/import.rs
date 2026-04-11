@@ -7,7 +7,8 @@ use chrono::NaiveDate;
 use regex::Regex;
 
 use crate::schema::{
-    Kind, LegacyGateEdge, Status, Target, TargetsFile, migrate_gates_to_depends_on,
+    CURRENT_SCHEMA_VERSION, Kind, LegacyGateEdge, Status, Target, TargetsFile,
+    migrate_gates_to_depends_on,
 };
 
 /// Parse a targets.md markdown file into a TargetsFile.
@@ -186,6 +187,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
     }
 
     let mut file = TargetsFile {
+        schema_version: Some(CURRENT_SCHEMA_VERSION),
         last_evaluated,
         targets,
     };

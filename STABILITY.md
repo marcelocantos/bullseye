@@ -42,6 +42,7 @@ Planned additions (not yet implemented):
 
 | Field | Status | Notes |
 |-------|--------|-------|
+| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `1`. Absent on legacy files (treated as v1 on load). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for a `brew upgrade`. Incremented only on breaking schema changes. |
 | `targets` (map) | Stable | |
 | `last_evaluated` | Stable | |
 | `name` | Stable | |
