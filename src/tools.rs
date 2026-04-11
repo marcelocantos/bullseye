@@ -276,7 +276,9 @@ fn default_filter() -> String {
 /// Consolidated status overview: grouped targets, frontier, blocked, stale, WSJF ranking.
 #[mcp_tool(
     name = "bullseye_summary",
-    description = "Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets, blocked targets with blockers, stale targets with inconsistent graph state, and top-N WSJF-ranked targets. Replaces multiple calls to list/frontier/validate for status assessment."
+    description = "Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets, blocked targets with blockers, stale targets with inconsistent graph state, and top-N WSJF-ranked targets. \
+        Optionally accepts a `momentum` map (target ID -> multiplier) that scales each target's WSJF score before ranking; this lets a caller fold recency/frequency from mnemo_recent_activity (or any external signal) into the ordering without bullseye having to know about the source. Targets missing from the map default to 1.0 (no boost). \
+        Replaces multiple calls to list/frontier/validate for status assessment."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct SummaryTool {
@@ -286,6 +288,19 @@ pub struct SummaryTool {
     /// How many WSJF-ranked targets to include (default: 5).
     #[serde(default)]
     pub top_n: Option<u32>,
+
+    /// Optional per-target momentum multipliers keyed by target ID.
+    /// When provided, each target's WSJF score is multiplied by its
+    /// momentum value (default 1.0 for targets not in the map) before
+    /// ranking. Targets with higher momentum rise; values below 1.0
+    /// suppress stale targets. The caller (typically the /cv skill)
+    /// computes these values from mnemo_recent_activity or any other
+    /// external signal — bullseye never calls mnemo directly, so
+    /// composition happens at the skill layer. The momentum formula
+    /// itself is the caller's responsibility and is therefore
+    /// tunable without touching bullseye.
+    #[serde(default)]
+    pub momentum: Option<std::collections::BTreeMap<String, f64>>,
 }
 
 tool_box!(

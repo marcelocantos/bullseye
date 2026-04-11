@@ -691,7 +691,7 @@ fn startup_context_shows_tunnel_warnings() {
 #[test]
 fn summary_shows_totals_and_sections() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test/docs/targets.yaml", 5);
+    let out = graph::summary(&file, "test/docs/targets.yaml", 5, None);
 
     // Header with counts.
     assert!(out.contains("Total: 5 target(s)"));
@@ -707,7 +707,7 @@ fn summary_shows_totals_and_sections() {
 #[test]
 fn summary_shows_frontier_targets() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test", 5);
+    let out = graph::summary(&file, "test", 5, None);
 
     // Frontier should include T1, T2, T3 (unblocked).
     let frontier_section = out.split("## Frontier").nth(1).unwrap();
@@ -723,7 +723,7 @@ fn summary_shows_frontier_targets() {
 #[test]
 fn summary_shows_blocked_targets() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test", 5);
+    let out = graph::summary(&file, "test", 5, None);
 
     // T5 depends on T1+T3 (not achieved), so it's blocked.
     assert!(out.contains("## Blocked targets"));
@@ -734,7 +734,7 @@ fn summary_shows_blocked_targets() {
 #[test]
 fn summary_wsjf_ranking_ordered() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test", 5);
+    let out = graph::summary(&file, "test", 5, None);
 
     // T5: v=3, c=1, WSJF=3.0
     // T1: v=8, c=3, WSJF=2.67
@@ -754,7 +754,7 @@ fn summary_wsjf_ranking_ordered() {
 #[test]
 fn summary_top_n_limits_wsjf() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test", 2);
+    let out = graph::summary(&file, "test", 2, None);
 
     // Should only show top 2.
     assert!(out.contains("## WSJF ranking (top 2)"));
@@ -764,6 +764,91 @@ fn summary_top_n_limits_wsjf() {
     assert!(wsjf_section.contains("🎯T1"));
     assert!(!wsjf_section.contains("🎯T2"));
     assert!(!wsjf_section.contains("🎯T3"));
+}
+
+#[test]
+fn summary_momentum_reorders_ranking() {
+    use std::collections::BTreeMap;
+
+    // Baseline: T5(3.0) > T1(2.67) > T2(1.5) > T3(1.0).
+    // Give T3 a 5x momentum boost → adjusted 5.0, should jump to the top.
+    // Give T1 a 0.5x suppression → adjusted 1.33, should drop below T2(1.5).
+    // Expected order: T3(5.0), T5(3.0), T2(1.5), T1(1.33).
+    let file = load_fixture();
+    let mut momentum = BTreeMap::new();
+    momentum.insert("T3".to_string(), 5.0);
+    momentum.insert("T1".to_string(), 0.5);
+    let out = graph::summary(&file, "test", 5, Some(&momentum));
+
+    // Section heading is labelled momentum-adjusted so consumers can
+    // distinguish from the baseline rendering.
+    assert!(out.contains("## WSJF ranking, momentum-adjusted"));
+
+    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
+    let t3_pos = wsjf_section.find("🎯T3").expect("T3 in ranking");
+    let t5_pos = wsjf_section.find("🎯T5").expect("T5 in ranking");
+    let t2_pos = wsjf_section.find("🎯T2").expect("T2 in ranking");
+    let t1_pos = wsjf_section.find("🎯T1").expect("T1 in ranking");
+
+    assert!(
+        t3_pos < t5_pos,
+        "T3 (boosted to 5.0) should rank above T5 (3.0). Got: {wsjf_section}"
+    );
+    assert!(t5_pos < t2_pos, "T5 (3.0) should rank above T2 (1.5)");
+    assert!(
+        t2_pos < t1_pos,
+        "T2 (1.5) should rank above T1 (suppressed to 1.33). Got: {wsjf_section}"
+    );
+
+    // Adjusted entries should show the momentum annotation; T2 (no
+    // entry in the map) should render with the plain WSJF form.
+    assert!(wsjf_section.contains("momentum 5.00"));
+    assert!(wsjf_section.contains("momentum 0.50"));
+    // T2 has no momentum entry — default 1.0 → plain form, no
+    // "momentum 1.00" annotation in its line.
+    let t2_line_end = wsjf_section[t2_pos..]
+        .find('\n')
+        .map(|n| t2_pos + n)
+        .unwrap_or(wsjf_section.len());
+    let t2_line = &wsjf_section[t2_pos..t2_line_end];
+    assert!(
+        !t2_line.contains("momentum"),
+        "T2 has no momentum entry and should render without the annotation: {t2_line}"
+    );
+}
+
+#[test]
+fn summary_momentum_missing_entries_default_to_one() {
+    use std::collections::BTreeMap;
+
+    // Only T5 has a momentum entry, and it's exactly 1.0. The result
+    // must be identical to the baseline ordering — a no-op multiplier
+    // on one target, default 1.0 on the rest.
+    let file = load_fixture();
+    let mut momentum = BTreeMap::new();
+    momentum.insert("T5".to_string(), 1.0);
+    let out = graph::summary(&file, "test", 5, Some(&momentum));
+
+    let wsjf_section = out.split("## WSJF ranking").nth(1).unwrap();
+    let t5_pos = wsjf_section.find("🎯T5").unwrap();
+    let t1_pos = wsjf_section.find("🎯T1").unwrap();
+    let t2_pos = wsjf_section.find("🎯T2").unwrap();
+    let t3_pos = wsjf_section.find("🎯T3").unwrap();
+    // Identical baseline order: T5 > T1 > T2 > T3.
+    assert!(t5_pos < t1_pos);
+    assert!(t1_pos < t2_pos);
+    assert!(t2_pos < t3_pos);
+}
+
+#[test]
+fn summary_without_momentum_matches_baseline_heading() {
+    // When `momentum` is None, the heading stays as the legacy
+    // "## WSJF ranking (top N)" form — unchanged from pre-v0.9.0
+    // callers that didn't pass the new argument.
+    let file = load_fixture();
+    let out = graph::summary(&file, "test", 5, None);
+    assert!(out.contains("## WSJF ranking (top "));
+    assert!(!out.contains("momentum-adjusted"));
 }
 
 #[test]
@@ -802,7 +887,7 @@ fn summary_stale_parent_all_children_achieved() {
     }
 
     // T1 is converging but both children are achieved — stale.
-    let out = graph::summary(&file, "test", 5);
+    let out = graph::summary(&file, "test", 5, None);
     assert!(out.contains("## Stale targets"));
     assert!(out.contains("all sub-targets achieved"));
 }
@@ -840,7 +925,7 @@ fn summary_shows_grouped_children() {
         },
     );
 
-    let out = graph::summary(&file, "test", 5);
+    let out = graph::summary(&file, "test", 5, None);
     // T1 should show a rollup count.
     assert!(out.contains("achieved)"));
     // T1.1 should appear indented under T1.
@@ -857,7 +942,7 @@ fn summary_with_validation_errors_skips_frontier() {
         .depends_on
         .push("T99".to_string());
 
-    let out = graph::summary(&file, "test", 5);
+    let out = graph::summary(&file, "test", 5, None);
     assert!(out.contains("## Validation errors"));
     assert!(out.contains("T99"));
     // Should NOT have frontier or blocked sections.
