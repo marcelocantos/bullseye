@@ -5,6 +5,57 @@ use std::path::{Path, PathBuf};
 
 use crate::schema::{CURRENT_SCHEMA_VERSION, TargetsFile, migrate_gates_to_depends_on};
 
+/// Structured error type returned by [`load`]. Having distinct
+/// variants lets callers decide per-case how to respond — in
+/// particular, [`LoadError::VersionTooNew`] must always be surfaced
+/// loudly (it's the point of the version check) while
+/// [`LoadError::Io`] / [`LoadError::Parse`] can be tolerated by
+/// speculative callers like `bullseye_startup_context`.
+#[derive(Debug)]
+pub enum LoadError {
+    /// Couldn't read the file — permission denied, disk issue, etc.
+    Io(String),
+    /// Read succeeded but the YAML didn't parse.
+    Parse(String),
+    /// File declares a `schema_version` higher than this build
+    /// supports. The binary must be upgraded before the file can be
+    /// read safely.
+    VersionTooNew {
+        found: u32,
+        supported: u32,
+        path: PathBuf,
+    },
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadError::Io(msg) => write!(f, "{msg}"),
+            LoadError::Parse(msg) => write!(f, "{msg}"),
+            LoadError::VersionTooNew {
+                found,
+                supported,
+                path,
+            } => write!(
+                f,
+                "{}: targets file declares schema_version {found}, but this \
+                 bullseye binary only supports up to {supported}. \
+                 Upgrade bullseye (e.g. `brew upgrade marcelocantos/tap/bullseye`) \
+                 to read this file.",
+                path.display(),
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+impl From<LoadError> for String {
+    fn from(e: LoadError) -> Self {
+        e.to_string()
+    }
+}
+
 /// Discover the targets file by walking up from `start_dir`.
 /// Checks `docs/targets.yaml`, then `targets.yaml` at each level.
 /// Maximum directory levels to traverse upward when searching for targets.yaml.
@@ -96,25 +147,27 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
 ///
 /// Enforces schema-version compatibility: if the file declares a
 /// `schema_version` greater than [`CURRENT_SCHEMA_VERSION`], loading fails
-/// with an upgrade prompt rather than silently misinterpreting fields
-/// the current binary does not know about. Files without a
+/// with [`LoadError::VersionTooNew`] rather than silently misinterpreting
+/// fields the current binary does not know about. Files without a
 /// `schema_version` field are accepted as legacy v1 and the field is
 /// filled in so the next save stamps it.
-pub fn load(path: &Path) -> Result<TargetsFile, String> {
+///
+/// Errors are returned as a typed enum so callers can discriminate —
+/// speculative callers like `bullseye_startup_context` tolerate I/O and
+/// parse errors, while every caller must surface [`LoadError::VersionTooNew`].
+pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
     let mut file: TargetsFile = serde_yaml_ng::from_str(&content)
-        .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+        .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
     if let Some(v) = file.schema_version
         && v > CURRENT_SCHEMA_VERSION
     {
-        return Err(format!(
-            "{}: targets file declares schema_version {v}, but this \
-             bullseye binary only supports up to {CURRENT_SCHEMA_VERSION}. \
-             Upgrade bullseye (e.g. `brew upgrade marcelocantos/tap/bullseye`) \
-             to read this file.",
-            path.display(),
-        ));
+        return Err(LoadError::VersionTooNew {
+            found: v,
+            supported: CURRENT_SCHEMA_VERSION,
+            path: path.to_path_buf(),
+        });
     }
     if file.schema_version.is_none() {
         file.schema_version = Some(CURRENT_SCHEMA_VERSION);

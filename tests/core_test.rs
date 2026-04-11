@@ -581,8 +581,21 @@ targets:
     write!(std::fs::File::create(&path).unwrap(), "{future_yaml}").unwrap();
 
     let err = store::load(&path).unwrap_err();
-    assert!(err.contains("schema_version 999"), "got: {err}");
-    assert!(err.contains("Upgrade bullseye"), "got: {err}");
+    // Must be the structured VersionTooNew variant so callers can
+    // discriminate it from Io/Parse errors. Also check the rendered
+    // Display form carries enough detail for a human.
+    match &err {
+        store::LoadError::VersionTooNew {
+            found, supported, ..
+        } => {
+            assert_eq!(*found, 999);
+            assert!(*supported < 999);
+        }
+        other => panic!("expected VersionTooNew, got {other:?}"),
+    }
+    let rendered = err.to_string();
+    assert!(rendered.contains("schema_version 999"), "got: {rendered}");
+    assert!(rendered.contains("Upgrade bullseye"), "got: {rendered}");
 }
 
 #[test]
@@ -711,12 +724,14 @@ fn portfolio_discovers_fixture() {
     use bullseye::portfolio;
 
     let fixture = fixture_path();
-    let repos = portfolio::discover_repos(&fixture, 3);
+    let scan = portfolio::discover_repos(&fixture, 3);
     // The fixture has a docs/targets.yaml at its root.
-    assert_eq!(repos.len(), 1);
-    assert_eq!(repos[0].active, 4);
-    assert!(repos[0].frontier > 0);
-    assert_eq!(repos[0].achieved, 1);
+    assert_eq!(scan.repos.len(), 1);
+    assert_eq!(scan.repos[0].active, 4);
+    assert!(scan.repos[0].frontier > 0);
+    assert_eq!(scan.repos[0].achieved, 1);
+    // Fixture is clean — no warnings.
+    assert!(scan.warnings.is_empty());
 }
 
 #[test]
@@ -724,10 +739,50 @@ fn portfolio_format_includes_frontier_targets() {
     use bullseye::portfolio;
 
     let fixture = fixture_path();
-    let repos = portfolio::discover_repos(&fixture, 3);
-    let out = portfolio::format_portfolio(&repos);
+    let scan = portfolio::discover_repos(&fixture, 3);
+    let out = portfolio::format_portfolio(&scan);
     assert!(out.contains("## Ready for work"));
     assert!(out.contains("🎯T1"));
+}
+
+#[test]
+fn portfolio_reports_version_mismatch_as_warning() {
+    use bullseye::portfolio::{self, RepoWarningKind};
+    use std::io::Write;
+
+    // A repo whose targets.yaml declares a newer schema_version than
+    // this bullseye supports must appear as a warning in the scan
+    // — NOT silently disappear from the repos list. This is the
+    // whole reason the schema_version check exists: if portfolio
+    // swallows the error, an outdated bullseye would hide the
+    // "upgrade me" signal across every repo the user scans.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("org").join("future-repo");
+    let docs = repo.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let path = docs.join("targets.yaml");
+    write!(
+        std::fs::File::create(&path).unwrap(),
+        "schema_version: 999\ntargets:\n  T1:\n    name: From the future\n    \
+         status: identified\n    value: 3\n    cost: 2\n    acceptance:\n      \
+         - ok\n    discovered: 2026-04-01\n"
+    )
+    .unwrap();
+
+    let scan = portfolio::discover_repos(tmp.path(), 5);
+    assert!(
+        scan.repos.is_empty(),
+        "broken repo should not appear in repos list"
+    );
+    assert_eq!(scan.warnings.len(), 1, "expected one warning");
+    assert_eq!(scan.warnings[0].kind, RepoWarningKind::VersionMismatch);
+    assert!(scan.warnings[0].message.contains("999"));
+
+    // And the formatted output surfaces it prominently.
+    let out = portfolio::format_portfolio(&scan);
+    assert!(out.contains("## ⚠ Warnings"));
+    assert!(out.contains("Schema version mismatch"));
+    assert!(out.contains("upgrade bullseye"));
 }
 
 // --- Startup context tests ---
@@ -1062,6 +1117,45 @@ fn startup_context_no_file_is_graceful() {
     // Must not look like an error string — agents should be able to
     // keep going.
     assert!(!out.to_lowercase().contains("error"));
+}
+
+#[test]
+fn load_parse_error_is_structured() {
+    use std::io::Write;
+    // A targets.yaml that exists but is syntactically broken should
+    // return LoadError::Parse — the typed variant lets callers like
+    // bullseye_startup_context choose to degrade gracefully instead
+    // of surfacing a raw tool-call error.
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let path = docs.join("targets.yaml");
+
+    // Deliberately malformed: unterminated list + stray colon.
+    let broken_yaml = "targets:\n  T1:\n    name: [unterminated\n    status:::\n";
+    write!(std::fs::File::create(&path).unwrap(), "{broken_yaml}").unwrap();
+
+    let err = store::load(&path).unwrap_err();
+    assert!(
+        matches!(err, store::LoadError::Parse(_)),
+        "expected Parse, got {err:?}"
+    );
+}
+
+#[test]
+fn startup_context_broken_file_is_graceful() {
+    // The helper that formats the degraded response for a broken
+    // targets.yaml must surface the error without looking like a
+    // tool-call failure — session start should continue.
+    let out = graph::startup_context_broken_file(
+        "/tmp/fake/docs/targets.yaml",
+        "failed to parse /tmp/fake/docs/targets.yaml: invalid YAML at line 4",
+    );
+    assert!(out.contains("# Startup context"));
+    assert!(out.contains("/tmp/fake/docs/targets.yaml"));
+    assert!(out.contains("could not be loaded"));
+    assert!(out.contains("invalid YAML at line 4"));
+    assert!(out.contains("Session start is continuing"));
 }
 
 #[test]

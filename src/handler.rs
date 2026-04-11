@@ -83,7 +83,7 @@ fn err(msg: impl Into<String>) -> ToolResult {
 fn load_file(cwd: &str) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {
     let dir = Path::new(cwd);
     let path = store::discover(dir).ok_or_else(|| tool_err("no targets.yaml found"))?;
-    let file = store::load(&path).map_err(tool_err)?;
+    let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
     Ok((path, file))
 }
 
@@ -93,11 +93,11 @@ fn load_or_create_file(
 ) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {
     let dir = Path::new(cwd);
     if let Some(path) = store::discover(dir) {
-        let file = store::load(&path).map_err(tool_err)?;
+        let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
         Ok((path, file))
     } else {
         let path = store::create_default(dir).map_err(tool_err)?;
-        let file = store::load(&path).map_err(tool_err)?;
+        let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
         Ok((path, file))
     }
 }
@@ -514,7 +514,7 @@ fn handle_init(t: crate::tools::InitTool) -> ToolResult {
     });
 
     let path = store::create_starter(dir, &project).map_err(tool_err)?;
-    let file = store::load(&path).map_err(tool_err)?;
+    let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
     render::render_to_file(&path, &file).map_err(tool_err)?;
 
     text_result(format!(
@@ -589,18 +589,36 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
 fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
     // Unlike most tools, startup_context is meant to be called
     // automatically at session start — possibly from a harness hook
-    // that runs before the agent knows whether the repo uses bullseye.
-    // Failing the tool call with "no targets.yaml found" disrupts the
-    // session start and tells the agent nothing useful, so return a
-    // graceful informational response instead.
+    // that runs before the agent knows whether the repo uses bullseye
+    // or whether its targets file is in a usable state. A raw error
+    // would disrupt the session start and tell the agent nothing
+    // useful, so degrade gracefully for the three "not my problem
+    // right now" cases:
+    //
+    //   - no targets.yaml at all               → info message
+    //   - targets.yaml present but unreadable  → info message + detail
+    //   - targets.yaml present but won't parse → info message + detail
+    //
+    // The exception is [`store::LoadError::VersionTooNew`]: a newer
+    // schema version is a correctness hazard that the user must
+    // resolve (by upgrading bullseye), so we deliberately keep that
+    // as a hard tool-call error. Silently degrading it would hide
+    // the whole point of the version check.
     let dir = Path::new(&t.cwd);
     let Some(path) = store::discover(dir) else {
         return text_result(graph::startup_context_no_file(&dir.display().to_string()));
     };
-    let file = store::load(&path).map_err(tool_err)?;
-    let recent_days = t.recent_days.unwrap_or(14);
-    let out = graph::startup_context(&file, &path.display().to_string(), recent_days);
-    text_result(out)
+    match store::load(&path) {
+        Ok(file) => {
+            let recent_days = t.recent_days.unwrap_or(14);
+            let out = graph::startup_context(&file, &path.display().to_string(), recent_days);
+            text_result(out)
+        }
+        Err(e @ store::LoadError::VersionTooNew { .. }) => err(e.to_string()),
+        Err(e @ (store::LoadError::Io(_) | store::LoadError::Parse(_))) => text_result(
+            graph::startup_context_broken_file(&path.display().to_string(), &e.to_string()),
+        ),
+    }
 }
 
 fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
@@ -614,8 +632,8 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
     }
 
     let max_depth = t.max_depth.unwrap_or(5) as usize;
-    let repos = portfolio::discover_repos(root, max_depth);
-    text_result(portfolio::format_portfolio(&repos))
+    let scan = portfolio::discover_repos(root, max_depth);
+    text_result(portfolio::format_portfolio(&scan))
 }
 
 fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
