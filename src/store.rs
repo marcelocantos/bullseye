@@ -116,6 +116,7 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
                 "First milestone is defined with measurable success criteria".to_string(),
                 "At least one sub-target breaks the milestone into actionable work".to_string(),
             ],
+            checks: Vec::new(),
             context: "Starter target — replace with your project's actual first goal.".to_string(),
             gates: Vec::new(),
             depends_on: Vec::new(),

@@ -335,6 +335,26 @@ pub struct SummaryTool {
     pub frontier_details: Option<bool>,
 }
 
+/// Build an executable verification plan for a target's `checks`.
+#[mcp_tool(
+    name = "bullseye_verify",
+    description = "Build an executable verification plan for a target's declared `checks`. \
+        Bullseye does not call sawmill itself — MCP servers can't call each other — so this tool \
+        returns a *plan*: an ordered list of sawmill tool invocations (check_conventions, query, \
+        check_invariants) plus a report template the caller populates with pass/fail outcomes and \
+        file/line-level failure detail. The agent (or the /cv skill) runs each planned check \
+        against the sawmill MCP server, fills in the template, and presents the final report. \
+        Errors if the target does not exist or has no `checks` field populated."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct VerifyTool {
+    /// Working directory to discover targets.yaml from.
+    pub cwd: String,
+
+    /// Target ID (e.g., "T1", "T1.2") whose checks should be planned.
+    pub id: String,
+}
+
 /// End-to-end convergence evaluation: invariants + unreleased fixes + targets + recommendation.
 #[mcp_tool(
     name = "bullseye_convergence",
@@ -382,6 +402,7 @@ tool_box!(
         StartupContextTool,
         PortfolioTool,
         SummaryTool,
+        VerifyTool,
         ConvergenceTool
     ]
 );

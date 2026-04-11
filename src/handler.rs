@@ -62,6 +62,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::StartupContextTool(t) => handle_startup_context(t),
             TargetTools::PortfolioTool(t) => handle_portfolio(t),
             TargetTools::SummaryTool(t) => handle_summary(t),
+            TargetTools::VerifyTool(t) => handle_verify(t),
             TargetTools::ConvergenceTool(t) => handle_convergence(t),
         }
     }
@@ -244,6 +245,7 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             cost,
             actual_cost: None,
             acceptance,
+            checks: Vec::new(),
             context: t.context.clone().unwrap_or_default(),
             gates: Vec::new(),
             depends_on: t.depends_on.clone().unwrap_or_default(),
@@ -705,6 +707,55 @@ fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
         t.frontier_details.unwrap_or(false),
     );
     text_result(out)
+}
+
+fn handle_verify(t: crate::tools::VerifyTool) -> ToolResult {
+    let (path, file) = load_file(&t.cwd)?;
+
+    let plan = ops::verify_plan(&file, &t.id).map_err(|e| tool_err(e.to_string()))?;
+
+    // The tool returns both a JSON payload (machine-readable plan +
+    // report template) and a human-readable summary. Bundle them as a
+    // single markdown document so both audiences are served from one
+    // text block — callers that want the JSON parse the fenced code
+    // block, callers that want a quick scan read the bullet list.
+    let json =
+        serde_json::to_string_pretty(&plan).map_err(|e| tool_err(format!("serialize: {e}")))?;
+
+    let mut out = format!(
+        "# Verification plan for 🎯{} \"{}\"\nFile: {}\n\n\
+         Bullseye cannot call sawmill directly. Execute each planned check via the \
+         sawmill MCP server in order, then populate the report template with outcomes \
+         and file/line-level failures.\n\n\
+         ## Planned checks ({} total)\n\n",
+        plan.target_id,
+        plan.target_name,
+        path.display(),
+        plan.checks.len(),
+    );
+
+    for check in &plan.checks {
+        out.push_str(&format!(
+            "{}. sawmill tool `{}` — {}\n",
+            check.index + 1,
+            sawmill_tool_name(check.tool),
+            check.description,
+        ));
+    }
+
+    out.push_str("\n## Plan and report template (JSON)\n\n```json\n");
+    out.push_str(&json);
+    out.push_str("\n```\n");
+
+    text_result(out)
+}
+
+fn sawmill_tool_name(tool: ops::SawmillTool) -> &'static str {
+    match tool {
+        ops::SawmillTool::CheckConventions => "check_conventions",
+        ops::SawmillTool::Query => "query",
+        ops::SawmillTool::CheckInvariants => "check_invariants",
+    }
 }
 
 /// Discover a targets.md by walking up from start_dir.

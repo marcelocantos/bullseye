@@ -148,6 +148,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 cost: fields.cost.unwrap_or(1.0),
                 actual_cost: fields.actual_cost,
                 acceptance: fields.acceptance,
+                checks: Vec::new(),
                 context,
                 gates: fields.gates,
                 depends_on: fields.depends_on,
