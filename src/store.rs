@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::schema::TargetsFile;
+use crate::schema::{TargetsFile, migrate_gates_to_depends_on};
 
 /// Discover the targets file by walking up from `start_dir`.
 /// Checks `docs/targets.yaml`, then `targets.yaml` at each level.
@@ -87,11 +87,17 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
 }
 
 /// Load and parse a targets file.
+///
+/// Applies in-memory migration for legacy `gates` edges: they are folded
+/// into `depends_on` on the gated target, then cleared. Every caller sees
+/// a single-edge-type graph regardless of the on-disk format.
 pub fn load(path: &Path) -> Result<TargetsFile, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    serde_yaml_ng::from_str(&content)
-        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+    let mut file: TargetsFile = serde_yaml_ng::from_str(&content)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+    migrate_gates_to_depends_on(&mut file);
+    Ok(file)
 }
 
 /// Write a targets file back to disk.

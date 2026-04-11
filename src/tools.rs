@@ -33,87 +33,78 @@ pub struct GetTool {
     pub id: String,
 }
 
-/// Add a new target.
+/// Upsert a target: create if it doesn't exist, patch if it does.
+///
+/// Unified replacement for the old add/update split. `id` is optional;
+/// omit it to create a new target with an auto-assigned ID, provide it
+/// to upsert at a specific ID (useful for sub-targets like T1.2). When
+/// the target already exists, only the provided fields are changed.
 #[mcp_tool(
-    name = "bullseye_add",
-    description = "Add a new target. The server assigns the next available ID and validates the entry."
+    name = "bullseye_assert",
+    description = "Upsert a target: create if the ID doesn't exist, patch if it does. \
+        Omit `id` to create a new target with an auto-assigned ID. \
+        Provide `id` (e.g., 'T1.2') to create a sub-target at a specific ID or to patch an existing one. \
+        On create, `name`, `value`, `cost`, and `acceptance` are required; on patch, all fields are optional. \
+        Use `depends_on` to declare this target's blockers, or `blocks` (sugar) to inject this target into other targets' depends_on lists — handy when adding a new prerequisite above existing work."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
-pub struct AddTool {
+pub struct AssertTool {
     /// Working directory to discover targets.yaml from.
     pub cwd: String,
 
-    /// Short assertion describing the desired state.
-    pub name: String,
-
-    /// User-scored value (Fibonacci: 1, 2, 3, 5, 8, 13, 20).
-    pub value: f64,
-
-    /// Agent-estimated cost (Fibonacci: 1, 2, 3, 5, 8, 13, 20).
-    pub cost: f64,
-
-    /// Acceptance criteria — how to verify the target is achieved.
-    pub acceptance: Vec<String>,
-
-    /// Why this target matters.
+    /// Target ID. Omit to create a new target with an auto-assigned ID.
+    /// Provide to upsert at a specific ID (creates if missing, patches if existing).
     #[serde(default)]
-    pub context: String,
+    pub id: Option<String>,
 
-    /// Target kind: "work" (default) or "verify".
-    #[serde(default)]
-    pub kind: Option<String>,
-
-    /// For verify targets: IDs of upstream targets this verifies.
-    #[serde(default)]
-    pub verifies: Vec<String>,
-
-    /// Origin description (default: "manual").
-    #[serde(default = "default_origin")]
-    pub origin: String,
-
-    /// Tags (e.g., ["visual"]).
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-
-/// Update fields on an existing target.
-#[mcp_tool(
-    name = "bullseye_update",
-    description = "Update one or more fields on an existing target. Only provided fields are changed."
-)]
-#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
-pub struct UpdateTool {
-    /// Working directory to discover targets.yaml from.
-    pub cwd: String,
-
-    /// Target ID to update.
-    pub id: String,
-
-    /// New status (identified, converging, achieved).
-    #[serde(default)]
-    pub status: Option<String>,
-
-    /// New value score.
-    #[serde(default)]
-    pub value: Option<f64>,
-
-    /// New cost estimate.
-    #[serde(default)]
-    pub cost: Option<f64>,
-
-    /// New name/assertion.
+    /// Short assertion describing the desired state. Required on create.
     #[serde(default)]
     pub name: Option<String>,
 
-    /// Replace acceptance criteria.
+    /// User-scored value (Fibonacci: 1, 2, 3, 5, 8, 13, 20). Required on create.
+    #[serde(default)]
+    pub value: Option<f64>,
+
+    /// Agent-estimated cost (Fibonacci: 1, 2, 3, 5, 8, 13, 20). Required on create.
+    #[serde(default)]
+    pub cost: Option<f64>,
+
+    /// Acceptance criteria — how to verify the target is achieved. Required on create.
     #[serde(default)]
     pub acceptance: Option<Vec<String>>,
 
-    /// Replace context.
+    /// Why this target matters.
     #[serde(default)]
     pub context: Option<String>,
 
-    /// Replace tags.
+    /// Target kind: "work" (default) or "verify". Only settable on create.
+    #[serde(default)]
+    pub kind: Option<String>,
+
+    /// Status: "identified", "converging", or "achieved".
+    #[serde(default)]
+    pub status: Option<String>,
+
+    /// IDs of targets this one depends on (must be achieved first).
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+
+    /// Sugar: IDs of targets that should gain this target as a dependency.
+    /// The handler appends this target's ID to each listed target's `depends_on`.
+    /// Lets you declare "I am a new prerequisite for X, Y" at creation time
+    /// without a separate patch on X and Y.
+    #[serde(default)]
+    pub blocks: Option<Vec<String>>,
+
+    /// For verify targets: IDs of upstream targets this verifies.
+    #[serde(default)]
+    pub verifies: Option<Vec<String>>,
+
+    /// Origin description (default: "manual" on create; unchanged on patch).
+    #[serde(default)]
+    pub origin: Option<String>,
+
+    /// Tags (e.g., ["visual"]).
     #[serde(default)]
     pub tags: Option<Vec<String>>,
 }
@@ -205,7 +196,7 @@ pub struct GraphTool {
 /// Initialise a new targets file with a starter template.
 #[mcp_tool(
     name = "bullseye_init",
-    description = "Create a starter docs/targets.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_add for repos that already have targets."
+    description = "Create a starter docs/targets.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_assert for repos that already have targets."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct InitTool {
@@ -282,10 +273,6 @@ fn default_filter() -> String {
     "active".to_string()
 }
 
-fn default_origin() -> String {
-    "manual".to_string()
-}
-
 /// Consolidated status overview: grouped targets, frontier, blocked, stale, WSJF ranking.
 #[mcp_tool(
     name = "bullseye_summary",
@@ -306,8 +293,7 @@ tool_box!(
     [
         ListTool,
         GetTool,
-        AddTool,
-        UpdateTool,
+        AssertTool,
         RetireTool,
         FrontierTool,
         ReworkTool,

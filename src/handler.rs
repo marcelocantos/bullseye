@@ -49,8 +49,7 @@ impl ServerHandler for TargetHandler {
         match tool {
             TargetTools::ListTool(t) => handle_list(t),
             TargetTools::GetTool(t) => handle_get(t),
-            TargetTools::AddTool(t) => handle_add(t),
-            TargetTools::UpdateTool(t) => handle_update(t),
+            TargetTools::AssertTool(t) => handle_assert(t),
             TargetTools::RetireTool(t) => handle_retire(t),
             TargetTools::FrontierTool(t) => handle_frontier(t),
             TargetTools::ReworkTool(t) => handle_rework(t),
@@ -158,123 +157,191 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
     text_result(format!("🎯{} {}\n\n{yaml}", t.id, target.name))
 }
 
-fn handle_add(t: crate::tools::AddTool) -> ToolResult {
-    let (path, mut file) = load_or_create_file(&t.cwd)?;
-
-    // Determine next ID.
-    let next_id = {
-        let max_num = file
-            .targets
-            .keys()
-            .filter_map(|k| {
-                let num_str = k.strip_prefix('T')?;
-                if num_str.contains('.') {
-                    None
-                } else {
-                    num_str.parse::<u32>().ok()
-                }
-            })
-            .max()
-            .unwrap_or(0);
-        format!("T{}", max_num + 1)
-    };
-
-    let kind = match t.kind.as_deref() {
-        Some("verify") => crate::schema::Kind::Verify,
-        Some("work") | None => crate::schema::Kind::Work,
-        Some(other) => return err(format!("unknown kind: {other} (use work or verify)")),
-    };
-
-    let target = Target {
-        name: t.name.clone(),
-        kind,
-        status: Status::Identified,
-        value: t.value,
-        cost: t.cost,
-        actual_cost: None,
-        acceptance: t.acceptance,
-        context: t.context,
-        gates: Vec::new(),
-        depends_on: Vec::new(),
-        verifies: t.verifies,
-        rework: None,
-        retry_budget: None,
-        retries: 0,
-        tags: t.tags,
-        origin: t.origin,
-        discovered: Local::now().date_naive(),
-        achieved: None,
-    };
-
-    file.targets.insert(next_id.clone(), target);
-    save_and_render(&path, &file)?;
-
-    text_result(format!(
-        "Created 🎯{next_id} \"{name}\"\nValue: {v}, Cost: {c}\nFile: {path}",
-        name = t.name,
-        v = t.value,
-        c = t.cost,
-        path = path.display(),
-    ))
+fn parse_status(s: &str) -> Result<Status, CallToolError> {
+    match s {
+        "identified" => Ok(Status::Identified),
+        "converging" => Ok(Status::Converging),
+        "achieved" => Ok(Status::Achieved),
+        other => Err(tool_err(format!(
+            "unknown status: {other} (use identified, converging, achieved)"
+        ))),
+    }
 }
 
-fn handle_update(t: crate::tools::UpdateTool) -> ToolResult {
-    let (path, mut file) = load_file(&t.cwd)?;
+fn parse_kind(s: &str) -> Result<crate::schema::Kind, CallToolError> {
+    match s {
+        "work" => Ok(crate::schema::Kind::Work),
+        "verify" => Ok(crate::schema::Kind::Verify),
+        other => Err(tool_err(format!("unknown kind: {other} (use work or verify)"))),
+    }
+}
 
-    let target = file
+/// Auto-assign the next `TN` ID (ignoring sub-targets like `T1.2`).
+fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
+    let max_num = file
         .targets
-        .get_mut(&t.id)
-        .ok_or_else(|| tool_err(format!("target {} not found", t.id)))?;
+        .keys()
+        .filter_map(|k| {
+            let num_str = k.strip_prefix('T')?;
+            if num_str.contains('.') {
+                None
+            } else {
+                num_str.parse::<u32>().ok()
+            }
+        })
+        .max()
+        .unwrap_or(0);
+    format!("T{}", max_num + 1)
+}
 
-    let mut changes = Vec::new();
+fn handle_assert(t: crate::tools::AssertTool) -> ToolResult {
+    let (path, mut file) = load_or_create_file(&t.cwd)?;
 
-    if let Some(ref status_str) = t.status {
-        let status = match status_str.as_str() {
-            "identified" => Status::Identified,
-            "converging" => Status::Converging,
-            "achieved" => Status::Achieved,
-            other => return err(format!("unknown status: {other}")),
+    // Resolve target ID. None → auto-assign a new top-level ID.
+    let (id, is_create) = match t.id.clone() {
+        Some(explicit) => {
+            let exists = file.targets.contains_key(&explicit);
+            (explicit, !exists)
+        }
+        None => (next_top_level_id(&file), true),
+    };
+
+    if is_create {
+        // Creation path — name/value/cost/acceptance are required.
+        let name = t
+            .name
+            .clone()
+            .ok_or_else(|| tool_err("name is required when creating a target"))?;
+        let value = t
+            .value
+            .ok_or_else(|| tool_err("value is required when creating a target"))?;
+        let cost = t
+            .cost
+            .ok_or_else(|| tool_err("cost is required when creating a target"))?;
+        let acceptance = t
+            .acceptance
+            .clone()
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| tool_err("acceptance is required when creating a target"))?;
+
+        let kind = match t.kind.as_deref() {
+            Some(k) => parse_kind(k)?,
+            None => crate::schema::Kind::Work,
         };
-        if target.status != status {
-            changes.push(format!("status: {:?} → {status:?}", target.status));
+        let status = match t.status.as_deref() {
+            Some(s) => parse_status(s)?,
+            None => Status::Identified,
+        };
+
+        let target = Target {
+            name,
+            kind,
+            status,
+            value,
+            cost,
+            actual_cost: None,
+            acceptance,
+            context: t.context.clone().unwrap_or_default(),
+            gates: Vec::new(),
+            depends_on: t.depends_on.clone().unwrap_or_default(),
+            verifies: t.verifies.clone().unwrap_or_default(),
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: t.tags.clone().unwrap_or_default(),
+            origin: t.origin.clone().unwrap_or_else(|| "manual".to_string()),
+            discovered: Local::now().date_naive(),
+            achieved: if status == Status::Achieved {
+                Some(Local::now().date_naive())
+            } else {
+                None
+            },
+        };
+        file.targets.insert(id.clone(), target);
+    } else {
+        // Patch path — only provided fields change.
+        let target = file
+            .targets
+            .get_mut(&id)
+            .expect("existence checked above");
+
+        if let Some(ref name) = t.name {
+            target.name = name.clone();
+        }
+        if let Some(value) = t.value {
+            target.value = value;
+        }
+        if let Some(cost) = t.cost {
+            target.cost = cost;
+        }
+        if let Some(ref acceptance) = t.acceptance {
+            target.acceptance = acceptance.clone();
+        }
+        if let Some(ref context) = t.context {
+            target.context = context.clone();
+        }
+        if let Some(ref tags) = t.tags {
+            target.tags = tags.clone();
+        }
+        if let Some(ref origin) = t.origin {
+            target.origin = origin.clone();
+        }
+        if let Some(ref deps) = t.depends_on {
+            target.depends_on = deps.clone();
+        }
+        if let Some(ref verifies) = t.verifies {
+            target.verifies = verifies.clone();
+        }
+        if let Some(ref status_str) = t.status {
+            let status = parse_status(status_str)?;
             target.status = status;
             if status == Status::Achieved && target.achieved.is_none() {
                 target.achieved = Some(Local::now().date_naive());
             }
         }
-    }
-    if let Some(value) = t.value {
-        changes.push(format!("value: {} → {value}", target.value));
-        target.value = value;
-    }
-    if let Some(cost) = t.cost {
-        changes.push(format!("cost: {} → {cost}", target.cost));
-        target.cost = cost;
-    }
-    if let Some(ref name) = t.name {
-        changes.push(format!("name: \"{}\" → \"{name}\"", target.name));
-        target.name = name.clone();
-    }
-    if let Some(ref acceptance) = t.acceptance {
-        changes.push("acceptance: updated".to_string());
-        target.acceptance = acceptance.clone();
-    }
-    if let Some(ref context) = t.context {
-        changes.push("context: updated".to_string());
-        target.context = context.clone();
-    }
-    if let Some(ref tags) = t.tags {
-        changes.push(format!("tags: {:?} → {tags:?}", target.tags));
-        target.tags = tags.clone();
+        if t.kind.is_some() {
+            return err("kind can only be set when creating a target");
+        }
     }
 
-    if changes.is_empty() {
-        return text_result(format!("🎯{}: no changes", t.id));
+    // Apply `blocks` sugar: inject `id` into each listed target's depends_on.
+    let mut injected_into: Vec<String> = Vec::new();
+    if let Some(ref blocks) = t.blocks {
+        for other_id in blocks {
+            if other_id == &id {
+                return err(format!("target {id} cannot block itself"));
+            }
+            let other = file.targets.get_mut(other_id).ok_or_else(|| {
+                tool_err(format!(
+                    "blocks target {other_id} does not exist (cannot add dependency)"
+                ))
+            })?;
+            if !other.depends_on.contains(&id) {
+                other.depends_on.push(id.clone());
+                injected_into.push(other_id.clone());
+            }
+        }
     }
 
     save_and_render(&path, &file)?;
 
-    text_result(format!("Updated 🎯{}:\n{}", t.id, changes.join("\n")))
+    let verb = if is_create { "Created" } else { "Updated" };
+    let mut out = format!("{verb} 🎯{id}");
+    if let Some(target) = file.targets.get(&id) {
+        out.push_str(&format!(" \"{}\"", target.name));
+    }
+    if !injected_into.is_empty() {
+        out.push_str(&format!(
+            "\nInjected as dependency into: {}",
+            injected_into
+                .iter()
+                .map(|s| format!("🎯{s}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    out.push_str(&format!("\nFile: {}", path.display()));
+    text_result(out)
 }
 
 fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
@@ -439,7 +506,7 @@ fn handle_init(t: crate::tools::InitTool) -> ToolResult {
 
     // Refuse if a targets file already exists.
     if store::discover(dir).is_some() {
-        return err("targets.yaml already exists — use bullseye_add to add targets");
+        return err("targets.yaml already exists — use bullseye_assert to add targets");
     }
 
     let project = t.project_name.unwrap_or_else(|| {
@@ -473,7 +540,7 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
     if !t.force && store::discover(dir).is_some() {
         return err(
             "targets.yaml already exists — use force: true to overwrite, \
-             or use bullseye_add/update to modify existing targets",
+             or use bullseye_assert to modify existing targets",
         );
     }
 

@@ -32,38 +32,33 @@ Get a single target by ID.
 | `cwd` | string | required | Working directory |
 | `id` | string | required | Target ID (e.g., `"T1"`, `"T1.2"`) |
 
-### bullseye_add
+### bullseye_assert
 
-Add a new target. The server assigns the next available ID.
+Upsert a target: create if the ID doesn't exist, patch if it does.
+Omit `id` to create a new target with an auto-assigned top-level ID
+(`T1`, `T2`, ...). Provide `id` to create at a specific ID (useful
+for sub-targets like `T1.2`) or to patch an existing target — the
+handler decides create-vs-patch based on whether the ID exists.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cwd` | string | required | Working directory |
-| `name` | string | required | Desired state assertion |
-| `value` | number | required | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 |
-| `cost` | number | required | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 |
-| `acceptance` | string[] | required | How to verify the target is achieved |
-| `context` | string | `""` | Why this target matters |
-| `kind` | string | `"work"` | `"work"` or `"verify"` |
-| `verifies` | string[] | `[]` | For verify targets: IDs of targets this verifies |
-| `origin` | string | `"manual"` | How the target was created |
-| `tags` | string[] | `[]` | Freeform tags |
-
-### bullseye_update
-
-Update fields on an existing target. Only provided fields are changed.
+On create, `name`, `value`, `cost`, and `acceptance` are required.
+On patch, all fields are optional; only the ones provided are changed.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
-| `id` | string | required | Target ID |
-| `status` | string | null | `"identified"`, `"converging"`, `"achieved"` |
-| `value` | number | null | New value score |
-| `cost` | number | null | New cost estimate |
-| `name` | string | null | New assertion |
-| `acceptance` | string[] | null | Replace acceptance criteria |
-| `context` | string | null | Replace context |
-| `tags` | string[] | null | Replace tags |
+| `id` | string | null | Target ID (omit to auto-assign a new top-level ID) |
+| `name` | string | null | Desired state assertion (required on create) |
+| `value` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create) |
+| `cost` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create) |
+| `acceptance` | string[] | null | How to verify the target is achieved (required on create) |
+| `context` | string | null | Why this target matters |
+| `kind` | string | `"work"` on create | `"work"` or `"verify"`; settable only on create |
+| `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"` |
+| `depends_on` | string[] | null | IDs of targets this one depends on (must be achieved first) |
+| `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work |
+| `verifies` | string[] | null | For verify targets: IDs of targets this verifies |
+| `origin` | string | `"manual"` on create | How the target was created |
+| `tags` | string[] | null | Freeform tags |
 
 ### bullseye_retire
 
@@ -136,8 +131,8 @@ manual re-rendering.
 ### bullseye_init
 
 Create a starter `docs/targets.yaml` with a sample target. Refuses to
-overwrite an existing file — use `bullseye_add` for repos that already
-have targets.
+overwrite an existing file — use `bullseye_assert` for repos that
+already have targets.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -199,9 +194,6 @@ targets:
       - CI green on all platforms
       - No test skips without documented reason
     context: "Cross-platform CI is a project goal."  # optional
-    gates:                                # gating relationships (optional)
-      - target: T2
-        criticality: 0.8                  # fraction of gated value (default 1.0)
     depends_on: [T3]                      # hard blockers (optional)
     verifies: [T4, T5]                    # verify targets only (optional)
     rework: T4                            # re-entry on verify failure (optional)
@@ -216,7 +208,9 @@ targets:
 ### Target IDs
 
 Targets use `T<N>` (e.g., `T1`, `T2`). IDs are assigned
-automatically by `bullseye_add`.
+automatically by `bullseye_assert` when `id` is omitted.
+Sub-target IDs (`T1.2`) can be created by passing an explicit
+`id` — the assert tool creates-if-missing or patches-if-present.
 
 ### Status lifecycle
 
@@ -227,10 +221,12 @@ destination to `converging`.
 
 ### Edges
 
+Bullseye has a single structural edge type: `depends_on`. Legacy
+`gates` edges from older targets files are migrated into `depends_on`
+on load (the owning target absorbs its gates as blockers).
+
 - **depends_on**: Hard blocking. Target cannot start until all
-  dependencies are achieved.
-- **gates**: Soft blocking with criticality weight. A gate at 0.8
-  means 80% of the gated target's value depends on this gate.
+  dependencies are achieved. The only structural edge.
 - **verifies**: Verify targets validate work targets. Only valid on
   `kind: verify`.
 - **rework**: On verify failure, re-enter this target. Must be one of
@@ -247,12 +243,20 @@ bullseye_frontier(cwd) → unblocked targets ready for work
 ### Add and track a target
 
 ```
-bullseye_add(cwd, name, value, cost, acceptance)
-  → creates target, returns assigned ID
-bullseye_update(cwd, id, status: "converging")
-  → mark as in progress
+bullseye_assert(cwd, name, value, cost, acceptance)
+  → creates target with auto-assigned ID
+bullseye_assert(cwd, id, status: "converging")
+  → mark as in progress (patch by ID)
 bullseye_retire(cwd, id, actual_cost)
   → mark as achieved
+```
+
+### Add a new prerequisite above existing work
+
+```
+bullseye_assert(cwd, name, value, cost, acceptance, blocks: [T5, T7])
+  → creates a new target and injects it into T5 and T7's depends_on,
+    so both become blocked on the new prerequisite in one call
 ```
 
 ### Verify and rework
@@ -308,14 +312,16 @@ available.
 
 ### Managing targets
 
-- `bullseye_add` — create a new target (provide name, value, cost,
-  and acceptance criteria; ID is auto-assigned).
-- `bullseye_update` — change status, value, cost, or other fields on
-  an existing target.
+- `bullseye_assert` — upsert a target. Omit `id` to create a new
+  target with an auto-assigned ID (provide `name`, `value`, `cost`,
+  `acceptance`). Provide `id` to create at a specific ID (sub-targets
+  like `T1.2`) or to patch an existing target (only the provided
+  fields change). Supports `depends_on` and `blocks` (sugar for
+  injecting this target into other targets' `depends_on`).
 - `bullseye_retire` — mark a target as achieved.
 
 When you discover something that should be tracked — a bug, a quality
-gap, a missing capability — add it as a target with `bullseye_add`
+gap, a missing capability — add it as a target with `bullseye_assert`
 rather than leaving a bare TODO.
 
 When you complete work that achieves a target, call `bullseye_retire`

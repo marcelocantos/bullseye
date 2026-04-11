@@ -172,24 +172,6 @@ pub fn mermaid(file: &TargetsFile) -> String {
         lines.push(format!("    {node}[\"{label}\"]"));
     }
 
-    // Gates edges.
-    for (id, t) in &active {
-        for gate in &t.gates {
-            if active.contains_key(gate.target.as_str()) {
-                let label = if gate.criticality < 1.0 {
-                    format!("gates {}%", (gate.criticality * 100.0) as u32)
-                } else {
-                    "gates".to_string()
-                };
-                lines.push(format!(
-                    "    {} -.->|{label}| {}",
-                    mermaid_node(id),
-                    mermaid_node(&gate.target)
-                ));
-            }
-        }
-    }
-
     // Depends-on edges.
     for (id, t) in &active {
         for dep in &t.depends_on {
@@ -261,19 +243,6 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
         // Acceptance must be non-empty.
         if t.acceptance.is_empty() {
             errors.push(format!("{id}: acceptance criteria must not be empty"));
-        }
-
-        // Gates references must exist.
-        for gate in &t.gates {
-            if !file.targets.contains_key(&gate.target) {
-                errors.push(format!("{id}: gates target {} does not exist", gate.target));
-            }
-            if gate.criticality <= 0.0 || gate.criticality > 1.0 {
-                errors.push(format!(
-                    "{id}: criticality for {} must be in (0, 1], got {}",
-                    gate.target, gate.criticality
-                ));
-            }
         }
 
         // Depends-on references must exist.

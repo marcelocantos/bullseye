@@ -52,8 +52,8 @@ fn mermaid_generation() {
     let file = load_fixture();
     let diagram = graph::mermaid(&file);
     assert!(diagram.contains("graph TD"));
-    // T3 gates T1 — should have a dotted arrow.
-    assert!(diagram.contains("gates"));
+    // T5 depends on T1 and T3 — should have "needs" edges.
+    assert!(diagram.contains("needs"));
 }
 
 #[test]
@@ -509,9 +509,6 @@ fn renders_markdown() {
     // Has acceptance criteria.
     assert!(md.contains("- **Acceptance**:"));
 
-    // Has gates.
-    assert!(md.contains("- **Gates**: 🎯T1 (80%)"));
-
     // Achieved target has achieved date.
     assert!(md.contains("- **Achieved**: 2026-03-10"));
 
@@ -526,6 +523,55 @@ fn markdown_path_derivation() {
     let yaml = Path::new("/foo/docs/targets.yaml");
     let md = render::markdown_path(yaml);
     assert_eq!(md, Path::new("/foo/docs/targets.md"));
+}
+
+#[test]
+fn load_migrates_legacy_gates_to_depends_on() {
+    use std::io::Write;
+    // Write a legacy YAML with the old `gates` field and verify that
+    // `T2.gates = [T1]` folds into `T2.depends_on += [T1]` — i.e., the
+    // owning target absorbs its gates as blockers ("T2 is gated by T1").
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let path = docs.join("targets.yaml");
+
+    let legacy_yaml = r#"
+targets:
+  T1:
+    name: Upstream prerequisite
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - prerequisite is ready
+    discovered: 2026-04-01
+  T2:
+    name: Downstream work
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - it works
+    gates:
+      - target: T1
+        criticality: 0.8
+    discovered: 2026-04-01
+"#;
+    write!(std::fs::File::create(&path).unwrap(), "{legacy_yaml}").unwrap();
+
+    let file = store::load(&path).unwrap();
+    // T2 should now depend on T1, because T2 was gated by T1.
+    assert_eq!(file.targets["T2"].depends_on, vec!["T1"]);
+    assert!(file.targets["T1"].depends_on.is_empty());
+    // Both targets should have empty gates after migration.
+    assert!(file.targets["T1"].gates.is_empty());
+    assert!(file.targets["T2"].gates.is_empty());
+    // And the frontier reflects the new blocking edge.
+    let front = graph::frontier(&file);
+    let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
+    assert!(ids.contains(&"T1"), "T1 is unblocked");
+    assert!(!ids.contains(&"T2"), "T2 is blocked by T1");
 }
 
 #[test]

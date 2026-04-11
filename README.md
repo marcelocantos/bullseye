@@ -53,8 +53,7 @@ the nearest `targets.yaml`.
 |------|-------------|
 | `bullseye_list` | List targets (active/achieved/all) |
 | `bullseye_get` | Get a single target by ID with full detail |
-| `bullseye_add` | Add a new target (auto-assigns ID) |
-| `bullseye_update` | Update fields on an existing target |
+| `bullseye_assert` | Upsert a target — create (auto- or explicit ID) or patch in one call |
 | `bullseye_retire` | Mark a target achieved |
 | `bullseye_frontier` | Unblocked leaf targets ready for work |
 | `bullseye_rework` | Trigger rework from a failed verification |
@@ -66,6 +65,7 @@ the nearest `targets.yaml`.
 | `bullseye_init` | Create starter targets.yaml with sample target |
 | `bullseye_startup_context` | Session startup context (frontier, recent achievements, warnings) |
 | `bullseye_portfolio` | Cross-repo portfolio summary with frontier targets |
+| `bullseye_summary` | Consolidated status overview (groups, frontier, blocked, stale, WSJF) |
 
 See [agents-guide.md](docs/agents-guide.md) for detailed tool
 parameters, the targets.yaml schema, usage workflows, and a

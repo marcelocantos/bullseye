@@ -74,21 +74,6 @@ fn render_target(out: &mut String, id: &str, t: &Target) {
         writeln!(out, "- **Context**: {}", t.context).unwrap();
     }
 
-    if !t.gates.is_empty() {
-        let gs: Vec<String> = t
-            .gates
-            .iter()
-            .map(|g| {
-                if g.criticality < 1.0 {
-                    format!("🎯{} ({}%)", g.target, (g.criticality * 100.0) as u32)
-                } else {
-                    format!("🎯{}", g.target)
-                }
-            })
-            .collect();
-        writeln!(out, "- **Gates**: {}", gs.join(", ")).unwrap();
-    }
-
     if !t.depends_on.is_empty() {
         let deps: Vec<String> = t.depends_on.iter().map(|d| format!("🎯{d}")).collect();
         writeln!(out, "- **Depends on**: {}", deps.join(", ")).unwrap();

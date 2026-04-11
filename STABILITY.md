@@ -9,7 +9,7 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.7.0.
+Snapshot as of v0.8.0.
 
 ### MCP tools
 
@@ -17,8 +17,7 @@ Snapshot as of v0.7.0.
 |------|--------|-------|
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_add(cwd, name, value, cost, acceptance, ...)` | Needs review | Optional fields may expand; missing `depends_on` param |
-| `bullseye_update(cwd, id, ...)` | Needs review | Cannot update `depends_on`, `gates`, `verifies`, `rework`, `retry_budget` |
+| `bullseye_assert(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | New in v0.8.0 — unified add/update upsert; optional fields may expand |
 | `bullseye_retire(cwd, id, actual_cost)` | Stable | |
 | `bullseye_frontier(cwd)` | Stable | |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
@@ -30,6 +29,11 @@ Snapshot as of v0.7.0.
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
 | `bullseye_startup_context(cwd, recent_days)` | Needs review | New in v0.7.0; output format may evolve |
 | `bullseye_portfolio(root, max_depth)` | Needs review | New in v0.7.0; output format may evolve |
+| `bullseye_summary(cwd, top_n)` | Needs review | New in v0.7.0; output format may evolve |
+
+**Removed in v0.8.0** (breaking):
+- `bullseye_add` — replaced by `bullseye_assert` (upsert)
+- `bullseye_update` — replaced by `bullseye_assert` (upsert)
 
 Planned additions (not yet implemented):
 - `bullseye_verify` — execute acceptance checks via sawmill
@@ -47,8 +51,7 @@ Planned additions (not yet implemented):
 | `actual_cost` | Stable | |
 | `acceptance` | Stable | |
 | `context` | Stable | |
-| `gates` (target, criticality) | Stable | |
-| `depends_on` | Stable | |
+| `depends_on` | Stable | Single edge type (v0.8.0); legacy `gates` edges are migrated into `depends_on` on load |
 | `verifies` | Stable | |
 | `rework` | Stable | |
 | `retry_budget`, `retries` | Stable | |
@@ -81,14 +84,18 @@ Planned additions:
 
 - **Tool response format**: Responses are unstructured text. Consider
   returning structured JSON alongside text for programmatic consumers.
-- **`bullseye_add` missing `depends_on`**: Cannot set dependencies at
-  creation time — requires a separate manual edit of `targets.yaml`.
-- **`bullseye_update` missing edge parameters**: Cannot update
-  `depends_on`, `gates`, `verifies`, `rework`, or `retry_budget`.
 - **`bullseye_verify`**: Core planned tool not yet implemented. Should
   be present before 1.0.
-- **`bullseye_startup_context` and `bullseye_portfolio` stabilisation**:
-  Both new in v0.7.0; need real-world usage before locking in.
+- **`bullseye_startup_context`, `bullseye_portfolio`, `bullseye_summary`
+  stabilisation**: All three are new and their output formats may evolve
+  with real-world usage.
+- **`bullseye_assert` stabilisation**: New in v0.8.0 as a unified upsert
+  replacing add/update. Needs real-world usage before locking in the
+  parameter set — the `blocks` sugar field in particular may see
+  iteration (e.g., symmetric `gated_by`, `verified_by` sugars).
+- **Settling threshold reset**: The v0.8.0 release removes `bullseye_add`
+  and `bullseye_update` and retires the `gates` schema field, both
+  breaking changes. The settling clock restarts from v0.8.0.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0

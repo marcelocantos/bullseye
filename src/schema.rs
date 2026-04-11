@@ -50,9 +50,11 @@ pub struct Target {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub context: String,
 
-    /// Targets this one enables (gating relationships).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub gates: Vec<GateEdge>,
+    /// Transient field: legacy `gates` edges read from old targets files.
+    /// Always empty after [`migrate_gates_to_depends_on`] runs; never serialized.
+    /// Retained only so old YAMLs deserialize without error.
+    #[serde(default, skip_serializing)]
+    pub gates: Vec<LegacyGateEdge>,
 
     /// Targets that must be achieved before work on this one begins.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -93,14 +95,40 @@ pub struct Target {
     pub achieved: Option<NaiveDate>,
 }
 
-/// A gating relationship: this target enables `target` with the given
-/// criticality (fraction of the gated target's value that depends on
-/// this gate). Defaults to 1.0 (hard prerequisite).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GateEdge {
+/// Legacy gate edge from older targets files. The edge is upstream→downstream
+/// (A gates B means A enables B), which is the inverse of `depends_on`.
+/// Criticality was a soft-blocking weight that no downstream logic ever
+/// consumed; it is discarded on migration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LegacyGateEdge {
     pub target: String,
-    #[serde(default = "default_criticality")]
-    pub criticality: f64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub criticality: Option<f64>,
+}
+
+/// Fold legacy `gates` edges into `depends_on` on the field-owning target.
+///
+/// Although the docstring on the old field said "targets this one enables",
+/// real-world data across every repo that used it treated `Gates: 🎯X` as
+/// **"I am gated by X"** — the natural English reading. Verified against
+/// concrete examples (e.g. pairdroid T4 "installable via Homebrew" had
+/// `Gates: T1, T3`, which can only mean T4 depends on T1 and T3, since
+/// homebrew installation can't possibly be a prerequisite of the app code
+/// it packages). Under that reading, `t.gates = [X]` is equivalent to
+/// `t.depends_on += [X]`, with the criticality weight discarded.
+///
+/// Called from [`crate::store::load`] and from markdown import, so every
+/// in-memory `TargetsFile` the rest of the codebase sees has `gates` empty.
+pub fn migrate_gates_to_depends_on(file: &mut TargetsFile) {
+    for target in file.targets.values_mut() {
+        let gates = std::mem::take(&mut target.gates);
+        for gate in gates {
+            if !target.depends_on.contains(&gate.target) {
+                target.depends_on.push(gate.target);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,10 +154,6 @@ fn is_zero(v: &u32) -> bool {
 
 fn is_work(kind: &Kind) -> bool {
     *kind == Kind::Work
-}
-
-fn default_criticality() -> f64 {
-    1.0
 }
 
 fn default_origin() -> String {
