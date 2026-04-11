@@ -71,6 +71,20 @@ pub struct Target {
     /// How to verify the desired state is achieved.
     pub acceptance: Vec<String>,
 
+    /// Optional executable acceptance checks.
+    ///
+    /// Each entry names a sawmill verification primitive. Bullseye
+    /// never calls sawmill directly (MCP servers can't call each
+    /// other), so these are consumed by `bullseye_verify`, which
+    /// returns a structured plan for the agent (or `/cv` skill) to
+    /// execute against sawmill and feed results back into a report.
+    ///
+    /// See `docs/mcp-triad.md` §1 for the phasing: today's sawmill
+    /// supports `convention` and `query`; `invariant` is reserved
+    /// for phase 2 once sawmill T19 lands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<Check>,
+
     /// Why this target matters, how it was discovered.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub context: String,
@@ -190,6 +204,66 @@ impl Target {
     pub fn is_active(&self) -> bool {
         self.status != Status::Achieved
     }
+}
+
+/// A single executable check attached to a target.
+///
+/// Serialized form matches `docs/mcp-triad.md` §1 exactly: each list
+/// entry is a single-key map where the key names the variant.
+///
+/// ```yaml
+/// checks:
+///   - convention: no-platform-ifdefs
+///   - query:
+///       kind: preprocessor_directive
+///       pattern: "ifdef|ifndef|if defined"
+///       exclude_path: src/platform/
+///       expect: 0
+///   - invariant: platform-isolation
+/// ```
+///
+/// This is the external-tagging shape serde produces for an enum by
+/// default; `rename_all = "lowercase"` gives us the doc-accurate
+/// discriminator names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Check {
+    /// Reference a named sawmill convention via `check_conventions`.
+    Convention {
+        /// Name of the sawmill convention to run.
+        convention: String,
+    },
+    /// Run a structural sawmill `query` and assert a result count.
+    Query {
+        /// Query parameters the sawmill `query` tool accepts.
+        query: QueryCheck,
+    },
+    /// Reference a named sawmill structural invariant (phase 2,
+    /// sawmill 🎯T19).
+    Invariant {
+        /// Name of the sawmill invariant to run.
+        invariant: String,
+    },
+}
+
+/// Parameters for a `query`-kind check. Mirrors the fields sawmill's
+/// `query` tool accepts today: a node kind, an optional regex pattern,
+/// an optional path-exclusion glob, and an expected match count.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryCheck {
+    /// Tree-sitter node kind sawmill should look for (e.g.
+    /// `preprocessor_directive`).
+    pub kind: String,
+    /// Optional regex or substring the matching nodes must contain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// Optional path glob to exclude from the search (e.g. a directory
+    /// where the pattern is allowed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_path: Option<String>,
+    /// Expected number of matches; the check passes when the observed
+    /// count equals this number.
+    pub expect: u32,
 }
 
 impl TargetsFile {
