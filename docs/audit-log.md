@@ -71,5 +71,5 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 ## 2026-04-11 -- /release v0.12.0
 
-- **Commit**: pending
+- **Commit**: `de7d7cb`
 - **Outcome**: Released v0.12.0 (darwin-arm64, linux-amd64, linux-arm64). Single-focus release via #22: renamed `bullseye_assert` → `bullseye_put`. The tool's semantics haven't changed (still an upsert), but "assert" carried the wrong connotation in programming contexts — "put" matches the REST verb and the actual behaviour. Breaking at the MCP tool surface; parameters and response shape unchanged. Skills sweep in `marcelocantos/skills` commit `266c2d0` updates `/target`, `/wrap`, `/stash`, `/cv`, and the global CLAUDE.md convergence directives in parallel. Also adds `.claude/settings.local.json` to `.gitignore`. 92 tests unchanged. Homebrew formula updated.
