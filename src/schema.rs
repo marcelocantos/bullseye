@@ -59,10 +59,39 @@ pub struct Target {
     /// User-scored value on Fibonacci scale (1, 2, 3, 5, 8, 13, 20).
     /// Required for leaf targets. Interior targets derive value from
     /// the graph, but the file stores the computed result.
+    ///
+    /// **Portfolio-scope input only.** Value is consumed by
+    /// cross-repo ordering in [`crate::portfolio`] (the weekly-plus
+    /// horizon where human attention is the scarce resource). It is
+    /// *not* consumed by repo-level frontier ordering — inside a
+    /// repo, 🎯T7 replaced value/cost throughput optimisation with
+    /// distance-to-observable-checkpoint ordering, see
+    /// `docs/mcp-triad.md` section 9.
     pub value: f64,
 
     /// Agent-estimated cost on Fibonacci scale.
+    ///
+    /// **Portfolio-scope input only.** Same scoping rule as
+    /// [`Target::value`]: cost feeds cross-repo prioritisation but
+    /// does not drive repo-level frontier ordering. See 🎯T7.
     pub cost: f64,
+
+    /// Observable-checkpoint marker for repo-level prioritisation.
+    ///
+    /// A target is *observable* when its completion produces
+    /// something the human decision-maker can look at and react to
+    /// — a checkpoint. Verify-kind targets are observable by
+    /// definition (their whole point is to emit a pass/fail signal);
+    /// work-kind targets are observable only when this flag is set.
+    /// Chains of non-observable targets longer than a few hops form
+    /// **tunnels** that the repo-level frontier ordering actively
+    /// steers away from. See [`crate::graph::is_observable`] and
+    /// 🎯T7 in `docs/targets.yaml`.
+    ///
+    /// Default `false`; omitted from YAML when false so the common
+    /// case stays clean.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub observable: bool,
 
     /// Actual cost recorded on retirement, for calibration.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -258,6 +287,10 @@ pub enum Kind {
 
 fn is_zero(v: &u32) -> bool {
     *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 fn is_work(kind: &Kind) -> bool {

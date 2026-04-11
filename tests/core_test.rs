@@ -286,6 +286,7 @@ fn tunnel_detects_deep_chain() {
                 status: Status::Identified,
                 value: 1.0,
                 cost: 1.0,
+                observable: false,
                 actual_cost: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
@@ -315,6 +316,7 @@ fn tunnel_detects_deep_chain() {
             status: Status::Identified,
             value: 1.0,
             cost: 1.0,
+            observable: false,
             actual_cost: None,
             acceptance: vec!["verified".to_string()],
             checks: vec![],
@@ -1106,11 +1108,23 @@ fn summary_shows_blocked_targets() {
 }
 
 #[test]
-fn summary_frontier_ordered_by_value() {
-    // No momentum → focus = value, so the frontier is sorted by
-    // target value desc. The fixture's frontier is T1 (v=8), T3 (v=5),
-    // T2 (v=3). T5 is a verify target blocked on T1+T3 so it's not
-    // in the frontier; T4 is achieved.
+fn summary_frontier_ordered_by_distance_and_fanout() {
+    // Repo-level ordering (🎯T7): ascending distance-to-observable,
+    // tiebroken by descending unblocking fanout, then by ID.
+    //
+    // The fixture's frontier is T1, T2, T3. T5 is a verify target
+    // that covers T1 and T3 (distance 1 for both), and both are in
+    // T5's depends_on so both have fanout 1. T2 has no observable
+    // reachable and no dependants at all — tunnel. Expected order:
+    // T1, T3, T2 (T1 and T3 tie on (dist=1, fanout=1) with T1 < T3
+    // by ID; T2 sorts last because it extends a tunnel).
+    //
+    // Value/cost intentionally have no effect on this ordering;
+    // they're portfolio-scope inputs. This test used to assert a
+    // value-desc order that happened to produce the same top
+    // target — the new assertions lock in the *reason* so a future
+    // refactor that reintroduces value-based ordering at repo
+    // scope would fail explicitly.
     let file = load_fixture();
     let out = graph::summary(&file, "test", None, false);
 
@@ -1129,14 +1143,18 @@ fn summary_frontier_ordered_by_value() {
 
     assert!(
         t1_pos < t3_pos,
-        "T1 (v=8) should rank above T3 (v=5); got: {frontier_text}"
+        "T1 (dist=1, fanout=1, id=T1) should rank above T3 (dist=1, fanout=1, id=T3); got: {frontier_text}"
     );
     assert!(
         t3_pos < t2_pos,
-        "T3 (v=5) should rank above T2 (v=3); got: {frontier_text}"
+        "T3 (dist=1) should rank above T2 (dist=None, tunnel); got: {frontier_text}"
     );
-    // Without momentum, the plain baseline shape is used.
-    assert!(frontier_text.contains("v=8"));
+
+    // Annotation format exposes dist/fanout, not value/focus/momentum.
+    assert!(frontier_text.contains("dist=1"));
+    assert!(frontier_text.contains("fanout=1"));
+    assert!(frontier_text.contains("no observable reachable"));
+    assert!(!frontier_text.contains("v=8"));
     assert!(!frontier_text.contains("focus"));
     assert!(!frontier_text.contains("momentum"));
 }
@@ -1167,6 +1185,7 @@ targets:
     status: identified
     value: 8
     cost: 3
+    observable: true
     acceptance:
       - Produces the primary artifact
       - Tests cover the happy path
@@ -1465,110 +1484,380 @@ fn every_tool_emits_valid_json_schema() {
 }
 
 #[test]
-fn summary_momentum_reorders_frontier() {
+fn summary_momentum_does_not_affect_repo_level_ordering() {
     use std::collections::BTreeMap;
 
-    // Baseline frontier ordering (value desc): T1 (v=8), T3 (v=5), T2 (v=3).
-    // Apply momentum:
-    //   T3 × 5.0 → focus 25.0 (jumps to top)
-    //   T1 × 0.5 → focus  4.0 (drops below T2)
-    //   T2 × 1.0 → focus  3.0 (default, no explicit entry)
-    // Expected order desc: T3 (25), T1 (4), T2 (3).
+    // 🎯T7 removed momentum (and value/cost) from repo-level
+    // frontier ordering. The parameter is still accepted on the
+    // wire for backward compatibility, but it must not perturb the
+    // order — repo scope is driven purely by distance-to-observable
+    // and unblocking fanout. Momentum lives at the portfolio layer
+    // now (`src/portfolio.rs`), not here.
     let file = load_fixture();
     let mut momentum = BTreeMap::new();
-    momentum.insert("T3".to_string(), 5.0);
-    momentum.insert("T1".to_string(), 0.5);
-    let out = graph::summary(&file, "test", Some(&momentum), false);
+    // Boost T2 (the dirty tunnel) with an absurd multiplier. In the
+    // old value × momentum formula this would catapult T2 to the
+    // top. Under repo-level ordering it must stay dead last — its
+    // distance to an observable is `None`.
+    momentum.insert("T2".to_string(), 100.0);
+    momentum.insert("T1".to_string(), 0.01);
 
-    // No WSJF section at all.
-    assert!(!out.contains("## WSJF ranking"));
-    assert!(!out.contains("WSJF"));
+    let with = graph::summary(&file, "test", Some(&momentum), false);
+    let without = graph::summary(&file, "test", None, false);
 
-    let frontier_section = out
-        .split("## Frontier")
-        .nth(1)
-        .expect("frontier section exists");
-    let end = frontier_section
-        .find("\n## ")
-        .unwrap_or(frontier_section.len());
-    let frontier_text = &frontier_section[..end];
+    let section = |s: &str| -> String {
+        let start = s.split("## Frontier").nth(1).unwrap();
+        let end = start.find("\n## ").unwrap_or(start.len());
+        start[..end].to_string()
+    };
 
-    let t3_pos = frontier_text.find("🎯T3").expect("T3 in frontier");
-    let t1_pos = frontier_text.find("🎯T1").expect("T1 in frontier");
-    let t2_pos = frontier_text.find("🎯T2").expect("T2 in frontier");
-
-    assert!(
-        t3_pos < t1_pos,
-        "T3 (focus 25.0) should rank above T1 (focus 4.0). Got:\n{frontier_text}"
+    assert_eq!(
+        section(&with),
+        section(&without),
+        "momentum map must not change repo-level frontier ordering"
     );
+    // Deliberately absent: any reference to WSJF, focus, or
+    // momentum annotations in the new format.
+    assert!(!with.contains("WSJF"));
+    assert!(!with.contains("focus"));
+    assert!(!with.contains("× momentum"));
+}
+
+#[test]
+fn observable_field_yaml_roundtrip() {
+    use std::io::Write;
+    // The observable flag must round-trip cleanly: present only
+    // when true, absent when false, survives save + reload.
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let path = docs.join("targets.yaml");
+
+    let yaml = r#"
+schema_version: 1
+targets:
+  T1:
+    name: Observable checkpoint work
+    status: identified
+    value: 5
+    cost: 3
+    observable: true
+    acceptance:
+      - done
+    discovered: 2026-04-11
+  T2:
+    name: Plain work
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - done
+    discovered: 2026-04-11
+"#;
+    write!(std::fs::File::create(&path).unwrap(), "{yaml}").unwrap();
+
+    let file = store::load(&path).unwrap();
+    assert!(file.targets["T1"].observable);
+    assert!(!file.targets["T2"].observable);
+
+    // Save + reload: observable preserved, absent-false field not
+    // re-emitted on the false target.
+    store::save(&path, &file).unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(raw.contains("observable: true"));
+    // The false target must not have an explicit `observable: false`
+    // line — serde should skip it via `is_false`.
+    let t2_block = raw.split("T2:").nth(1).unwrap_or("");
     assert!(
-        t1_pos < t2_pos,
-        "T1 (focus 4.0) should rank above T2 (focus 3.0). Got:\n{frontier_text}"
+        !t2_block.contains("observable"),
+        "T2 should not serialize observable: false; got:\n{t2_block}"
     );
 
-    // Boosted and suppressed targets show both focus and momentum
-    // annotations. Baseline entries (no explicit momentum entry) show
-    // focus but elide the "× momentum" clause.
-    assert!(frontier_text.contains("focus 25.0"));
-    assert!(frontier_text.contains("focus 4.0"));
-    assert!(frontier_text.contains("focus 3.0"));
-    assert!(frontier_text.contains("momentum 5.00"));
-    assert!(frontier_text.contains("momentum 0.50"));
+    let reloaded = store::load(&path).unwrap();
+    assert!(reloaded.targets["T1"].observable);
+    assert!(!reloaded.targets["T2"].observable);
+}
 
-    // T2 has no momentum entry — its line shows "(v=3)" without the
-    // "× momentum" clause.
-    let t2_line_end = frontier_text[t2_pos..]
-        .find('\n')
-        .map(|n| t2_pos + n)
-        .unwrap_or(frontier_text.len());
-    let t2_line = &frontier_text[t2_pos..t2_line_end];
-    assert!(
-        !t2_line.contains("× momentum"),
-        "T2 has no momentum entry and should not show × momentum clause: {t2_line}"
-    );
-    assert!(
-        t2_line.contains("focus 3.0"),
-        "T2 line should still show focus when a momentum map is provided: {t2_line}"
+#[test]
+fn observable_distance_finds_nearest_checkpoint() {
+    // Fixture graph:
+    //   T1 (work)   ← T5 (verify covers T1, T3) — dist=1
+    //   T2 (work)   — no forward path to any observable — dist=None
+    //   T3 (work)   ← T5                                   — dist=1
+    //   T5 (verify) — itself observable                    — dist=0
+    let file = load_fixture();
+    assert_eq!(graph::observable_distance(&file, "T1", 4), Some(1));
+    assert_eq!(graph::observable_distance(&file, "T3", 4), Some(1));
+    assert_eq!(graph::observable_distance(&file, "T5", 4), Some(0));
+    assert_eq!(graph::observable_distance(&file, "T2", 4), None);
+
+    // Marking T2 itself observable flips it to dist=0.
+    let mut mutated = load_fixture();
+    mutated.targets.get_mut("T2").unwrap().observable = true;
+    assert_eq!(graph::observable_distance(&mutated, "T2", 4), Some(0));
+
+    // Promoting a downstream work target to observable also closes
+    // the tunnel, without touching the verify-target path.
+    let mut downstream = load_fixture();
+    // Make T1 depend on nothing (already true) and insert a chain
+    // T2 → T2_downstream(observable). Forward edge from T2: anything
+    // that depends on T2. Give T5 a new dependency on T2 so T2
+    // forwards into T5 (which is observable).
+    downstream
+        .targets
+        .get_mut("T5")
+        .unwrap()
+        .depends_on
+        .push("T2".to_string());
+    assert_eq!(
+        graph::observable_distance(&downstream, "T2", 4),
+        Some(1),
+        "T2 should see T5 once T5 depends on T2"
     );
 }
 
 #[test]
-fn summary_momentum_map_with_no_frontier_matches_is_baseline_order() {
-    use std::collections::BTreeMap;
+fn frontier_ordering_prefers_observable_then_fanout() {
+    use bullseye::schema::Target;
+    use chrono::NaiveDate;
 
-    // Only T5 (a verify target, blocked — NOT in frontier) has a
-    // momentum entry. No frontier target is affected, so the
-    // frontier order is identical to the no-momentum baseline.
-    // But the annotation format switches to the "focus X (v=Y)" shape
-    // because a momentum map was provided.
-    let file = load_fixture();
-    let mut momentum = BTreeMap::new();
-    momentum.insert("T5".to_string(), 3.0);
-    let out = graph::summary(&file, "test", Some(&momentum), false);
+    // Hand-rolled scenario exercising every sort key in turn:
+    //   T100 (observable work)            → dist=0, fanout=0  → rank 1
+    //   T101 (work, T102 depends on it)   → dist=∞ via T102→T103(verify)
+    //                                                           dist=2, fanout=1
+    //   T102 (work, blocked by T101)      → not in frontier
+    //   T103 (verify, verifies T100)      → dist=0 itself, but blocked
+    //   T104 (work, dependants = T105,
+    //         T106 both depend on it,
+    //         downstream reaches T107
+    //         verify)                    → dist=1, fanout=2 → rank 2
+    //   T105 (work, deps [T104])         → blocked
+    //   T106 (work, deps [T104])         → blocked
+    //   T107 (verify, verifies T104,
+    //         deps [T104])                → blocked
+    //   T108 (work, tunnel)               → dist=None, fanout=0 → last
+    //
+    // Expected frontier sort: T100 (dist=0), T104 (dist=1, fanout=2),
+    // T101 (dist=2, fanout=1), T108 (dist=None).
+    let date = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
+    let mut file = TargetsFile {
+        schema_version: Some(1),
+        last_evaluated: None,
+        targets: Default::default(),
+    };
 
-    let frontier_section = out
-        .split("## Frontier")
-        .nth(1)
-        .expect("frontier section exists");
-    let end = frontier_section
-        .find("\n## ")
-        .unwrap_or(frontier_section.len());
-    let frontier_text = &frontier_section[..end];
+    let mk =
+        |name: &str, kind: Kind, observable: bool, deps: &[&str], verifies: &[&str]| -> Target {
+            Target {
+                name: name.to_string(),
+                kind,
+                status: Status::Identified,
+                value: 1.0,
+                cost: 1.0,
+                observable,
+                actual_cost: None,
+                acceptance: vec!["done".to_string()],
+                checks: vec![],
+                context: String::new(),
+                gates: vec![],
+                depends_on: deps.iter().map(|s| s.to_string()).collect(),
+                cross_depends: vec![],
+                cross_enables: vec![],
+                verifies: verifies.iter().map(|s| s.to_string()).collect(),
+                rework: None,
+                retry_budget: None,
+                retries: 0,
+                tags: vec![],
+                origin: "test".to_string(),
+                discovered: date,
+                achieved: None,
+            }
+        };
 
-    // Order is baseline: T1 (v=8) > T3 (v=5) > T2 (v=3).
-    let t1_pos = frontier_text.find("🎯T1").expect("T1 in frontier");
-    let t3_pos = frontier_text.find("🎯T3").expect("T3 in frontier");
-    let t2_pos = frontier_text.find("🎯T2").expect("T2 in frontier");
-    assert!(t1_pos < t3_pos);
-    assert!(t3_pos < t2_pos);
+    file.targets
+        .insert("T100".into(), mk("Obs work", Kind::Work, true, &[], &[]));
+    file.targets
+        .insert("T101".into(), mk("Two hops", Kind::Work, false, &[], &[]));
+    file.targets.insert(
+        "T102".into(),
+        mk("Bridge", Kind::Work, false, &["T101"], &[]),
+    );
+    file.targets.insert(
+        "T103".into(),
+        mk("Verify T102", Kind::Verify, false, &["T102"], &["T102"]),
+    );
+    file.targets
+        .insert("T104".into(), mk("Two deps", Kind::Work, false, &[], &[]));
+    file.targets.insert(
+        "T105".into(),
+        mk("A of T104", Kind::Work, false, &["T104"], &[]),
+    );
+    file.targets.insert(
+        "T106".into(),
+        mk("B of T104", Kind::Work, false, &["T104"], &[]),
+    );
+    file.targets.insert(
+        "T107".into(),
+        mk("Verify T104", Kind::Verify, false, &["T104"], &["T104"]),
+    );
+    file.targets
+        .insert("T108".into(), mk("Tunnel", Kind::Work, false, &[], &[]));
 
-    // Annotation format is the has-momentum baseline shape: "focus X
-    // (v=Y)". No "× momentum" clause because no frontier entry has a
-    // non-default multiplier.
-    assert!(frontier_text.contains("focus 8"));
-    assert!(frontier_text.contains("focus 5"));
-    assert!(frontier_text.contains("focus 3"));
-    assert!(!frontier_text.contains("× momentum"));
+    let errors = graph::validate(&file);
+    assert!(errors.is_empty(), "fixture invalid: {errors:?}");
+
+    let front = graph::frontier(&file);
+    let ranked = graph::rank_frontier(&file, &front);
+    let ids: Vec<&str> = ranked.iter().map(|r| r.target.id.as_str()).collect();
+
+    // T100 is observable (dist=0). T104 has dist=1 via T107 and
+    // fanout=2 (T105, T106, T107 all depend on it). T101 has
+    // dist=2 via T102 → T103 and fanout=1. T108 is a tunnel.
+    assert_eq!(
+        ids,
+        vec!["T100", "T104", "T101", "T108"],
+        "repo-level ordering mismatch; ranked entries:\n{:?}",
+        ranked
+            .iter()
+            .map(|r| (r.target.id.clone(), r.distance, r.fanout))
+            .collect::<Vec<_>>()
+    );
+
+    // Inspect each signal explicitly so a future refactor that
+    // accidentally swaps the sort order fails loudly.
+    let by_id = |id: &str| ranked.iter().find(|r| r.target.id == id).unwrap();
+    assert_eq!(by_id("T100").distance, Some(0));
+    assert_eq!(by_id("T100").fanout, 0);
+    assert_eq!(by_id("T104").distance, Some(1));
+    assert_eq!(by_id("T104").fanout, 3);
+    assert_eq!(by_id("T101").distance, Some(2));
+    assert_eq!(by_id("T101").fanout, 1);
+    assert_eq!(by_id("T108").distance, None);
+}
+
+#[test]
+fn tunnels_treats_observable_work_as_checkpoint() {
+    use bullseye::schema::Target;
+    use chrono::NaiveDate;
+
+    // Two chains:
+    //   Chain A:  T20 → T21 → T22(observable: true)
+    //             — T20 should NOT be a tunnel (dist=2 via observable work).
+    //   Chain B:  T30 → T31 → T32 (all plain work)
+    //             — T30, T31, T32 ARE tunnels (no observable reachable).
+    //
+    // With the legacy "verify only" definition, every target in
+    // chain A would be flagged; the generalisation in 🎯T7 must
+    // recognise T22 as a checkpoint.
+    let date = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
+    let mut file = TargetsFile {
+        schema_version: Some(1),
+        last_evaluated: None,
+        targets: Default::default(),
+    };
+    let mk = |name: &str, observable: bool, deps: &[&str]| -> Target {
+        Target {
+            name: name.to_string(),
+            kind: Kind::Work,
+            status: Status::Identified,
+            value: 1.0,
+            cost: 1.0,
+            observable,
+            actual_cost: None,
+            acceptance: vec!["done".to_string()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            cross_depends: vec![],
+            cross_enables: vec![],
+            verifies: vec![],
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        }
+    };
+    file.targets.insert("T20".into(), mk("A start", false, &[]));
+    file.targets
+        .insert("T21".into(), mk("A middle", false, &["T20"]));
+    file.targets
+        .insert("T22".into(), mk("A checkpoint", true, &["T21"]));
+    file.targets.insert("T30".into(), mk("B start", false, &[]));
+    file.targets
+        .insert("T31".into(), mk("B middle", false, &["T30"]));
+    file.targets
+        .insert("T32".into(), mk("B end", false, &["T31"]));
+
+    let warnings = graph::tunnels(&file, 3);
+    let flagged: Vec<&str> = warnings.iter().map(|w| w.target_id.as_str()).collect();
+
+    // T22 itself is observable → never a tunnel.
+    assert!(!flagged.contains(&"T22"));
+    // T20 reaches T22 in 2 hops (within max_depth 3) → clean.
+    assert!(!flagged.contains(&"T20"), "got: {flagged:?}");
+    // T21 reaches T22 in 1 hop → clean.
+    assert!(!flagged.contains(&"T21"), "got: {flagged:?}");
+    // Chain B: no observable reachable → all flagged.
+    assert!(flagged.contains(&"T30"));
+    assert!(flagged.contains(&"T31"));
+    assert!(flagged.contains(&"T32"));
+}
+
+#[test]
+fn convergence_blocks_on_tunnel_when_top_frontier_unreachable() {
+    // A project whose entire frontier is a tunnel (no observable
+    // reachable anywhere) must trigger the reshape recommendation
+    // instead of auto-selecting. Uses the `**Blocked**:` prefix so
+    // `/cv`'s auto-execute branch pauses. See 🎯T7 acceptance #5.
+    let tmp = tempfile::tempdir().unwrap();
+    let makefile = "bullseye:\n\t@true\n";
+    // Same shape as SIMPLE_TARGETS_YAML but WITHOUT the observable
+    // flag on T1 — so neither target has an observable downstream.
+    let targets = r#"
+schema_version: 1
+targets:
+  T1:
+    name: Opaque work
+    status: identified
+    value: 8
+    cost: 3
+    acceptance:
+      - done
+    discovered: 2026-04-01
+  T2:
+    name: More opaque work
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - done
+    discovered: 2026-04-01
+"#;
+    write_project(tmp.path(), makefile, targets);
+    let path = tmp.path().join("docs/targets.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+
+    let next = out.split("## Next action").nth(1).expect("next action");
+    assert!(
+        next.contains("**Blocked**"),
+        "expected blocked recommendation; got:\n{next}"
+    );
+    assert!(
+        next.contains("tunnel"),
+        "expected tunnel language; got:\n{next}"
+    );
+    assert!(
+        next.contains("observable: true") || next.contains("verify target"),
+        "expected reshape guidance; got:\n{next}"
+    );
+    // Crucially: no Execute now dispatch — the /cv skill relies on
+    // this to pause for human reshaping.
+    assert!(!next.contains("**Execute now**"));
 }
 
 #[test]
@@ -1589,6 +1878,7 @@ fn summary_stale_parent_all_children_achieved() {
                 status: Status::Achieved,
                 value: 2.0,
                 cost: 1.0,
+                observable: false,
                 actual_cost: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
@@ -1632,6 +1922,7 @@ fn summary_shows_grouped_children() {
             status: Status::Identified,
             value: 2.0,
             cost: 1.0,
+            observable: false,
             actual_cost: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],

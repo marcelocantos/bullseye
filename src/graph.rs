@@ -3,7 +3,16 @@
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
-use crate::schema::{Kind, Status, TargetsFile};
+use crate::schema::{Kind, Status, Target, TargetsFile};
+
+/// Default maximum BFS depth for observable-reachability. Tunnel
+/// detection uses [`tunnels`]'s own `max_depth` parameter; this
+/// constant is the upper bound the repo-level frontier ordering
+/// uses when computing distance-to-nearest-observable as a sort
+/// key. Chosen generously so virtually any realistic repo-level
+/// graph is fully explored; anything beyond is reported as "no
+/// observable reachable" (i.e. `None`) and steered away from.
+pub const OBSERVABLE_REACH_LIMIT: usize = 16;
 
 /// A target in the frontier: unblocked and ready for work.
 #[derive(Debug, Clone)]
@@ -45,66 +54,166 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
         .collect()
 }
 
-/// A tunnel warning: a work target that is too far from verification.
-#[derive(Debug, Clone)]
-pub struct TunnelWarning {
-    /// The work target at the start of the unverified chain.
-    pub target_id: String,
-    pub target_name: String,
-    /// Minimum hops to the nearest verify target (None = no verify reachable).
-    pub depth: Option<usize>,
-    /// The nearest verify target (if any).
-    pub nearest_verify: Option<String>,
+/// Is this target an *observable checkpoint*?
+///
+/// Observable targets are those whose completion produces something
+/// the human decision-maker can look at and react to. Verify-kind
+/// targets are observable by definition — their whole purpose is to
+/// emit a pass/fail signal. Work-kind targets are observable only
+/// when explicitly flagged via [`crate::schema::Target::observable`].
+///
+/// Repo-level prioritisation (🎯T7) uses observable reachability as
+/// its primary sort signal: the frontier is ordered to move the
+/// project toward the *next* observable checkpoint as quickly as
+/// possible, and chains of non-observable targets (tunnels) are
+/// flagged so the user can reshape the graph rather than blunder
+/// through them.
+pub fn is_observable(target: &Target) -> bool {
+    target.kind == Kind::Verify || target.observable
 }
 
-/// Detect tunnels: active work targets that are far from verification.
+/// Build the forward adjacency map used by both tunnel detection
+/// and observable-distance computation. An edge `a → b` means "b
+/// sits downstream of a in the convergence graph": either b depends
+/// on a (standard structural edge), or b is a verify target whose
+/// `verifies` list includes a (the verification-covers-me relation).
 ///
-/// A tunnel exists when a work target has no verify target reachable
-/// within `max_depth` hops along the forward dependency graph (targets
-/// that depend on it, or verify targets whose `verifies` list includes it).
-/// Default max_depth is 2.
-pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
-    let active = file.active();
-
-    // For each active work target, find the shortest distance to a verify
-    // target that covers it (directly or transitively).
-    //
-    // "Covers" means: a verify target V where this target is in V.verifies,
-    // or a verify target V that verifies some target downstream of this one.
-    //
-    // We build a forward graph: target → targets that depend on it.
-    // Then BFS from each work target looking for a verify target.
-
-    // Build forward adjacency: id → set of active targets that list id in depends_on.
+/// Both tunnel detection and repo-level frontier ordering need this
+/// traversal direction, so factoring it out keeps the two callers in
+/// lockstep: generalising the observability predicate automatically
+/// generalises tunnel detection the same way.
+fn forward_adjacency<'a>(
+    active: &BTreeMap<&'a str, &'a Target>,
+) -> BTreeMap<&'a str, Vec<&'a str>> {
     let mut forward: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (id, t) in &active {
+
+    for (id, t) in active {
         for dep in &t.depends_on {
-            if active.contains_key(dep.as_str()) {
-                forward.entry(dep.as_str()).or_default().push(id);
+            if let Some((dep_key, _)) = active.get_key_value(dep.as_str()) {
+                forward.entry(*dep_key).or_default().push(id);
             }
         }
     }
 
-    // Also add edges from work targets to verify targets that list them in verifies.
-    // This is the "verification covers me" relationship.
-    for (id, t) in &active {
+    for (id, t) in active {
         if t.kind == Kind::Verify {
             for v in &t.verifies {
-                if active.contains_key(v.as_str()) {
-                    forward.entry(v.as_str()).or_default().push(id);
+                if let Some((v_key, _)) = active.get_key_value(v.as_str()) {
+                    forward.entry(*v_key).or_default().push(id);
                 }
             }
         }
     }
 
+    forward
+}
+
+/// Shortest hop count from `start_id` to the nearest observable
+/// target along the forward-reachability graph, or `None` when no
+/// observable target is reachable within `max_depth` hops.
+///
+/// Returns `Some(0)` when `start_id` is itself observable (a verify
+/// target or a work target with `observable: true`). That's the
+/// base case and the thing repo-level ordering wants to reward:
+/// working on an observable target directly produces a checkpoint
+/// with zero intermediate hops.
+///
+/// Walks the same forward graph [`tunnels`] uses. The two functions
+/// share this traversal so a change in observability rules lands in
+/// both paths at once.
+pub fn observable_distance(file: &TargetsFile, start_id: &str, max_depth: usize) -> Option<usize> {
+    let active = file.active();
+    // If the caller asks about a target that isn't active, treat as
+    // unreachable — we don't BFS through achieved nodes because the
+    // frontier discussion is entirely about active work.
+    if !active.contains_key(start_id) {
+        return None;
+    }
+
+    let forward = forward_adjacency(&active);
+
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<(&str, usize)> = VecDeque::new();
+    queue.push_back((start_id, 0));
+    visited.insert(start_id);
+
+    while let Some((current, depth)) = queue.pop_front() {
+        if let Some(target) = active.get(current)
+            && is_observable(target)
+        {
+            return Some(depth);
+        }
+        if depth >= max_depth {
+            continue;
+        }
+        if let Some(neighbors) = forward.get(current) {
+            for &next in neighbors {
+                if visited.insert(next) {
+                    queue.push_back((next, depth + 1));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Number of currently-active targets that list `id` in their
+/// `depends_on` — the "unblocking fanout" score used as the first
+/// tiebreaker in repo-level frontier ordering. Higher means
+/// finishing this target unblocks more downstream work.
+pub fn unblocking_fanout(file: &TargetsFile, id: &str) -> usize {
+    file.active()
+        .values()
+        .filter(|t| t.depends_on.iter().any(|d| d == id))
+        .count()
+}
+
+/// A tunnel warning: a work target that is too far from an
+/// observable checkpoint.
+#[derive(Debug, Clone)]
+pub struct TunnelWarning {
+    /// The work target at the start of the unobserved chain.
+    pub target_id: String,
+    pub target_name: String,
+    /// Minimum hops to the nearest observable target (None = no
+    /// observable reachable at all within the BFS horizon).
+    pub depth: Option<usize>,
+    /// The nearest observable target, if one was reachable beyond
+    /// `max_depth` but within the BFS horizon. When `depth` is
+    /// `None`, no observable was reachable at all.
+    pub nearest_verify: Option<String>,
+}
+
+/// Detect tunnels: active *non-observable* work targets that are
+/// far from any observable checkpoint.
+///
+/// A tunnel exists when a work target is not itself observable AND
+/// has no observable target reachable within `max_depth` hops along
+/// the forward dependency graph (targets that depend on it, or
+/// verify targets whose `verifies` list includes it). "Observable"
+/// means either a verify-kind target or a work target marked
+/// `observable: true` — see [`is_observable`] for the full rule.
+///
+/// Default max_depth is 2.
+pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
+    let active = file.active();
+    let forward = forward_adjacency(&active);
+
     let mut warnings = Vec::new();
 
     for (id, t) in &active {
-        if t.kind != Kind::Work {
+        // Only flag work targets that aren't themselves observable.
+        // Verify targets (always observable) and observable work
+        // targets are not themselves tunnels.
+        if t.kind != Kind::Work || is_observable(t) {
             continue;
         }
 
-        // BFS from this work target through forward edges.
+        // BFS from this work target through forward edges, looking
+        // for an observable target beyond the start node. The start
+        // node is already known non-observable (checked above), so
+        // any hit has depth >= 1.
         let mut visited: HashSet<&str> = HashSet::new();
         let mut queue: VecDeque<(&str, usize)> = VecDeque::new();
         queue.push_back((id, 0));
@@ -113,16 +222,17 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
         let mut nearest: Option<(usize, String)> = None;
 
         while let Some((current, depth)) = queue.pop_front() {
-            // Check if current is a verify target that covers us.
-            if let Some(ct) = active.get(current)
-                && ct.kind == Kind::Verify
-                && current != *id
+            if depth > 0
+                && let Some(ct) = active.get(current)
+                && is_observable(ct)
             {
                 nearest = Some((depth, current.to_string()));
                 break;
             }
 
-            // Don't expand beyond max_depth + 1 (we need to check nodes at depth max_depth+1).
+            // Don't expand beyond max_depth + 1 (we need to check
+            // nodes at depth max_depth+1 to decide whether they're
+            // in-range or just outside).
             if depth > max_depth {
                 continue;
             }
@@ -137,12 +247,12 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
         }
 
         match nearest {
-            Some((depth, verify_id)) if depth > max_depth => {
+            Some((depth, observable_id)) if depth > max_depth => {
                 warnings.push(TunnelWarning {
                     target_id: id.to_string(),
                     target_name: t.name.clone(),
                     depth: Some(depth),
-                    nearest_verify: Some(verify_id),
+                    nearest_verify: Some(observable_id),
                 });
             }
             None => {
@@ -463,14 +573,78 @@ pub fn startup_context_broken_file(file_path: &str, error: &str) -> String {
     )
 }
 
+/// An annotated frontier entry in repo-level ordering. Carries the
+/// two sort signals (distance-to-observable, unblocking fanout) so
+/// renderers can display them without recomputing.
+pub struct RankedFrontier<'a> {
+    pub target: &'a FrontierTarget,
+    /// Hop count to the nearest observable checkpoint (0 when the
+    /// target itself is observable). `None` means no observable
+    /// reachable within [`OBSERVABLE_REACH_LIMIT`] — in other words,
+    /// picking this target would extend a tunnel.
+    pub distance: Option<usize>,
+    /// Count of active targets that have this one in their
+    /// `depends_on` list — the "unblocking fanout" score.
+    pub fanout: usize,
+}
+
+/// Order a frontier by repo-level prioritisation (🎯T7).
+///
+/// Sort keys, in order:
+///   1. Ascending distance to the nearest observable target — get
+///      the human to a checkpoint as fast as possible.
+///   2. Descending unblocking fanout — finishing a high-fanout
+///      target frees more downstream work.
+///   3. Ascending target ID — pure determinism for reproducible
+///      output.
+///
+/// Targets with no reachable observable (distance `None`) sort
+/// **after** all finite-distance targets — they extend a tunnel
+/// and should only be considered when nothing better exists.
+///
+/// This function intentionally does NOT consume `value`, `cost`, or
+/// `momentum`. Those are portfolio-scope inputs (see
+/// [`crate::schema::Target::value`] and `docs/mcp-triad.md` §9);
+/// repo-level ordering is driven purely by the graph shape.
+pub fn rank_frontier<'a>(
+    file: &TargetsFile,
+    frontier_targets: &'a [FrontierTarget],
+) -> Vec<RankedFrontier<'a>> {
+    let mut ranked: Vec<RankedFrontier<'a>> = frontier_targets
+        .iter()
+        .map(|ft| RankedFrontier {
+            target: ft,
+            distance: observable_distance(file, &ft.id, OBSERVABLE_REACH_LIMIT),
+            fanout: unblocking_fanout(file, &ft.id),
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| {
+        // Treat None as "worse than any finite distance" by mapping
+        // to usize::MAX for comparison — anything reachable beats
+        // something unreachable.
+        let da = a.distance.unwrap_or(usize::MAX);
+        let db = b.distance.unwrap_or(usize::MAX);
+        da.cmp(&db)
+            .then(b.fanout.cmp(&a.fanout))
+            .then(a.target.id.cmp(&b.target.id))
+    });
+
+    ranked
+}
+
 /// Produce a consolidated status overview for agent consumption.
 ///
-/// The frontier section is ordered by `focus = value × momentum`
-/// descending. If `momentum` is `Some`, each frontier target's value
-/// is multiplied by its listed multiplier (default 1.0 for targets
-/// not in the map) before sorting, so recently-active targets rise
-/// and stale ones sink. The multiplier formula itself is the caller's
-/// responsibility — bullseye never calls out to mnemo.
+/// The frontier section is ordered by repo-level prioritisation
+/// (🎯T7): ascending distance to the nearest observable checkpoint,
+/// tiebroken by descending unblocking fanout, then by target ID.
+///
+/// The `momentum` parameter is retained for wire compatibility with
+/// the previous (portfolio-style) ranking but is **not consumed**
+/// for repo-level ordering — momentum is a portfolio-scope signal
+/// and belongs in [`crate::portfolio`], not here. Passing a momentum
+/// map has no effect on the frontier order. Callers targeting
+/// portfolio-level work should use [`crate::portfolio`] directly.
 ///
 /// When `frontier_details` is true, each frontier entry is expanded
 /// with its full acceptance criteria, context, tags, and related edges.
@@ -482,6 +656,10 @@ pub fn summary(
     momentum: Option<&BTreeMap<String, f64>>,
     frontier_details: bool,
 ) -> String {
+    // Momentum is intentionally ignored at repo scope; see doc
+    // comment. Silence the unused-parameter warning without
+    // changing the public API.
+    let _ = momentum;
     let mut out = String::new();
 
     let errors = validate(file);
@@ -580,69 +758,46 @@ pub fn summary(
     }
     out.push('\n');
 
-    // --- 2. Frontier (ordered by focus = value × momentum) ---
+    // --- 2. Frontier (ordered by repo-level prioritisation) ---
     //
-    // Momentum folds directly into frontier ordering instead of a
-    // separate ranking section. `focus = value × momentum_lookup(id, 1.0)`,
-    // sorted descending. When momentum is absent, the multiplier
-    // defaults to 1.0 for every target, so the sort reduces to
-    // "by value desc" with stable ID-order tiebreaks.
-    let has_momentum = momentum.is_some();
+    // Ascending distance-to-observable, tiebroken by descending
+    // unblocking fanout, then by ID. See [`rank_frontier`] for the
+    // full rule and rationale. Value/cost/momentum intentionally
+    // not consumed here — those are portfolio-scope signals.
     if errors.is_empty() {
         let front = frontier(file);
-        let mut scored: Vec<(FrontierTarget, f64, f64, f64)> = front
-            .iter()
-            .map(|ft| {
-                let value = all_targets.get(&ft.id).map(|t| t.value).unwrap_or(0.0);
-                let m = momentum
-                    .and_then(|mm| mm.get(&ft.id).copied())
-                    .unwrap_or(1.0);
-                let focus = value * m;
-                (ft.clone(), value, m, focus)
-            })
-            .collect();
-        scored.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+        let ranked = rank_frontier(file, &front);
 
         out.push_str("## Frontier (unblocked, ready for work)\n\n");
-        if scored.is_empty() {
+        if ranked.is_empty() {
             out.push_str("(no targets ready for work)\n");
         } else {
-            for (ft, value, m, focus) in &scored {
+            for rf in &ranked {
+                let ft = rf.target;
                 let kind_label = match ft.kind {
-                    Kind::Work => "",
+                    Kind::Work => {
+                        if all_targets.get(&ft.id).is_some_and(|t| t.observable) {
+                            " [observable]"
+                        } else {
+                            ""
+                        }
+                    }
                     Kind::Verify => " [verify]",
                 };
-                // Annotate format depends on whether a momentum map was
-                // provided at all. When it was, every entry shows its
-                // focus score so the caller can see the full ordering
-                // math; when it wasn't, render the plain baseline shape.
-                if has_momentum {
-                    if (m - 1.0).abs() < 1e-6 {
-                        out.push_str(&format!(
-                            "🎯{id} {name}{kind}  [{status:?}] — focus {focus:.1} (v={value})\n",
-                            id = ft.id,
-                            name = ft.name,
-                            kind = kind_label,
-                            status = ft.status,
-                        ));
-                    } else {
-                        out.push_str(&format!(
-                            "🎯{id} {name}{kind}  [{status:?}] — focus {focus:.1} (v={value} × momentum {m:.2})\n",
-                            id = ft.id,
-                            name = ft.name,
-                            kind = kind_label,
-                            status = ft.status,
-                        ));
-                    }
-                } else {
-                    out.push_str(&format!(
-                        "🎯{id} {name}{kind}  [{status:?}]  v={value}\n",
-                        id = ft.id,
-                        name = ft.name,
-                        kind = kind_label,
-                        status = ft.status,
-                    ));
-                }
+                let distance_label = match rf.distance {
+                    Some(0) => "observable".to_string(),
+                    Some(d) => format!("dist={d}"),
+                    None => "no observable reachable".to_string(),
+                };
+                out.push_str(&format!(
+                    "🎯{id} {name}{kind}  [{status:?}] — {dist}, fanout={fan}\n",
+                    id = ft.id,
+                    name = ft.name,
+                    kind = kind_label,
+                    status = ft.status,
+                    dist = distance_label,
+                    fan = rf.fanout,
+                ));
                 if frontier_details {
                     render_frontier_detail(&mut out, &ft.id, all_targets);
                 }
@@ -651,7 +806,7 @@ pub fn summary(
         out.push('\n');
 
         // --- 3. Blocked targets ---
-        let front_ids: HashSet<&str> = scored.iter().map(|(f, _, _, _)| f.id.as_str()).collect();
+        let front_ids: HashSet<&str> = ranked.iter().map(|r| r.target.id.as_str()).collect();
         let blocked: Vec<(&str, &crate::schema::Target)> = active
             .iter()
             .filter(|(id, _)| !front_ids.contains(**id))

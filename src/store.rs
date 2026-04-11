@@ -111,6 +111,7 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
             status: crate::schema::Status::Identified,
             value: 5.0,
             cost: 3.0,
+            observable: false,
             actual_cost: None,
             acceptance: vec![
                 "First milestone is defined with measurable success criteria".to_string(),

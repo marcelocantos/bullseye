@@ -243,6 +243,7 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             status,
             value,
             cost,
+            observable: t.observable.unwrap_or(false),
             actual_cost: None,
             acceptance,
             checks: Vec::new(),
@@ -292,6 +293,9 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         }
         if let Some(ref deps) = t.depends_on {
             target.depends_on = deps.clone();
+        }
+        if let Some(observable) = t.observable {
+            target.observable = observable;
         }
         if let Some(ref verifies) = t.verifies {
             target.verifies = verifies.clone();
