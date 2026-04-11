@@ -91,13 +91,14 @@
 - **Value**: 8
 - **Cost**: 5
 - **Acceptance**:
-  - Repos ranked by aggregate frontier weight adjusted for momentum
-  - Cross-repo enablers get value propagation boost
-  - targets_portfolio returns ranked repos with per-repo frontier and reasoning
-  - Momentum from mnemo_recent_activity integrated into ranking
-- **Context**: Aggregate score: sum(frontier_weight * momentum) / frontier_size. Repos with more frontier targets are more parallelisable and need less per-unit human attention. Cross-repo enablers propagate value from downstream repos. See docs/mcp-triad.md section 6.
-
-- **Depends on**: 🎯T2.1, 🎯T2.2
+  - `bullseye_portfolio` returns repos ranked by an aggregate WSJF score combining per-target `value`/`cost`, caller-supplied momentum, and cross-repo enabler propagation
+  - Per-repo formula committed: `sum(value_i / cost_i × momentum_i × enabler_boost_i) / frontier_size_i`. The `frontier_size_i` divisor encodes the bias that parallelisable repos need less per-unit human attention
+  - `enabler_boost_i` upgrades 🎯T2.2's binary flag to weighted propagation: a target with `cross_enables` inherits a fraction of the downstream target's value, looked up via the portfolio scan
+  - Output includes per-repo reasoning (top-contributing targets, propagated enabler value, momentum signal)
+  - Momentum is a caller-supplied parameter (per-target or per-repo map); bullseye never calls mnemo, preserving the cross-server constraint
+  - Per-target `value`/`cost` are consumed only by the portfolio rollup; in-repo ordering is governed by 🎯T7
+- **Context**: At the portfolio level the human is a bottleneck allocating attention across multiple repos on weekly-plus horizons — exactly where WSJF earns its keep. This target computes per-repo aggregate scores using per-target `value`/`cost` (portfolio-scope inputs), caller-supplied momentum, and weighted cross-repo enabler propagation (upgrading 🎯T2.2's binary flag to value-weighted). The phase boundary separating this engine from the repo-level ordering is described in 🎯T7; T7 must land first so the invariant "per-target value/cost are portfolio-scope inputs" is observable. See docs/mcp-triad.md section 6.
+- **Depends on**: 🎯T2.1, 🎯T2.2, 🎯T7
 - **Tags**: portfolio, mnemo
 - **Status**: Identified
 - **Discovered**: 2026-04-07
@@ -159,6 +160,21 @@
 - **Tags**: protocol, mobile
 - **Status**: Identified
 - **Discovered**: 2026-04-07
+
+### 🎯T7 Repo-level prioritisation by observable checkpoint path
+- **Value**: 8
+- **Cost**: 5
+- **Acceptance**:
+  - Target schema adds `observable: bool` field (default false, omitted from YAML when false)
+  - `bullseye_tunnels` generalised: a target is observable iff `kind: verify` OR `observable: true`; a tunnel is a work target with no observable target reachable within max_depth hops
+  - Repo-level frontier ordering in `bullseye_frontier`, `bullseye_convergence`, and the `/cv` next-action logic is driven by distance-to-nearest-observable-target, tiebreaking by unblocking fanout (downstream dependant count)
+  - Per-target `value`/`cost` fields are documented as portfolio-scope inputs and are not consumed by any repo-level ordering path
+  - `bullseye_convergence` surfaces tunnel warnings inline and, when the top frontier choice would extend a tunnel, recommends graph reshaping rather than auto-selecting
+  - `docs/mcp-triad.md` documents the phase-boundary hypothesis: repo engine = shortest path to next observable checkpoint (flow + uncertainty); portfolio engine = WSJF under human-as-bottleneck (value/cost + momentum + cross-repo propagation)
+- **Context**: Repo-scale work has sub-week horizons; value/cost throughput optimisation is noise there. The meaningful signal is "what moves us as quickly as possible toward and through the chain of critical human decision points?" — decomposing into unblocking flow and uncertainty reduction. Decision points are observable outputs the human can look at and react to. Sometimes they emerge naturally ("new subcommand ready to play with"); other times the graph needs intentional shaping to avoid long opaque tunnels. This target replaces the current repo-level ranking (which leaks portfolio-scope WSJF maths into the repo engine) with an observability-path basis, and generalises the existing `bullseye_tunnels` analysis from verification-reachability to observability-reachability.
+- **Tags**: core, priority
+- **Status**: Identified
+- **Discovered**: 2026-04-11
 
 ## Achieved
 
@@ -384,6 +400,7 @@ graph TD
     T3["Protocol app priority sync"]
     T3_1["targets_priorities SQLite tab…"]
     T3_2["Protocol Today page Focus sec…"]
+    T7["Repo-level prioritisation by …"]
     T1 -.->|needs| T1_2
     T1 -.->|needs| T1_3
     T1 -.->|needs| T1_4
@@ -391,6 +408,7 @@ graph TD
     T1_3 -.->|needs| T1_2
     T2 -.->|needs| T2_3
     T2 -.->|needs| T2_4
+    T2_3 -.->|needs| T7
     T2_4 -.->|needs| T2_3
     T2_4 -.->|needs| T1_3
     T3 -.->|needs| T3_1
