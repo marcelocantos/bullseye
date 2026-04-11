@@ -146,6 +146,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 status: fields.status.unwrap_or(Status::Identified),
                 value: fields.value.unwrap_or(1.0),
                 cost: fields.cost.unwrap_or(1.0),
+                observable: false,
                 actual_cost: fields.actual_cost,
                 acceptance: fields.acceptance,
                 checks: Vec::new(),

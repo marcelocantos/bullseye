@@ -486,6 +486,98 @@ This immediately answers "where was I?" without running `/waw` or
 `/cv`. The agent sees it in context and can decide whether to
 continue prior work or start something new.
 
+## 9. Repo-level prioritisation: the phase-boundary hypothesis
+
+Bullseye runs two distinct prioritisation engines with *different
+objective functions*. The split isn't a layering accident; it
+reflects what actually changes as the time horizon stretches from
+hours to weeks.
+
+### Within a repo: the human as decision-maker (sub-week horizon)
+
+Inside a single repo, the agent's capacity is effectively unlimited.
+Throughput optimisation through value/cost weighting is *noise* at
+this scale — agents can work every frontier target in parallel, so
+there's no throughput to optimise in the first place.
+
+What actually matters is how quickly the work moves the human
+decision-maker to the next *observable checkpoint*: the next moment
+where they can look at something and react. The human's role inside
+a repo is to steer, not to execute. They need fast feedback loops
+on which branches of the target graph are paying off, which
+assumptions were wrong, and where intervention is needed.
+
+This decomposes into two sub-objectives:
+
+1. **Unblocking flow.** Targets that unblock the most downstream
+   work move more of the graph per unit effort. This is the
+   "unblocking fanout" score — count of active targets listing
+   this one in `depends_on`.
+2. **Uncertainty reduction.** Every intermediate target is a
+   prediction that might be wrong. Producing a checkpoint early
+   prunes the wrong predictions before they cost more work.
+
+The signal for both is the same: **distance to the nearest
+observable target**. An observable target is one whose completion
+produces something the human can look at — a verify-kind target
+by definition, or a work-kind target explicitly marked
+`observable: true`. Long chains of non-observable targets are
+**tunnels**, and repo-level ordering actively steers away from
+them.
+
+The repo-level frontier is therefore sorted by:
+
+1. **Ascending distance-to-observable.** Get to a checkpoint fast.
+2. **Descending unblocking fanout.** All else equal, prefer
+   targets that free more downstream work.
+3. **Ascending target ID.** Pure determinism.
+
+`value`, `cost`, and `momentum` do not enter this ordering. They
+are consumed only by the portfolio engine (§6) where the horizon
+is different.
+
+### Across repos: the human as bottleneck allocator (weekly-plus horizon)
+
+Zoom out to the portfolio level and the constraint changes shape.
+The human can't steer fifteen repos in a single afternoon; human
+attention itself becomes the scarce resource. Classical
+value-weighted scheduling earns its keep here: WSJF, momentum,
+cross-repo enablement. That's what `src/portfolio.rs` implements,
+and it's the correct scope for those signals.
+
+The two engines use the same target graph but ask different
+questions. Repo scope asks "Which branch of this graph reaches a
+checkpoint fastest?". Portfolio scope asks "Which repo should I
+enter at all this week?". Mixing the signals in either direction
+corrupts both answers — that's why `Target::value` and
+`Target::cost` carry explicit doc comments declaring them
+portfolio-scope, and why [`graph::rank_frontier`] takes `file` but
+no momentum parameter.
+
+### Tunnel warnings and the reshape recommendation
+
+When the top-ranked frontier candidate has *no* observable target
+reachable at all, `bullseye_convergence` refuses to auto-select it.
+Instead it emits a `**Blocked**:` next-action line recommending the
+user reshape the graph — either add an intermediate verify target
+or promote an existing downstream work target to `observable:
+true`. The `**Blocked**:` prefix triggers the `/cv` skill's
+existing pause-for-human branch, so the agent doesn't blunder
+forward into a tunnel it can't see the end of. See
+[`graph::tunnels`] for the flag-on-detection side and
+`convergence::render_next_action` for the block-on-selection side;
+they share the same `is_observable` predicate.
+
+### Why value/cost still exist
+
+They remain on every target because the portfolio engine consumes
+them, and because the human uses them as shorthand when sketching
+new targets (they're quick fields to fill in and carry useful
+signal at the portfolio level). Dropping them would break the
+portfolio view. What changed in 🎯T7 is that the repo-level code
+paths stop consuming them — they're portfolio-scope inputs, not
+universal sort keys.
+
 ## Open questions
 
 - **MCP server composition**: Should targets call sawmill directly

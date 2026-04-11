@@ -53,13 +53,19 @@ pub fn render_markdown(file: &TargetsFile) -> String {
 }
 
 fn render_target(out: &mut String, id: &str, t: &Target) {
+    // Verify targets are observable by definition; only mark
+    // observable work targets explicitly. See 🎯T7.
     let kind_suffix = match t.kind {
         Kind::Verify => " ✓",
+        Kind::Work if t.observable => " ⦿",
         Kind::Work => "",
     };
     writeln!(out, "\n### 🎯{id}{kind_suffix} {}", t.name).unwrap();
     writeln!(out, "- **Value**: {}", t.value).unwrap();
     writeln!(out, "- **Cost**: {}", t.cost).unwrap();
+    if t.observable {
+        writeln!(out, "- **Observable**: true").unwrap();
+    }
 
     if t.acceptance.len() == 1 {
         writeln!(out, "- **Acceptance**: {}", t.acceptance[0]).unwrap();

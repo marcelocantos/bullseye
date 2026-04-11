@@ -97,6 +97,16 @@ pub struct PutTool {
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
 
+    /// Mark a work target as *observable* — its completion produces
+    /// something the human decision-maker can look at, acting as a
+    /// checkpoint for repo-level prioritisation. Verify-kind targets
+    /// are observable automatically; this flag only matters for
+    /// work-kind targets. Defaults to unchanged on patch; omit (or
+    /// pass `false`) when observability is not a property of the
+    /// target. See 🎯T7 and `docs/mcp-triad.md` §9.
+    #[serde(default)]
+    pub observable: Option<bool>,
+
     /// Sugar: IDs of targets that should gain this target as a dependency.
     /// The handler appends this target's ID to each listed target's `depends_on`.
     /// Lets you declare "I am a new prerequisite for X, Y" at creation time
