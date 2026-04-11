@@ -16,19 +16,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T1.1 Executable acceptance checks via sawmill
-- **Value**: 8
-- **Cost**: 5
-- **Acceptance**:
-  - Target schema has optional checks field (convention, query, invariant types)
-  - targets_verify tool iterates checks and calls sawmill tools
-  - Structured pass/fail report with file/line-level detail
-- **Context**: Phase 1 uses sawmill's existing check_conventions and query tools. Phase 2 adds structural invariants when sawmill T19 lands. See docs/mcp-triad.md section 1.
-
-- **Tags**: sawmill
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
 ### 🎯T1.2 Momentum-aware ranking via mnemo
 - **Value**: 5
 - **Cost**: 3
@@ -97,20 +84,6 @@
 
 - **Depends on**: 🎯T2.1, 🎯T2.2, 🎯T2.3, 🎯T2.4
 - **Tags**: portfolio, architecture
-- **Status**: Identified
-- **Discovered**: 2026-04-07
-
-### 🎯T2.2 Cross-repo dependency edges
-- **Value**: 8
-- **Cost**: 5
-- **Acceptance**:
-  - Schema supports cross_depends and cross_enables fields with repo + capability/target refs
-  - Cross-repo edges surfaced in targets_portfolio output
-  - Targets enabling work in other repos get a priority boost
-- **Context**: Manual cross_depends/cross_enables fields are accurate but high-friction. Future enrichment: mnemo could detect cross-repo references automatically from sessions that reference another repo's targets. Start manual.
-
-- **Depends on**: 🎯T2.1
-- **Tags**: portfolio
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
@@ -188,6 +161,37 @@
 - **Discovered**: 2026-04-07
 
 ## Achieved
+
+### 🎯T1.1 Executable acceptance checks via sawmill
+- **Value**: 8
+- **Cost**: 5
+- **Acceptance**:
+  - Target schema has optional checks field (convention, query, invariant types)
+  - targets_verify tool iterates checks and calls sawmill tools
+  - Structured pass/fail report with file/line-level detail
+- **Context**: Phase 1 uses sawmill's existing check_conventions and query tools. Phase 2 adds structural invariants when sawmill T19 lands. See docs/mcp-triad.md section 1.
+
+- **Tags**: sawmill
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 5
+
+### 🎯T2.2 Cross-repo dependency edges
+- **Value**: 8
+- **Cost**: 5
+- **Acceptance**:
+  - Schema supports cross_depends and cross_enables fields with repo + capability/target refs
+  - Cross-repo edges surfaced in targets_portfolio output
+  - Targets enabling work in other repos get a priority boost
+- **Context**: Manual cross_depends/cross_enables fields are accurate but high-friction. Future enrichment: mnemo could detect cross-repo references automatically from sessions that reference another repo's targets. Start manual.
+
+- **Depends on**: 🎯T2.1
+- **Tags**: portfolio
+- **Status**: Achieved
+- **Discovered**: 2026-04-07
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 5
 
 ### 🎯T2.1 Cross-repo target discovery
 - **Value**: 5
@@ -335,14 +339,14 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 - **Achieved**: 2026-04-08
 - **Actual-cost**: 2
 
-### 🎯T6.2 Auto-create targets.yaml on first bullseye_assert
+### 🎯T6.2 Auto-create targets.yaml on first bullseye_put
 - **Value**: 3
 - **Cost**: 2
 - **Acceptance**:
-  - bullseye_assert creates docs/targets.yaml if it doesn't exist
+  - bullseye_put creates docs/targets.yaml if it doesn't exist
   - The created file contains only the added target (no sample data)
   - Other mutation tools (retire) still error on missing file
-- **Context**: Complementary to bullseye_init. If an agent calls bullseye_assert before init, it should just work rather than erroring. This makes the tool more forgiving in agentic workflows where the agent may not know to call init first. (Originally filed against bullseye_add; renamed when the add/update pair was unified into bullseye_assert.)
+- **Context**: Complementary to bullseye_init. If an agent calls bullseye_put before init, it should just work rather than erroring. This makes the tool more forgiving in agentic workflows where the agent may not know to call init first. (Originally filed against bullseye_add; renamed when the add/update pair was unified into bullseye_assert in v0.8.0, then again to bullseye_put in v0.12.0.)
 
 - **Tags**: adoption
 - **Status**: Achieved
@@ -370,30 +374,23 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 ```mermaid
 graph TD
     T1["MCP triad integration (target…"]
-    T1_1["Executable acceptance checks …"]
     T1_2["Momentum-aware ranking via mn…"]
     T1_3["/cv skill rewrite against MCP…"]
     T1_4["Target-aware context compacti…"]
     T1_5["Rework diagnosis integration"]
     T2["Global portfolio view across …"]
-    T2_2["Cross-repo dependency edges"]
     T2_3["Portfolio-level WSJF ranking"]
     T2_4["/cv global mode"]
     T3["Protocol app priority sync"]
     T3_1["targets_priorities SQLite tab…"]
     T3_2["Protocol Today page Focus sec…"]
-    T1 -.->|needs| T1_1
     T1 -.->|needs| T1_2
     T1 -.->|needs| T1_3
     T1 -.->|needs| T1_4
     T1 -.->|needs| T1_5
-    T1_3 -.->|needs| T1_1
     T1_3 -.->|needs| T1_2
-    T1_5 -.->|needs| T1_1
-    T2 -.->|needs| T2_2
     T2 -.->|needs| T2_3
     T2 -.->|needs| T2_4
-    T2_3 -.->|needs| T2_2
     T2_4 -.->|needs| T2_3
     T2_4 -.->|needs| T1_3
     T3 -.->|needs| T3_1

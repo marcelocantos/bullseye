@@ -1,3 +1,4 @@
+schema_version: 1
 targets:
   T1:
     name: MCP triad integration (targets + sawmill + mnemo)
@@ -23,9 +24,10 @@ targets:
     discovered: 2026-04-07
   T1.1:
     name: Executable acceptance checks via sawmill
-    status: identified
+    status: achieved
     value: 8.0
     cost: 5.0
+    actual_cost: 5.0
     acceptance:
     - Target schema has optional checks field (convention, query, invariant types)
     - targets_verify tool iterates checks and calls sawmill tools
@@ -36,6 +38,7 @@ targets:
     - sawmill
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-11
   T1.2:
     name: Momentum-aware ranking via mnemo
     status: converging
@@ -145,9 +148,10 @@ targets:
     achieved: 2026-04-10
   T2.2:
     name: Cross-repo dependency edges
-    status: identified
+    status: achieved
     value: 8.0
     cost: 5.0
+    actual_cost: 5.0
     acceptance:
     - Schema supports cross_depends and cross_enables fields with repo + capability/target refs
     - Cross-repo edges surfaced in targets_portfolio output
@@ -160,6 +164,7 @@ targets:
     - portfolio
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-11
   T2.3:
     name: Portfolio-level WSJF ranking
     status: identified
