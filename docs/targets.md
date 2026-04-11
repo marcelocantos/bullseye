@@ -334,14 +334,14 @@ Migration strategy: run both systems in parallel. Agents write targets to both m
 - **Achieved**: 2026-04-08
 - **Actual-cost**: 2
 
-### 🎯T6.2 Auto-create targets.yaml on first bullseye_add
+### 🎯T6.2 Auto-create targets.yaml on first bullseye_assert
 - **Value**: 3
 - **Cost**: 2
 - **Acceptance**:
-  - bullseye_add creates docs/targets.yaml if it doesn't exist
+  - bullseye_assert creates docs/targets.yaml if it doesn't exist
   - The created file contains only the added target (no sample data)
-  - Other mutation tools (update, retire) still error on missing file
-- **Context**: Complementary to bullseye_init. If an agent calls bullseye_add before init, it should just work rather than erroring. This makes the tool more forgiving in agentic workflows where the agent may not know to call init first.
+  - Other mutation tools (retire) still error on missing file
+- **Context**: Complementary to bullseye_init. If an agent calls bullseye_assert before init, it should just work rather than erroring. This makes the tool more forgiving in agentic workflows where the agent may not know to call init first. (Originally filed against bullseye_add; renamed when the add/update pair was unified into bullseye_assert.)
 
 - **Tags**: adoption
 - **Status**: Achieved

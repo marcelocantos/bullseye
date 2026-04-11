@@ -41,8 +41,10 @@ portfolio.rs   — Cross-repo discovery, scanning, and portfolio summary
 **Data flow**: Every MCP tool call receives a `cwd` parameter → `store::discover()` finds `targets.yaml` → `store::load()` deserializes → operation applied → `store::save()` writes back + `render::render()` updates markdown.
 
 **Key domain concepts**:
-- `depends_on` edges express hard blocking dependencies; all structural relationships use `depends_on`
-- `gates` edges express soft blocking with criticality weights
+- `depends_on` edges express hard blocking dependencies. This is the
+  single edge type for all structural relationships. Legacy `gates`
+  edges from older files are migrated into `depends_on` at load time
+  (see `schema::migrate_gates_to_depends_on`).
 - Verify-kind targets (`kind: verify`) validate work targets via `verifies` edges
 - Rework loops: when verification fails, `rework` edge re-enters a work target with retry budget
 

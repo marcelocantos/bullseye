@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use regex::Regex;
 
-use crate::schema::{GateEdge, Kind, Status, Target, TargetsFile};
+use crate::schema::{
+    Kind, LegacyGateEdge, Status, Target, TargetsFile, migrate_gates_to_depends_on,
+};
 
 /// Parse a targets.md markdown file into a TargetsFile.
 ///
@@ -183,10 +185,12 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
         return Err("no targets found in markdown".to_string());
     }
 
-    Ok(TargetsFile {
+    let mut file = TargetsFile {
         last_evaluated,
         targets,
-    })
+    };
+    migrate_gates_to_depends_on(&mut file);
+    Ok(file)
 }
 
 fn parse_last_evaluated(input: &str) -> Option<String> {
@@ -203,7 +207,7 @@ struct ParsedFields {
     acceptance: Vec<String>,
     context: String,
     parent_ref: Option<String>,
-    gates: Vec<GateEdge>,
+    gates: Vec<LegacyGateEdge>,
     depends_on: Vec<String>,
     verifies: Vec<String>,
     rework: Option<String>,
@@ -340,21 +344,17 @@ fn parse_target_refs(s: &str) -> Vec<String> {
     re.captures_iter(s).map(|c| c[1].to_string()).collect()
 }
 
-/// Parse gates from "🎯T1 (80%), 🎯T2" format.
-fn parse_gates(s: &str) -> Vec<GateEdge> {
+/// Parse gates from "🎯T1 (80%), 🎯T2" format. Criticality is discarded
+/// on migration; we keep it here only so old markdowns parse without error.
+fn parse_gates(s: &str) -> Vec<LegacyGateEdge> {
     let re = Regex::new(r"🎯(T[\d.]+)(?:\s*\((\d+)%\))?").expect("invalid gates regex");
     re.captures_iter(s)
-        .map(|c| {
-            let target = c[1].to_string();
-            let criticality = c
+        .map(|c| LegacyGateEdge {
+            target: c[1].to_string(),
+            criticality: c
                 .get(2)
                 .and_then(|m| m.as_str().parse::<f64>().ok())
-                .map(|p| p / 100.0)
-                .unwrap_or(1.0);
-            GateEdge {
-                target,
-                criticality,
-            }
+                .map(|p| p / 100.0),
         })
         .collect()
 }
@@ -442,25 +442,45 @@ mod tests {
     }
 
     #[test]
-    fn parse_gates() {
+    fn parse_gates_migrates_to_depends_on() {
+        // Legacy `Gates: 🎯T2, 🎯T3` on T1 means "T1 is gated by T2 and T3"
+        // (natural English reading — the field-owning target absorbs its
+        // gates as blockers). After migration, T1.depends_on = [T2, T3].
         let md = r#"# Targets
 
 ## Active
 
-### 🎯T1 Test target
+### 🎯T1 Downstream work
 - **Weight**: 2 (value 5 / cost 3)
 - **Acceptance**: it works
 - **Gates**: 🎯T2 (80%), 🎯T3
 - **Status**: Identified
 - **Discovered**: 2026-04-07
+
+### 🎯T2 Upstream prerequisite
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: ok
+- **Status**: Identified
+- **Discovered**: 2026-04-07
+
+### 🎯T3 Another upstream
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: ok
+- **Status**: Identified
+- **Discovered**: 2026-04-07
 "#;
         let file = parse_markdown(md).unwrap();
         let t1 = &file.targets["T1"];
-        assert_eq!(t1.gates.len(), 2);
-        assert_eq!(t1.gates[0].target, "T2");
-        assert!((t1.gates[0].criticality - 0.8).abs() < 0.01);
-        assert_eq!(t1.gates[1].target, "T3");
-        assert!((t1.gates[1].criticality - 1.0).abs() < 0.01);
+        assert!(
+            t1.gates.is_empty(),
+            "gates should be migrated away, got {:?}",
+            t1.gates.iter().map(|g| &g.target).collect::<Vec<_>>()
+        );
+        assert_eq!(t1.depends_on, vec!["T2", "T3"]);
+        assert!(file.targets["T2"].depends_on.is_empty());
+        assert!(file.targets["T3"].depends_on.is_empty());
     }
 
     #[test]
