@@ -9,28 +9,57 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.12.0. One breaking change since v0.11.0:
+Snapshot as of v0.13.0. Two changes since v0.12.0 affect the
+interaction surface:
 
-- **`bullseye_assert` renamed to `bullseye_put`.** The old name
-  implied "verify a condition, crash if false" (the standard
-  programming connotation of `assert`), but the semantics were
-  always upsert — create-or-replace, idempotent, REST-style.
-  `put` captures that correctly and is familiar to anyone who
-  has worked with HTTP APIs. Old callers that passed a JSON tool
-  call with `"name": "bullseye_assert"` will need to switch.
+- **`bullseye_tunnels` semantics generalised** (🎯T7). Previously
+  a tunnel was "a work target with no **verify target** reachable
+  within `max_depth` hops"; now it is "a work target with no
+  **observable target** reachable within `max_depth` hops", where
+  observable = `kind: verify` OR the new `observable: true` flag
+  on work targets. Existing callers still get warnings — the
+  membership predicate just widened. The observable flag itself
+  is a new opt-in schema field, so legacy targets files carry no
+  observable work targets and every such target is a tunnel until
+  the human reshapes the graph. This is the intended signal: the
+  repo-level ordering now rewards shortest-path-to-observable
+  rather than static value/cost maths.
+- **`bullseye_put` refuses content patches on achieved targets**
+  (🎯T8). Name/acceptance/context/value/cost/tags/depends_on/
+  verifies/observable edits on an achieved target now return an
+  explanatory error. The remedy is to re-open the target with
+  `status: identified` first (either in a prior call, or atomically
+  in the same call alongside the content edits). Status-only
+  transitions on achieved targets remain allowed, and `bullseye_retire`
+  is unchanged. Callers that previously relied on silent patches
+  over historical state will need to insert a reopen step.
 
-Earlier structural changes still in effect (snapshotted v0.11.0):
-1. WSJF ranking purged — frontier-first scheduling is the model,
-   the frontier section itself carries the prioritised list, ordered
-   by `focus = value × momentum`. `top_n` parameter on `bullseye_summary`
-   gone. Momentum remains as an advisory reordering signal.
-2. `bullseye_convergence` — single-call convergence evaluation that
-   runs `make bullseye` for standing invariants, scans git for
-   unreleased fixes, emits the target summary with inline frontier
-   details, and computes a deterministic next-action recommendation.
-   Replaces the multi-call `/cv` worker pattern.
+Earlier structural changes still in effect:
+1. **`bullseye_assert` renamed to `bullseye_put`** (v0.12.0). The old
+   name implied "verify a condition, crash if false" but the
+   semantics were always REST-style upsert.
+2. **WSJF ranking purged** (v0.11.0). Frontier-first scheduling is
+   the model; the frontier section itself carries the prioritised
+   list. `top_n` parameter removed. `momentum` remains but is no
+   longer consumed by repo-level ordering as of v0.13.0 — see the
+   phase-boundary note below.
+3. **`bullseye_convergence`** (v0.11.0). Single-call convergence
+   evaluation; absorbs the old multi-call `/cv` worker pattern.
 
-The settling clock for 1.0 eligibility restarts from v0.12.0.
+**Phase-boundary hypothesis** (new in v0.13.0, `docs/mcp-triad.md`
+§9): Bullseye now has two prioritisation scopes with different
+objective functions. Repo-level (sub-week, human as decision-maker)
+uses shortest-path-to-next-observable-checkpoint, tiebroken by
+unblocking fanout; per-target `value`/`cost` are **not consumed**
+by repo-level ordering. Portfolio-level (weekly-plus, human as
+bottleneck allocator) will use WSJF + momentum + cross-repo value
+propagation (🎯T2.3, pending). The repo/portfolio split means per-
+target `value`/`cost` are now documented as portfolio-scope inputs
+only.
+
+The settling clock for 1.0 eligibility restarts from v0.13.0
+(`bullseye_tunnels` semantics shift is a behavioural break; the
+`bullseye_put` achieved-immutability rule narrows an input surface).
 
 ### MCP tools
 
@@ -38,11 +67,12 @@ The settling clock for 1.0 eligibility restarts from v0.12.0.
 |------|--------|-------|
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0 because "assert" carries a verify-or-crash connotation in most programming contexts, while the tool's semantics are REST-style create-or-replace. |
+| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, observable?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 adds an `observable` parameter (for the new schema field) and refuses content patches on achieved targets — see 🎯T8. |
 | `bullseye_retire(cwd, id, actual_cost)` | Stable | |
-| `bullseye_frontier(cwd)` | Stable | |
+| `bullseye_frontier(cwd)` | Stable | v0.13.0 ordering: ascending distance-to-nearest-observable-target, tiebroken by unblocking fanout, then ID. Per-target value/cost are NOT consumed. |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
-| `bullseye_tunnels(cwd, max_depth)` | Stable | |
+| `bullseye_tunnels(cwd, max_depth)` | Needs review | v0.13.0 generalised from "no verify within N hops" to "no observable within N hops". Membership predicate widened; output format unchanged. Will need another review pass once the `observable: true` flag sees real-world use. |
+| `bullseye_verify(cwd, id)` | Fluid | New in v0.13.0. Emits a structured plan (markdown + JSON) mapping each check on the target to a sawmill tool invocation. Bullseye does not execute the plan — the calling agent runs it against sawmill and folds results back into a report. The plan-only (no result-feedback) shape may evolve once we see how `/cv` or similar wrappers consume it. |
 | `bullseye_validate(cwd)` | Stable | Validation rules will grow but existing ones won't change |
 | `bullseye_graph(cwd)` | Stable | |
 | `bullseye_render(cwd)` | Stable | |
@@ -60,8 +90,16 @@ The settling clock for 1.0 eligibility restarts from v0.12.0.
 **Renamed in v0.12.0** (breaking):
 - `bullseye_assert` → `bullseye_put`
 
+**Behavioural changes in v0.13.0**:
+- `bullseye_tunnels` membership predicate generalised from verify-
+  reachability to observable-reachability (🎯T7).
+- `bullseye_put` rejects content patches on achieved targets (🎯T8).
+
 Planned additions (not yet implemented):
-- `bullseye_verify` — execute acceptance checks via sawmill
+- Cross-repo value propagation in portfolio ranking (🎯T2.3) —
+  upgrades the binary `cross_enables` flag from v0.13.0 to
+  weighted propagation, and adds per-repo WSJF scoring at the
+  portfolio boundary.
 
 ### targets.yaml schema
 
@@ -76,8 +114,11 @@ Planned additions (not yet implemented):
 | `value`, `cost` | Stable | Fibonacci scale |
 | `actual_cost` | Stable | |
 | `acceptance` | Stable | |
+| `checks` | Fluid | New in v0.13.0. List of executable checks, each one of `convention: name` / `query: {...}` / `invariant: name`. Consumed by `bullseye_verify` which emits a sawmill invocation plan. `invariant` variant is schema-ready for a future sawmill T19; `convention` and `query` are live today. Serde shape is `#[serde(untagged)]` so each entry is a single-key map. |
 | `context` | Stable | |
 | `depends_on` | Stable | Single edge type (v0.8.0); legacy `gates` edges are migrated into `depends_on` on load |
+| `cross_depends`, `cross_enables` | Fluid | New in v0.13.0. Advisory edges (don't block frontier computation) pointing at targets or capabilities in other repos. `CrossEdge { repo, target?, capability?, note? }` — each edge must have a non-empty `repo` and at least one of `target`/`capability`; dangling refs to unscanned repos are silently allowed. Surfaced in `bullseye_portfolio` output today; value propagation is 🎯T2.3. |
+| `observable` | Fluid | New in v0.13.0 boolean flag (default false, omitted from YAML when false). Marks a work target whose completion produces reviewable output. Verify-kind targets are observable by definition; this flag only matters for work-kind targets. Drives the distance-to-nearest-observable signal that orders the repo-level frontier and the `bullseye_tunnels` membership predicate. Expected to see churn as the convention for marking observable work targets settles in practice. |
 | `verifies` | Stable | |
 | `rework` | Stable | |
 | `retry_budget`, `retries` | Stable | |
@@ -86,8 +127,9 @@ Planned additions (not yet implemented):
 | `discovered`, `achieved` | Stable | |
 
 Planned additions:
-- `checks` — executable acceptance criteria (sawmill integration)
-- `cross_depends`, `cross_enables` — cross-repo edges
+- Cross-repo value propagation (🎯T2.3) — upgrades `cross_enables`
+  from a binary flag to weighted value propagation via portfolio
+  scan lookup.
 
 ### CLI flags
 
@@ -110,8 +152,15 @@ Planned additions:
 
 - **Tool response format**: Responses are unstructured text. Consider
   returning structured JSON alongside text for programmatic consumers.
-- **`bullseye_verify`**: Core planned tool not yet implemented. Should
-  be present before 1.0.
+- **`bullseye_verify` feedback loop**: The plan-only shape shipped in
+  v0.13.0 has no mechanism to fold sawmill results back into a
+  structured pass/fail report on the target. Before 1.0 this should
+  either be added (so verification can auto-trigger `bullseye_rework`)
+  or the decision to stay plan-only should be documented as deliberate.
+- **`observable` flag convention**: Newly introduced; the convention
+  for when to mark a work target `observable: true` will settle with
+  practice. Gotchas and anti-patterns should be documented as they
+  emerge.
 - **`bullseye_startup_context`, `bullseye_portfolio`, `bullseye_summary`
   stabilisation**: All three are new and their output formats may evolve
   with real-world usage.
@@ -119,11 +168,15 @@ Planned additions:
   Needs real-world usage before locking in the parameter set — the
   `blocks` sugar field in particular may see iteration (e.g., symmetric
   `gated_by`, `verified_by` sugars).
+- **Portfolio-level WSJF (🎯T2.3)**: Cross-repo enabler propagation is
+  currently a binary flag; the value-weighted upgrade is pending.
+  Should land before 1.0 so the portfolio engine is stable.
 - **Settling threshold reset**: v0.8.0 removed `bullseye_add` and
   `bullseye_update` and retired the `gates` schema field; v0.12.0
-  renamed `bullseye_assert` to `bullseye_put`. Each of these is a
-  breaking change to the MCP tool surface. The settling clock
-  restarts from v0.12.0.
+  renamed `bullseye_assert` to `bullseye_put`; v0.13.0 generalised
+  `bullseye_tunnels` semantics and added the `bullseye_put` achieved-
+  immutability rule. Each is a behavioural or input-surface change.
+  The settling clock restarts from v0.13.0.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
