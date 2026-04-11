@@ -458,9 +458,10 @@ targets:
     achieved: 2026-04-07
   T7:
     name: Repo-level prioritisation by observable checkpoint path
-    status: identified
+    status: achieved
     value: 8.0
     cost: 5.0
+    actual_cost: 5.0
     acceptance:
     - 'Target schema adds `observable: bool` field (default false, omitted from YAML when false)'
     - '`bullseye_tunnels` generalised: a target is observable iff `kind: verify` OR `observable: true`; a tunnel is a work target with no observable target reachable within max_depth hops'
@@ -474,3 +475,21 @@ targets:
     - priority
     origin: manual
     discovered: 2026-04-11
+    achieved: 2026-04-11
+  T8:
+    name: bullseye_put refuses silent mutation of achieved targets
+    status: identified
+    value: 5.0
+    cost: 2.0
+    acceptance:
+    - bullseye_put rejects name/acceptance/context/value/cost/tags/kind/depends_on/verifies edits on a target with status `achieved`, returning an explanatory error
+    - 'Error message indicates the remedy: re-open the target first by patching `status: identified`, then apply content changes'
+    - Status-only transitions on achieved targets remain allowed (so un-retirement via explicit status change still works)
+    - bullseye_retire and the existing retirement path continue to function unchanged
+    - 'Test covers: content patch on achieved rejected with expected error; content patch on identified succeeds; status-only transition on achieved allowed; retirement path unaffected'
+    context: 'On 2026-04-11 the agent ran bullseye_put(id=T4) intending to create a new top-level target, but T4 already existed as an achieved historical target ("Dynamic session startup context"). bullseye_put silently patched name/acceptance/context/value/cost/tags while leaving status: achieved intact, producing a Frankenstein target that required manual git reset + re-creation under a fresh ID (T7) to recover. Root cause: patch semantics on bullseye_put treat achieved targets the same as identified ones. Achieved targets are historical artifacts and their content should be immutable unless the human explicitly re-opens them. This target closes the footgun without changing the happy-path ergonomics.'
+    tags:
+    - safety
+    - ergonomics
+    origin: manual
+    discovered: 2026-04-12
