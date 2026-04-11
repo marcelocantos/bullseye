@@ -177,6 +177,43 @@ Use this for cross-project prioritisation and global convergence assessment.
 | `cwd` | string | `~/work/` | Workspace root to scan |
 | `max_depth` | number | `5` | Maximum directory depth to scan |
 
+### bullseye_summary
+
+Return a consolidated status overview in one call: active targets grouped
+by parent with rollup counts, frontier (unblocked) targets, blocked
+targets with blockers, stale targets, and a top-N WSJF ranking. Replaces
+separate calls to `bullseye_list`, `bullseye_frontier`, and
+`bullseye_validate` when you want a single snapshot (e.g. at session
+start, or inside `/cv`).
+
+The optional `momentum` parameter folds external recency/frequency
+signals into the WSJF ranking. When provided, each target's WSJF score
+is multiplied by its momentum value before sorting; targets missing from
+the map default to 1.0 (no-op). Bullseye never calls other MCP servers,
+so the caller (typically `/cv`) is responsible for computing momentum
+from e.g. `mnemo_recent_activity` and passing it in — composition
+happens at the skill layer, the formula is external, and tuning the
+momentum factor doesn't require touching bullseye.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `top_n` | number | `5` | Maximum targets in the WSJF ranking section |
+| `momentum` | object | null | Optional per-target multipliers, keyed by target ID (e.g. `{"T1": 1.6, "T3": 0.8}`). Values > 1.0 boost, < 1.0 suppress, 1.0 is identity. Absent targets default to 1.0. |
+
+When `momentum` is present, the ranking section heading is
+`## WSJF ranking, momentum-adjusted (top N)` and each boosted or
+suppressed entry is annotated with `(WSJF X × momentum Y, ...)` so the
+original score and the applied multiplier are both visible.
+
+A reasonable caller-side formula (from `docs/mcp-triad.md` §2):
+
+```
+momentum = 1.0 + 0.3 * log(1 + recent_sessions) * exp(-days_since_last / 7)
+```
+
+— or anything else the caller wants. Bullseye just multiplies.
+
 ## targets.yaml schema
 
 ```yaml

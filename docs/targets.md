@@ -33,13 +33,14 @@
 - **Value**: 5
 - **Cost**: 3
 - **Acceptance**:
-  - targets_rank accepts optional momentum signal
-  - Ranking integrates session recency and frequency from mnemo_recent_activity
-  - Momentum factor is tunable, not hardcoded
-- **Context**: Static WSJF ranking ignores whether a target is actively being worked on or has been stale for weeks. mnemo_recent_activity provides the signal; the /cv skill merges it with targets_rank output. See docs/mcp-triad.md section 2.
-
+  - bullseye_summary accepts an optional momentum parameter (map of target ID to multiplier)
+  - When momentum is present, each target's WSJF score is multiplied by its value before ranking; targets missing from the map default to 1.0 (no-op)
+  - The section heading distinguishes momentum-adjusted from baseline rankings
+  - Momentum values and the formula that produces them are the caller's responsibility — the factor is tunable without touching bullseye
+  - /cv skill composes bullseye_summary and mnemo_recent_activity to produce the momentum-adjusted ordering
+- **Context**: Static WSJF ranking ignores whether a target is actively being worked on or has been stale for weeks. mnemo_recent_activity provides the signal; the /cv skill composes the two tools. Original acceptance referenced a `targets_rank` tool that was removed in v0.4.0 — updated when momentum landed on bullseye_summary (the current ranking entry point). See docs/mcp-triad.md section 2.
 - **Tags**: mnemo
-- **Status**: Identified
+- **Status**: Converging
 - **Discovered**: 2026-04-07
 
 ### 🎯T1.3 /cv skill rewrite against MCP tools

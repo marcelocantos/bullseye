@@ -405,7 +405,20 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
 }
 
 /// Produce a consolidated status overview for agent consumption.
-pub fn summary(file: &TargetsFile, file_path: &str, top_n: usize) -> String {
+///
+/// If `momentum` is `Some`, the WSJF ranking section multiplies each
+/// target's raw WSJF score by its momentum multiplier before sorting.
+/// Targets missing from the map default to 1.0 (no boost), preserving
+/// backward compatibility for callers that don't supply momentum data.
+/// The caller is responsible for computing momentum values from any
+/// external signal (typically `mnemo_recent_activity`); bullseye
+/// itself never calls out to mnemo.
+pub fn summary(
+    file: &TargetsFile,
+    file_path: &str,
+    top_n: usize,
+    momentum: Option<&BTreeMap<String, f64>>,
+) -> String {
     let mut out = String::new();
 
     let errors = validate(file);
@@ -622,25 +635,57 @@ pub fn summary(file: &TargetsFile, file_path: &str, top_n: usize) -> String {
         out.push('\n');
     }
 
-    // --- 5. WSJF ranking ---
-    let mut ranked: Vec<(&str, &crate::schema::Target, f64)> = active
+    // --- 5. WSJF ranking (optionally momentum-adjusted) ---
+    // For each active target with cost > 0, compute (wsjf, adjusted),
+    // where `adjusted = wsjf * momentum[id].unwrap_or(1.0)`. Sorting
+    // is by the adjusted score so that momentum can move targets up
+    // or down the ranking; when no momentum is provided, `adjusted`
+    // equals `wsjf` and the ordering is identical to the legacy
+    // pure-WSJF behaviour.
+    let mut ranked: Vec<(&str, &crate::schema::Target, f64, f64)> = active
         .iter()
         .filter(|(_, t)| t.cost > 0.0)
-        .map(|(&id, t)| (id, *t, t.value / t.cost))
+        .map(|(&id, t)| {
+            let wsjf = t.value / t.cost;
+            let m = momentum.and_then(|mm| mm.get(id).copied()).unwrap_or(1.0);
+            (id, *t, wsjf, wsjf * m)
+        })
         .collect();
-    ranked.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
     ranked.truncate(top_n);
 
     if !ranked.is_empty() {
-        out.push_str(&format!("## WSJF ranking (top {})\n\n", ranked.len()));
-        for (i, (id, target, wsjf)) in ranked.iter().enumerate() {
-            out.push_str(&format!(
-                "{}. 🎯{id} {} — WSJF {wsjf:.1} (v={}, c={})\n",
-                i + 1,
-                target.name,
-                target.value,
-                target.cost,
-            ));
+        let heading = if momentum.is_some() {
+            format!(
+                "## WSJF ranking, momentum-adjusted (top {})\n\n",
+                ranked.len()
+            )
+        } else {
+            format!("## WSJF ranking (top {})\n\n", ranked.len())
+        };
+        out.push_str(&heading);
+        for (i, (id, target, wsjf, adjusted)) in ranked.iter().enumerate() {
+            let momentum_mul = adjusted / wsjf;
+            // Hide the momentum annotation when it's a pure 1.0 (either
+            // no momentum map, or this target had the default) so the
+            // baseline output stays uncluttered.
+            if (momentum_mul - 1.0).abs() < 1e-6 {
+                out.push_str(&format!(
+                    "{}. 🎯{id} {} — WSJF {wsjf:.1} (v={}, c={})\n",
+                    i + 1,
+                    target.name,
+                    target.value,
+                    target.cost,
+                ));
+            } else {
+                out.push_str(&format!(
+                    "{}. 🎯{id} {} — {adjusted:.1} (WSJF {wsjf:.1} × momentum {momentum_mul:.2}, v={}, c={})\n",
+                    i + 1,
+                    target.name,
+                    target.value,
+                    target.cost,
+                ));
+            }
         }
         out.push('\n');
     }

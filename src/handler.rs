@@ -611,7 +611,12 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
 fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
     let top_n = t.top_n.unwrap_or(5) as usize;
-    let out = graph::summary(&file, &path.display().to_string(), top_n);
+    let out = graph::summary(
+        &file,
+        &path.display().to_string(),
+        top_n,
+        t.momentum.as_ref(),
+    );
     text_result(out)
 }
 
