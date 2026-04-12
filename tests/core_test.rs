@@ -1177,6 +1177,39 @@ fn write_project(tmp: &std::path::Path, makefile: &str, targets_yaml: &str) {
     .unwrap();
 }
 
+/// Write a project with `targets.yaml` at the repo root (no `docs/`
+/// layer), exercising the root-level layout used by e.g. mnemo.
+fn write_project_root_level(tmp: &std::path::Path, makefile: &str, targets_yaml: &str) {
+    use std::io::Write;
+    write!(
+        std::fs::File::create(tmp.join("targets.yaml")).unwrap(),
+        "{targets_yaml}"
+    )
+    .unwrap();
+    write!(
+        std::fs::File::create(tmp.join("Makefile")).unwrap(),
+        "{makefile}"
+    )
+    .unwrap();
+}
+
+/// Extract the concatenated text payload from an MCP `CallToolResult`,
+/// panicking if any content block is not a `TextContent`. Used by the
+/// handler-level end-to-end tests that drive `handle_convergence`
+/// directly rather than calling `convergence::convergence`.
+fn text_from_call_result(result: rust_mcp_sdk::schema::CallToolResult) -> String {
+    use rust_mcp_sdk::schema::ContentBlock;
+    result
+        .content
+        .into_iter()
+        .map(|block| match block {
+            ContentBlock::TextContent(t) => t.text,
+            other => panic!("expected TextContent, got {other:?}"),
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 const SIMPLE_TARGETS_YAML: &str = r#"
 schema_version: 1
 targets:
@@ -1384,6 +1417,70 @@ fn convergence_makefile_without_bullseye_rule_degrades_gracefully() {
     // Frontier recommendation still fires.
     let next = out.split("## Next action").nth(1).expect("next action");
     assert!(next.contains("**Execute now**: Work on 🎯T1"));
+}
+
+#[test]
+fn handle_convergence_root_level_targets_yaml_resolves_repo_root() {
+    // Regression guard for a user-reported bug: when `targets.yaml`
+    // lives at the repo root (mnemo's layout) rather than under
+    // `docs/`, `handle_convergence` used to compute the repo root by
+    // stepping up two parent directories unconditionally, landing in
+    // the grandparent. No Makefile was found there, so invariant
+    // detection fell through to "hook not configured" even though the
+    // repo had a perfectly good `bullseye:` rule at the real root.
+    //
+    // Every other convergence end-to-end test in this file calls
+    // `bullseye::convergence::convergence(...)` directly, passing
+    // `repo_root` explicitly — which bypasses the path-computation
+    // layer that contained the bug. This test drives
+    // `handle_convergence` as a full integration so any future
+    // inversion of `repo_root_from_targets_path` or
+    // `store::discover`'s candidate order is caught at the handler
+    // boundary.
+    use bullseye::handler::handle_convergence;
+    use bullseye::tools::ConvergenceTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    write_project_root_level(tmp.path(), "bullseye:\n\t@true\n", SIMPLE_TARGETS_YAML);
+
+    let result = handle_convergence(ConvergenceTool {
+        cwd: tmp.path().to_string_lossy().into_owned(),
+        momentum: None,
+        skip_invariants: None,
+    })
+    .expect("handle_convergence should succeed with a valid root-level project");
+    let out = text_from_call_result(result);
+
+    // Headline assertion: the invariants hook must have been found and
+    // run. If the repo root was computed incorrectly, this would
+    // instead report "not configured" + a setup warning, and the
+    // status would be "unknown".
+    assert!(
+        out.contains("Status: ✓ all green"),
+        "expected green invariants status — this is the regression guard for the \
+         root-level targets.yaml bug; if this fails, handle_convergence is \
+         computing repo_root incorrectly. Output:\n{out}"
+    );
+
+    // Mirror the canonical `convergence_end_to_end_green_invariants_picks_top_frontier`
+    // assertions so this test also covers the rest of the pipeline under the
+    // root-level layout, not just the repo-root fix.
+    assert!(out.contains("# Convergence"));
+    assert!(out.contains("## Invariants"));
+    assert!(out.contains("## Frontier"));
+    assert!(out.contains("🎯T1 Primary deliverable"));
+    assert!(
+        out.contains("**Execute now**: Work on 🎯T1 Primary deliverable"),
+        "expected top-focus target as next action under root-level layout; got:\n{out}"
+    );
+
+    // Negative: no stray "not configured" text anywhere — this is the
+    // exact phrase the buggy path produced, and it must not appear.
+    assert!(
+        !out.contains("not configured"),
+        "convergence should not report the hook as missing when it is \
+         present at the repo root; got:\n{out}"
+    );
 }
 
 #[test]

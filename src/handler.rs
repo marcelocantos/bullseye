@@ -702,7 +702,9 @@ pub(crate) fn repo_root_from_targets_path(path: &Path, fallback: &Path) -> std::
     }
 }
 
-fn handle_convergence(t: crate::tools::ConvergenceTool) -> ToolResult {
+pub fn handle_convergence(
+    t: crate::tools::ConvergenceTool,
+) -> Result<CallToolResult, CallToolError> {
     use crate::convergence;
 
     // Locate the targets file AND the repo root. Makefile/mkfile and
