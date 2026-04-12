@@ -16,9 +16,10 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T1.2 Momentum-aware ranking via mnemo
+### 🎯T1.2 ⦿ Momentum-aware ranking via mnemo
 - **Value**: 5
 - **Cost**: 3
+- **Observable**: true
 - **Acceptance**:
   - bullseye_summary accepts an optional momentum parameter (map of target ID to multiplier)
   - When momentum is present, each target's WSJF score is multiplied by its value before ranking; targets missing from the map default to 1.0 (no-op)
@@ -30,9 +31,10 @@
 - **Status**: Converging
 - **Discovered**: 2026-04-07
 
-### 🎯T1.3 /cv skill rewrite against MCP tools
+### 🎯T1.3 ⦿ /cv skill rewrite against MCP tools
 - **Value**: 8
 - **Cost**: 3
+- **Observable**: true
 - **Acceptance**:
   - /cv calls targets_frontier + targets_rank (no markdown parsing)
   - /cv optionally calls mnemo_recent_activity for momentum
@@ -45,9 +47,10 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T1.4 Target-aware context compaction
+### 🎯T1.4 ⦿ Target-aware context compaction
 - **Value**: 5
 - **Cost**: 3
+- **Observable**: true
 - **Acceptance**:
   - mnemo summarizer calls targets_list to anchor compaction output
   - Compaction includes targets_active, targets_progressed, targets_next fields
@@ -58,9 +61,10 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T1.5 Rework diagnosis integration
+### 🎯T1.5 ⦿ Rework diagnosis integration
 - **Value**: 5
 - **Cost**: 5
+- **Observable**: true
 - **Acceptance**:
   - Verify target failure includes sawmill structural failure report
   - Rework diagnosis includes mnemo prior-attempt history
@@ -87,9 +91,10 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T2.3 Portfolio-level WSJF ranking
+### 🎯T2.3 ⦿ Portfolio-level WSJF ranking
 - **Value**: 8
 - **Cost**: 5
+- **Observable**: true
 - **Acceptance**:
   - `bullseye_portfolio` returns repos ranked by an aggregate WSJF score combining per-target `value`/`cost`, caller-supplied momentum, and cross-repo enabler propagation
   - Per-repo formula committed: `sum(value_i / cost_i × momentum_i × enabler_boost_i) / frontier_size_i`. The `frontier_size_i` divisor encodes the bias that parallelisable repos need less per-unit human attention
@@ -103,9 +108,10 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T2.4 /cv global mode
+### 🎯T2.4 ⦿ /cv global mode
 - **Value**: 5
 - **Cost**: 3
+- **Observable**: true
 - **Acceptance**:
   - "/cv global" runs portfolio-level evaluation
   - Presents top 1-3 repos with reasoning
@@ -147,9 +153,10 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-07
 
-### 🎯T3.2 Protocol Today page Focus section
+### 🎯T3.2 ⦿ Protocol Today page Focus section
 - **Value**: 5
 - **Cost**: 3
+- **Observable**: true
 - **Acceptance**:
   - Focus section renders above daily checklist
   - Shows top frontier targets with repo, weight, and name
