@@ -9,9 +9,19 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.13.0. Two changes since v0.12.0 affect the
+Snapshot as of v0.14.0. Changes since v0.13.0 affecting the
 interaction surface:
 
+- **`bullseye_render` removed** (🎯T10). Markdown rendering is deleted
+  entirely — the render module, tool, and auto-render-on-save are gone.
+  `bullseye_import` no longer auto-discovers markdown files; the `path`
+  parameter is now required.
+- **File renamed**: `targets.yaml` → `bullseye.yaml`, moved from `docs/`
+  to repo root. `store::discover` looks only at root-level
+  `bullseye.yaml`. The dual-layout complexity (docs/ vs root, candidate
+  lists, precedence rules) is eliminated.
+
+Earlier changes still in effect from v0.13.0:
 - **`bullseye_tunnels` semantics generalised** (🎯T7). Previously
   a tunnel was "a work target with no **verify target** reachable
   within `max_depth` hops"; now it is "a work target with no
@@ -57,9 +67,9 @@ propagation (🎯T2.3, pending). The repo/portfolio split means per-
 target `value`/`cost` are now documented as portfolio-scope inputs
 only.
 
-The settling clock for 1.0 eligibility restarts from v0.13.0
-(`bullseye_tunnels` semantics shift is a behavioural break; the
-`bullseye_put` achieved-immutability rule narrows an input surface).
+The settling clock for 1.0 eligibility restarts from v0.14.0
+(removing `bullseye_render` is a tool-surface break; file rename
+from `targets.yaml` to `bullseye.yaml` is a file-format break).
 
 ### MCP tools
 
@@ -75,8 +85,7 @@ The settling clock for 1.0 eligibility restarts from v0.13.0
 | `bullseye_verify(cwd, id)` | Fluid | New in v0.13.0. Emits a structured plan (markdown + JSON) mapping each check on the target to a sawmill tool invocation. Bullseye does not execute the plan — the calling agent runs it against sawmill and folds results back into a report. The plan-only (no result-feedback) shape may evolve once we see how `/cv` or similar wrappers consume it. |
 | `bullseye_validate(cwd)` | Stable | Validation rules will grow but existing ones won't change |
 | `bullseye_graph(cwd)` | Stable | |
-| `bullseye_render(cwd)` | Stable | |
-| `bullseye_import(cwd, path, force)` | Stable | Markdown-to-YAML migration |
+| `bullseye_import(cwd, path, force)` | Stable | Markdown-to-YAML migration. `path` is now required (auto-discovery removed in v0.14.0). |
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
 | `bullseye_startup_context(cwd, recent_days)` | Needs review | v0.9.0 degrades gracefully on missing / unreadable / unparsable files; still fails loudly on `schema_version` mismatch. |
 | `bullseye_portfolio(root, max_depth)` | Needs review | v0.9.0 surfaces load warnings (especially `schema_version` mismatches) under a `## ⚠ Warnings` section instead of silently dropping affected repos. |
@@ -89,6 +98,15 @@ The settling clock for 1.0 eligibility restarts from v0.13.0
 
 **Renamed in v0.12.0** (breaking):
 - `bullseye_assert` → `bullseye_put`
+
+**Removed in v0.14.0** (breaking):
+- `bullseye_render` — markdown rendering deleted entirely (🎯T10)
+
+**Behavioural changes in v0.14.0**:
+- `bullseye_import` `path` parameter is now required (auto-discovery
+  of markdown files removed with render module)
+- File discovered as `bullseye.yaml` at repo root (was
+  `docs/targets.yaml` or `targets.yaml`)
 
 **Behavioural changes in v0.13.0**:
 - `bullseye_tunnels` membership predicate generalised from verify-
@@ -144,7 +162,6 @@ Planned additions:
 
 | Format | Status | Notes |
 |--------|--------|-------|
-| Markdown rendering | Needs review | Section structure and field display may evolve |
 | Mermaid graph output | Needs review | Node/edge styling may change |
 | Tool response text format | Fluid | Not yet formalised; consumers should parse loosely |
 
@@ -171,12 +188,10 @@ Planned additions:
 - **Portfolio-level WSJF (🎯T2.3)**: Cross-repo enabler propagation is
   currently a binary flag; the value-weighted upgrade is pending.
   Should land before 1.0 so the portfolio engine is stable.
-- **Settling threshold reset**: v0.8.0 removed `bullseye_add` and
-  `bullseye_update` and retired the `gates` schema field; v0.12.0
-  renamed `bullseye_assert` to `bullseye_put`; v0.13.0 generalised
-  `bullseye_tunnels` semantics and added the `bullseye_put` achieved-
-  immutability rule. Each is a behavioural or input-surface change.
-  The settling clock restarts from v0.13.0.
+- **Settling threshold reset**: v0.14.0 removed `bullseye_render` and
+  renamed the targets file from `targets.yaml` to `bullseye.yaml`.
+  Both are interaction-surface breaks. The settling clock restarts
+  from v0.14.0.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
