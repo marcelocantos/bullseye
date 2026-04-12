@@ -262,7 +262,11 @@ fn run_invariants_command(argv: &[String], repo_root: &Path, out: &mut String) -
     // tool knows its own rule table, and we trust its output rather
     // than pre-parsing the Makefile ourselves.
     if exit_code != 0 && stderr_indicates_missing_rule(&stderr) {
-        let build_file = if argv[0] == "mk" { "mkfile" } else { "Makefile" };
+        let build_file = if argv[0] == "mk" {
+            "mkfile"
+        } else {
+            "Makefile"
+        };
         render_setup_warning(
             out,
             &SetupReason::MissingRule {

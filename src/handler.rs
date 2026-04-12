@@ -104,11 +104,11 @@ fn load_or_create_file(
     }
 }
 
-/// Save the YAML and re-render the markdown view.
+/// Save the YAML. The markdown view is no longer auto-rendered on
+/// mutation (see commit 23ffbe9); callers that want a rendered view
+/// must invoke `bullseye_render` explicitly.
 fn save_and_render(path: &Path, file: &crate::schema::TargetsFile) -> Result<(), CallToolError> {
-    store::save(path, file).map_err(tool_err)?;
-    render::render_to_file(path, file).map_err(tool_err)?;
-    Ok(())
+    store::save(path, file).map_err(tool_err)
 }
 
 fn handle_list(t: crate::tools::ListTool) -> ToolResult {
@@ -567,13 +567,11 @@ fn handle_init(t: crate::tools::InitTool) -> ToolResult {
     });
 
     let path = store::create_starter(dir, &project).map_err(tool_err)?;
-    let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
-    render::render_to_file(&path, &file).map_err(tool_err)?;
+    let _ = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
 
     text_result(format!(
         "Created starter targets file at {}\n\
-         Contains 1 sample target (🎯T1) — edit or replace it with your own.\n\
-         Markdown view rendered alongside.",
+         Contains 1 sample target (🎯T1) — edit or replace it with your own.",
         path.display(),
     ))
 }
@@ -625,13 +623,9 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
     let yaml_path = docs.join("targets.yaml");
     store::save(&yaml_path, &file).map_err(tool_err)?;
 
-    // Re-render the markdown from the YAML (canonical formatting).
-    render::render_to_file(&yaml_path, &file).map_err(tool_err)?;
-
     text_result(format!(
         "Imported {} targets from {}\n\
          Written to {}\n\
-         Markdown re-rendered alongside.\n\
          Validation: OK",
         file.targets.len(),
         md_path.display(),
@@ -699,10 +693,7 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
 /// cases like a targets file with no parent directory). In practice
 /// `store::discover` always returns a path with a parent, so the
 /// fallback is defensive rather than load-bearing.
-pub(crate) fn repo_root_from_targets_path(
-    path: &Path,
-    fallback: &Path,
-) -> std::path::PathBuf {
+pub(crate) fn repo_root_from_targets_path(path: &Path, fallback: &Path) -> std::path::PathBuf {
     let parent = path.parent().unwrap_or(fallback);
     if parent.file_name().is_some_and(|n| n == "docs") {
         parent.parent().unwrap_or(fallback).to_path_buf()
