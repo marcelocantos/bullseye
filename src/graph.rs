@@ -536,23 +536,23 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
 }
 
 /// Produce the startup-context response for a project that has no
-/// `targets.yaml`. Unlike most tools, startup_context is often called
+/// `bullseye.yaml`. Unlike most tools, startup_context is often called
 /// automatically at session start before the caller knows whether the
 /// repo uses bullseye, so it needs to degrade gracefully instead of
 /// failing the tool call.
 pub fn startup_context_no_file(cwd: &str) -> String {
     format!(
         "# Startup context\n\
-         File: (no targets.yaml found under {cwd})\n\
+         File: (no bullseye.yaml found under {cwd})\n\
          \n\
          This project is not using bullseye yet. Run `bullseye_init` to \
-         create a starter `docs/targets.yaml`, or ignore this notice if \
+         create a starter `bullseye.yaml`, or ignore this notice if \
          targets aren't appropriate for this repo.\n",
     )
 }
 
 /// Produce the startup-context response for a project whose
-/// `targets.yaml` exists but can't be read or parsed. Surfaces the
+/// `bullseye.yaml` exists but can't be read or parsed. Surfaces the
 /// underlying error for the user to diagnose, but intentionally
 /// does **not** make the tool call fail — session start should
 /// continue regardless of whether the targets file is momentarily
@@ -564,7 +564,7 @@ pub fn startup_context_broken_file(file_path: &str, error: &str) -> String {
         "# Startup context\n\
          File: {file_path}\n\
          \n\
-         ⚠ targets.yaml could not be loaded: {error}\n\
+         ⚠ bullseye.yaml could not be loaded: {error}\n\
          \n\
          Session start is continuing without target context. Fix the \
          file (common causes: YAML syntax error, unresolved rebase \

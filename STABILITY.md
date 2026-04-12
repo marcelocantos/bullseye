@@ -3,7 +3,7 @@
 ## Stability commitment
 
 Version 1.0 will represent a backwards-compatibility contract. After
-1.0, breaking changes to the MCP tool interface, targets.yaml schema,
+1.0, breaking changes to the MCP tool interface, bullseye.yaml schema,
 or CLI flags will require a new product (not a major version bump).
 The pre-1.0 period exists to get these right.
 
@@ -101,7 +101,7 @@ Planned additions (not yet implemented):
   weighted propagation, and adds per-repo WSJF scoring at the
   portfolio boundary.
 
-### targets.yaml schema
+### bullseye.yaml schema
 
 | Field | Status | Notes |
 |-------|--------|-------|
@@ -144,7 +144,7 @@ Planned additions:
 
 | Format | Status | Notes |
 |--------|--------|-------|
-| targets.md rendering | Needs review | Section structure and field display may evolve |
+| Markdown rendering | Needs review | Section structure and field display may evolve |
 | Mermaid graph output | Needs review | Node/edge styling may change |
 | Tool response text format | Fluid | Not yet formalised; consumers should parse loosely |
 

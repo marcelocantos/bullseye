@@ -60,7 +60,7 @@ pub struct RepoSummary {
 }
 
 /// A repo that was discovered during a portfolio scan but could not
-/// be summarized — the targets.yaml was either unreadable, unparsable,
+/// be summarized — the bullseye.yaml was either unreadable, unparsable,
 /// or declared a schema version the current bullseye doesn't support.
 ///
 /// Warnings must be surfaced in the portfolio output rather than
@@ -95,17 +95,17 @@ pub enum RepoWarningKind {
 /// Result of scanning a workspace root for repos with targets.
 #[derive(Debug, Clone, Default)]
 pub struct PortfolioScan {
-    /// Repos whose targets.yaml loaded successfully.
+    /// Repos whose bullseye.yaml loaded successfully.
     pub repos: Vec<RepoSummary>,
-    /// Repos whose targets.yaml was found but couldn't be summarized.
+    /// Repos whose bullseye.yaml was found but couldn't be summarized.
     /// Must be surfaced in the output, not silently dropped.
     pub warnings: Vec<RepoWarning>,
 }
 
-/// Scan a workspace root for repos containing `docs/targets.yaml`.
+/// Scan a workspace root for repos containing `bullseye.yaml`.
 ///
 /// Walks up to `max_depth` levels deep under `root`, looking for
-/// `docs/targets.yaml` files. For each found, attempts to load and
+/// `bullseye.yaml` files. For each found, attempts to load and
 /// summarize. Failures become [`RepoWarning`] entries on the returned
 /// [`PortfolioScan`] — critically, this means a repo whose targets
 /// file declares a newer `schema_version` than this bullseye supports
@@ -116,8 +116,8 @@ pub fn discover_repos(root: &Path, max_depth: usize) -> PortfolioScan {
     let mut dirs = vec![(root.to_path_buf(), 0usize)];
 
     while let Some((dir, depth)) = dirs.pop() {
-        // Check for targets.yaml at this level.
-        let targets_path = dir.join("docs/targets.yaml");
+        // Check for bullseye.yaml at this level.
+        let targets_path = dir.join("bullseye.yaml");
         if targets_path.is_file() {
             match summarize_repo(&dir, &targets_path) {
                 Ok(summary) => scan.repos.push(summary),
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn format_portfolio_surfaces_version_mismatch_warning() {
-        // A repo whose targets.yaml declares a schema_version this
+        // A repo whose bullseye.yaml declares a schema_version this
         // binary doesn't support must appear prominently in the
         // output — otherwise the user would silently lose the
         // upgrade signal.
@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn format_portfolio_surfaces_load_error_warning() {
-        // A repo whose targets.yaml is unparsable should also be
+        // A repo whose bullseye.yaml is unparsable should also be
         // surfaced, but under a different heading so the user can
         // distinguish "my bullseye is stale" from "my YAML is broken".
         let scan = PortfolioScan {
@@ -586,7 +586,8 @@ mod tests {
                 repo: "org/broken-repo".to_string(),
                 path: PathBuf::from("/work/org/broken-repo"),
                 kind: RepoWarningKind::LoadError,
-                message: "failed to parse /work/.../targets.yaml: bad indent at line 7".to_string(),
+                message: "failed to parse /work/.../bullseye.yaml: bad indent at line 7"
+                    .to_string(),
             }],
         };
 

@@ -440,7 +440,7 @@ fn render_next_action(
     // tiebreak. See `graph::rank_frontier` for the full rule.
     // `momentum` is intentionally not consumed here — it's a
     // portfolio-scope input, not a repo-level signal. See 🎯T7 in
-    // `docs/targets.yaml` and §9 of `docs/mcp-triad.md`.
+    // `bullseye.yaml` and §9 of `docs/mcp-triad.md`.
     let _ = momentum;
     let errors = graph::validate(file);
     if !errors.is_empty() {
@@ -581,7 +581,7 @@ mod tests {
         assert!(is_fix_commit("bugfix: off-by-one in parser"));
         assert!(is_fix_commit("Revert \"Add broken feature\""));
         assert!(is_fix_commit("Address regression in T5 verification"));
-        assert!(is_fix_commit("Crash when targets.yaml is empty"));
+        assert!(is_fix_commit("Crash when bullseye.yaml is empty"));
         assert!(is_fix_commit("Handle incorrect merge resolution"));
         assert!(is_fix_commit("Repair broken migration path"));
 

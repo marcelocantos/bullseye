@@ -6,11 +6,11 @@ Reference for AI agents using Bullseye as an MCP server.
 
 Bullseye manages **targets** — desired project states expressed as
 testable properties. It stores targets in
-`docs/targets.yaml`, computes which are unblocked (the frontier),
+`bullseye.yaml`, computes which are unblocked (the frontier),
 and detects gaps in verification coverage.
 
 Every tool accepts a `cwd` parameter. The server walks up from `cwd`
-to find the nearest `docs/targets.yaml` or `targets.yaml`.
+to find the nearest `bullseye.yaml`.
 
 ## Tools
 
@@ -169,19 +169,9 @@ Generate a Mermaid dependency graph of active targets.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 
-### bullseye_render
-
-Re-render `docs/targets.md` from `docs/targets.yaml`. Mutation tools
-(add, update, retire, rework) auto-render, so this is only needed for
-manual re-rendering.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cwd` | string | required | Working directory |
-
 ### bullseye_init
 
-Create a starter `docs/targets.yaml` with a sample target. Refuses to
+Create a starter `bullseye.yaml` with a sample target. Refuses to
 overwrite an existing file — use `bullseye_put` for repos that
 already have targets.
 
@@ -192,18 +182,16 @@ already have targets.
 
 ### bullseye_import
 
-Import targets from a markdown `docs/targets.md` file into
-`docs/targets.yaml`. Parses the markdown format produced by
-`render.rs` and other repos' `/cv` skills. Tolerant of minor
-formatting variations. Validates the parsed result before writing.
+Import targets from a YAML file into `bullseye.yaml`. Validates the
+parsed result before writing.
 
-Refuses to overwrite an existing `targets.yaml` unless `force` is set.
+Refuses to overwrite an existing `bullseye.yaml` unless `force` is set.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Project root directory |
-| `path` | string | auto-discover | Explicit path to markdown file |
-| `force` | bool | `false` | Overwrite existing `targets.yaml` |
+| `path` | string | auto-discover | Explicit path to source file |
+| `force` | bool | `false` | Overwrite existing `bullseye.yaml` |
 
 ### bullseye_startup_context
 
@@ -328,7 +316,7 @@ appropriate caution.
 | `momentum` | array | null | Same shape as `bullseye_summary` — optional per-target multipliers. |
 | `skip_invariants` | bool | `false` | Skip the `make bullseye` / `mk bullseye` invocation. Lightweight scan mode that omits the hook but still runs the summary and frontier recommendation. |
 
-## targets.yaml schema
+## bullseye.yaml schema
 
 ```yaml
 schema_version: 1          # required going forward; legacy files
@@ -511,11 +499,11 @@ MCP server registered (see [README.md](../README.md#mcp-client-configuration)).
 
 This project uses [Bullseye](https://github.com/marcelocantos/bullseye)
 for target management. Targets are desired project states expressed as
-testable properties, stored in `docs/targets.yaml`.
+testable properties, stored in `bullseye.yaml`.
 
 ### Getting started
 
-If this project doesn't have `docs/targets.yaml` yet, call
+If this project doesn't have `bullseye.yaml` yet, call
 `bullseye_init` to create one with a starter template.
 
 ### Assessing work
