@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use bullseye::graph;
 use bullseye::ops;
-use bullseye::render;
 use bullseye::schema::{Kind, Status, TargetsFile};
 use bullseye::store;
 
@@ -14,7 +13,7 @@ fn fixture_path() -> PathBuf {
 }
 
 fn load_fixture() -> TargetsFile {
-    let path = fixture_path().join("docs/targets.yaml");
+    let path = fixture_path().join("bullseye.yaml");
     store::load(&path).unwrap()
 }
 
@@ -60,7 +59,7 @@ fn mermaid_generation() {
 fn discovers_from_subdirectory() {
     let found = store::discover(&fixture_path());
     assert!(found.is_some());
-    assert!(found.unwrap().ends_with("docs/targets.yaml"));
+    assert!(found.unwrap().ends_with("bullseye.yaml"));
 }
 
 #[test]
@@ -172,23 +171,6 @@ fn mermaid_shows_verifies_edges() {
     let file = load_fixture();
     let diagram = graph::mermaid(&file);
     assert!(diagram.contains("verifies"));
-}
-
-#[test]
-fn render_shows_verify_target() {
-    let file = load_fixture();
-    let md = render::render_markdown(&file);
-    // T5 should have the ✓ marker and Verifies line.
-    assert!(md.contains("### 🎯T5 ✓ CI and platform isolation verified"));
-    assert!(md.contains("- **Verifies**: 🎯T1, 🎯T3"));
-    assert!(md.contains("- **Rework**: 🎯T1"));
-}
-
-#[test]
-fn render_shows_retry_budget() {
-    let file = load_fixture();
-    let md = render::render_markdown(&file);
-    assert!(md.contains("- **Retry budget**: 3"));
 }
 
 #[test]
@@ -497,53 +479,14 @@ fn rework_error_dest_not_found() {
 }
 
 #[test]
-fn renders_markdown() {
-    let file = load_fixture();
-    let md = render::render_markdown(&file);
-
-    // Has structure.
-    assert!(md.contains("# Targets"));
-    assert!(md.contains("## Active"));
-    assert!(md.contains("## Achieved"));
-
-    // Has target entries with 🎯 prefix.
-    assert!(md.contains("### 🎯T1 All tests pass on CI"));
-    assert!(md.contains("### 🎯T4 Documentation covers all public APIs"));
-
-    // Has value and cost lines.
-    assert!(md.contains("- **Value**:"));
-    assert!(md.contains("- **Cost**:"));
-
-    // Has acceptance criteria.
-    assert!(md.contains("- **Acceptance**:"));
-
-    // Achieved target has achieved date.
-    assert!(md.contains("- **Achieved**: 2026-03-10"));
-
-    // Has mermaid graph (active targets exist).
-    assert!(md.contains("```mermaid"));
-    assert!(md.contains("graph TD"));
-}
-
-#[test]
-fn markdown_path_derivation() {
-    use std::path::Path;
-    let yaml = Path::new("/foo/docs/targets.yaml");
-    let md = render::markdown_path(yaml);
-    assert_eq!(md, Path::new("/foo/docs/targets.md"));
-}
-
-#[test]
 fn load_accepts_legacy_file_without_schema_version() {
     use bullseye::schema::CURRENT_SCHEMA_VERSION;
     use std::io::Write;
-    // A targets.yaml written before schema_version was introduced must
+    // A bullseye.yaml written before schema_version was introduced must
     // still load cleanly. The loader treats the missing field as the
     // current (v1) schema and fills it in so the next save stamps it.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     let legacy_yaml = r#"
 targets:
@@ -566,13 +509,11 @@ targets:
 #[test]
 fn load_rejects_newer_schema_version_with_upgrade_prompt() {
     use std::io::Write;
-    // A targets.yaml declaring a schema_version higher than this
+    // A bullseye.yaml declaring a schema_version higher than this
     // binary supports must fail fast with a clear upgrade message,
     // not silently drop or misinterpret unknown fields.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     let future_yaml = r#"
 schema_version: 999
@@ -614,9 +555,7 @@ fn save_stamps_current_schema_version() {
     // the current schema_version on disk, so legacy files self-upgrade
     // on first contact with a v0.9.0+ bullseye.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     let legacy_yaml = r#"
 targets:
@@ -648,9 +587,7 @@ fn load_migrates_legacy_gates_to_depends_on() {
     // `T2.gates = [T1]` folds into `T2.depends_on += [T1]` — i.e., the
     // owning target absorbs its gates as blockers ("T2 is gated by T1").
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     let legacy_yaml = r#"
 targets:
@@ -696,7 +633,7 @@ fn create_starter_produces_valid_file() {
     let path = store::create_starter(tmp.path(), "test-project").unwrap();
 
     assert!(path.exists());
-    assert_eq!(path, tmp.path().join("docs/targets.yaml"));
+    assert_eq!(path, tmp.path().join("bullseye.yaml"));
 
     let file = store::load(&path).unwrap();
     assert_eq!(file.targets.len(), 1);
@@ -733,7 +670,7 @@ fn portfolio_discovers_fixture() {
 
     let fixture = fixture_path();
     let scan = portfolio::discover_repos(&fixture, 3);
-    // The fixture has a docs/targets.yaml at its root.
+    // The fixture has a bullseye.yaml at its root.
     assert_eq!(scan.repos.len(), 1);
     assert_eq!(scan.repos[0].active, 4);
     assert!(scan.repos[0].frontier > 0);
@@ -758,7 +695,7 @@ fn portfolio_reports_version_mismatch_as_warning() {
     use bullseye::portfolio::{self, RepoWarningKind};
     use std::io::Write;
 
-    // A repo whose targets.yaml declares a newer schema_version than
+    // A repo whose bullseye.yaml declares a newer schema_version than
     // this bullseye supports must appear as a warning in the scan
     // — NOT silently disappear from the repos list. This is the
     // whole reason the schema_version check exists: if portfolio
@@ -766,9 +703,8 @@ fn portfolio_reports_version_mismatch_as_warning() {
     // "upgrade me" signal across every repo the user scans.
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("org").join("future-repo");
-    let docs = repo.join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    std::fs::create_dir_all(&repo).unwrap();
+    let path = repo.join("bullseye.yaml");
     write!(
         std::fs::File::create(&path).unwrap(),
         "schema_version: 999\ntargets:\n  T1:\n    name: From the future\n    \
@@ -806,9 +742,7 @@ fn cross_repo_edges_yaml_roundtrip() {
     // whole T2.2 feature sits on — if serde doesn't handle the shape,
     // nothing else works.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     let yaml = r#"
 schema_version: 1
@@ -952,9 +886,8 @@ fn portfolio_surfaces_cross_repo_edges_from_loaded_yaml() {
     // format_portfolio surfaces them.
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("org").join("linker");
-    let docs = repo.join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    std::fs::create_dir_all(&repo).unwrap();
+    let path = repo.join("bullseye.yaml");
 
     let yaml = r#"
 schema_version: 1
@@ -1014,7 +947,7 @@ targets:
 #[test]
 fn startup_context_shows_frontier_and_counts() {
     let file = load_fixture();
-    let ctx = graph::startup_context(&file, "test/docs/targets.yaml", 14);
+    let ctx = graph::startup_context(&file, "test/bullseye.yaml", 14);
 
     // Header with counts.
     assert!(ctx.contains("Active: 4 target(s)"));
@@ -1065,7 +998,7 @@ fn startup_context_shows_tunnel_warnings() {
 #[test]
 fn summary_shows_totals_and_sections() {
     let file = load_fixture();
-    let out = graph::summary(&file, "test/docs/targets.yaml", None, false);
+    let out = graph::summary(&file, "test/bullseye.yaml", None, false);
 
     // Header with counts.
     assert!(out.contains("Total: 5 target(s)"));
@@ -1163,10 +1096,8 @@ fn summary_frontier_ordered_by_distance_and_fanout() {
 
 fn write_project(tmp: &std::path::Path, makefile: &str, targets_yaml: &str) {
     use std::io::Write;
-    let docs = tmp.join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
     write!(
-        std::fs::File::create(docs.join("targets.yaml")).unwrap(),
+        std::fs::File::create(tmp.join("bullseye.yaml")).unwrap(),
         "{targets_yaml}"
     )
     .unwrap();
@@ -1175,6 +1106,23 @@ fn write_project(tmp: &std::path::Path, makefile: &str, targets_yaml: &str) {
         "{makefile}"
     )
     .unwrap();
+}
+
+/// Extract the concatenated text payload from an MCP `CallToolResult`,
+/// panicking if any content block is not a `TextContent`. Used by the
+/// handler-level end-to-end tests that drive `handle_convergence`
+/// directly rather than calling `convergence::convergence`.
+fn text_from_call_result(result: rust_mcp_sdk::schema::CallToolResult) -> String {
+    use rust_mcp_sdk::schema::ContentBlock;
+    result
+        .content
+        .into_iter()
+        .map(|block| match block {
+            ContentBlock::TextContent(t) => t.text,
+            other => panic!("expected TextContent, got {other:?}"),
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 const SIMPLE_TARGETS_YAML: &str = r#"
@@ -1204,14 +1152,14 @@ targets:
 #[test]
 fn convergence_end_to_end_green_invariants_picks_top_frontier() {
     // Full integration: real temp project, real Makefile that exits 0,
-    // real targets.yaml, real convergence pipeline. Verifies the whole
+    // real bullseye.yaml, real convergence pipeline. Verifies the whole
     // path from hook invocation to recommendation text.
     let tmp = tempfile::tempdir().unwrap();
     // `true` is a trivial program that exits 0 — standing invariants green.
     let makefile = "bullseye:\n\t@true\n";
     write_project(tmp.path(), makefile, SIMPLE_TARGETS_YAML);
 
-    let path = tmp.path().join("docs/targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
     let file = store::load(&path).unwrap();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
 
@@ -1252,7 +1200,7 @@ fn convergence_end_to_end_red_invariants_blocks() {
     let makefile = "bullseye:\n\t@echo 'tests failing'; false\n";
     write_project(tmp.path(), makefile, SIMPLE_TARGETS_YAML);
 
-    let path = tmp.path().join("docs/targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
     let file = store::load(&path).unwrap();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
 
@@ -1279,7 +1227,7 @@ fn convergence_end_to_end_skip_invariants_flag_bypasses_hook() {
     let makefile = "bullseye:\n\t@echo 'would have failed'; false\n";
     write_project(tmp.path(), makefile, SIMPLE_TARGETS_YAML);
 
-    let path = tmp.path().join("docs/targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
     let file = store::load(&path).unwrap();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, true);
 
@@ -1300,22 +1248,20 @@ fn convergence_end_to_end_skip_invariants_flag_bypasses_hook() {
 
 #[test]
 fn convergence_missing_makefile_degrades_gracefully() {
-    // A repo with targets.yaml but no Makefile. Convergence must
+    // A repo with bullseye.yaml but no Makefile. Convergence must
     // still run to completion — emit the target snapshot, mark
     // invariants as unknown with setup instructions embedded, and
     // still produce a frontier recommendation.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
     use std::io::Write;
     write!(
-        std::fs::File::create(docs.join("targets.yaml")).unwrap(),
+        std::fs::File::create(tmp.path().join("bullseye.yaml")).unwrap(),
         "{SIMPLE_TARGETS_YAML}"
     )
     .unwrap();
     // Note: NO Makefile.
 
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
     let file = store::load(&path).unwrap();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
 
@@ -1366,7 +1312,7 @@ fn convergence_makefile_without_bullseye_rule_degrades_gracefully() {
     let tmp = tempfile::tempdir().unwrap();
     write_project(tmp.path(), "all:\n\t@echo hello\n", SIMPLE_TARGETS_YAML);
 
-    let path = tmp.path().join("docs/targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
     let file = store::load(&path).unwrap();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
 
@@ -1384,6 +1330,69 @@ fn convergence_makefile_without_bullseye_rule_degrades_gracefully() {
     // Frontier recommendation still fires.
     let next = out.split("## Next action").nth(1).expect("next action");
     assert!(next.contains("**Execute now**: Work on 🎯T1"));
+}
+
+#[test]
+fn handle_convergence_resolves_repo_root() {
+    // Regression guard for a user-reported bug: `handle_convergence`
+    // used to compute the repo root by stepping up two parent
+    // directories unconditionally, landing in the grandparent. No
+    // Makefile was found there, so invariant detection fell through to
+    // "hook not configured" even though the repo had a perfectly good
+    // `bullseye:` rule at the real root.
+    //
+    // Every other convergence end-to-end test in this file calls
+    // `bullseye::convergence::convergence(...)` directly, passing
+    // `repo_root` explicitly — which bypasses the path-computation
+    // layer that contained the bug. This test drives
+    // `handle_convergence` as a full integration so any future
+    // inversion of `repo_root_from_targets_path` or
+    // `store::discover`'s candidate order is caught at the handler
+    // boundary.
+    use bullseye::handler::handle_convergence;
+    use bullseye::tools::ConvergenceTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    write_project(tmp.path(), "bullseye:\n\t@true\n", SIMPLE_TARGETS_YAML);
+
+    let result = handle_convergence(ConvergenceTool {
+        cwd: tmp.path().to_string_lossy().into_owned(),
+        momentum: None,
+        skip_invariants: None,
+    })
+    .expect("handle_convergence should succeed with a valid project");
+    let out = text_from_call_result(result);
+
+    // Headline assertion: the invariants hook must have been found and
+    // run. If the repo root was computed incorrectly, this would
+    // instead report "not configured" + a setup warning, and the
+    // status would be "unknown".
+    assert!(
+        out.contains("Status: ✓ all green"),
+        "expected green invariants status — this is the regression guard for the \
+         root-level bullseye.yaml bug; if this fails, handle_convergence is \
+         computing repo_root incorrectly. Output:\n{out}"
+    );
+
+    // Mirror the canonical `convergence_end_to_end_green_invariants_picks_top_frontier`
+    // assertions so this test also covers the rest of the pipeline,
+    // not just the repo-root fix.
+    assert!(out.contains("# Convergence"));
+    assert!(out.contains("## Invariants"));
+    assert!(out.contains("## Frontier"));
+    assert!(out.contains("🎯T1 Primary deliverable"));
+    assert!(
+        out.contains("**Execute now**: Work on 🎯T1 Primary deliverable"),
+        "expected top-focus target as next action; got:\n{out}"
+    );
+
+    // Negative: no stray "not configured" text anywhere — this is the
+    // exact phrase the buggy path produced, and it must not appear.
+    assert!(
+        !out.contains("not configured"),
+        "convergence should not report the hook as missing when it is \
+         present at the repo root; got:\n{out}"
+    );
 }
 
 #[test]
@@ -1422,7 +1431,7 @@ fn convergence_unreleased_fixes_detected_in_git_repo() {
     git(&["add", "README.md"]);
     git(&["commit", "-q", "-m", "Fix missing README for v0.1.0"]);
 
-    let yaml_path = path.join("docs/targets.yaml");
+    let yaml_path = path.join("bullseye.yaml");
     let file = store::load(&yaml_path).unwrap();
     let out = bullseye::convergence::convergence(&file, &yaml_path, path, None, false);
 
@@ -1529,9 +1538,7 @@ fn observable_field_yaml_roundtrip() {
     // The observable flag must round-trip cleanly: present only
     // when true, absent when false, survives save + reload.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     let yaml = r#"
 schema_version: 1
@@ -1838,7 +1845,7 @@ targets:
     discovered: 2026-04-01
 "#;
     write_project(tmp.path(), makefile, targets);
-    let path = tmp.path().join("docs/targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
     let file = store::load(&path).unwrap();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
 
@@ -1969,7 +1976,7 @@ fn summary_with_validation_errors_skips_frontier() {
 
 #[test]
 fn startup_context_no_file_is_graceful() {
-    // A repo with no targets.yaml must not make startup_context fail
+    // A repo with no bullseye.yaml must not make startup_context fail
     // outright — the session-start hook that typically invokes it runs
     // before the agent knows whether the repo uses bullseye. Return a
     // friendly "not using bullseye yet" message instead.
@@ -1979,7 +1986,7 @@ fn startup_context_no_file_is_graceful() {
 
     let out = graph::startup_context_no_file(&tmp.path().display().to_string());
     assert!(out.contains("# Startup context"));
-    assert!(out.contains("no targets.yaml found"));
+    assert!(out.contains("no bullseye.yaml found"));
     assert!(out.contains("bullseye_init"));
     // Must not look like an error string — agents should be able to
     // keep going.
@@ -1989,14 +1996,12 @@ fn startup_context_no_file_is_graceful() {
 #[test]
 fn load_parse_error_is_structured() {
     use std::io::Write;
-    // A targets.yaml that exists but is syntactically broken should
+    // A bullseye.yaml that exists but is syntactically broken should
     // return LoadError::Parse — the typed variant lets callers like
     // bullseye_startup_context choose to degrade gracefully instead
     // of surfacing a raw tool-call error.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     // Deliberately malformed: unterminated list + stray colon.
     let broken_yaml = "targets:\n  T1:\n    name: [unterminated\n    status:::\n";
@@ -2012,14 +2017,14 @@ fn load_parse_error_is_structured() {
 #[test]
 fn startup_context_broken_file_is_graceful() {
     // The helper that formats the degraded response for a broken
-    // targets.yaml must surface the error without looking like a
+    // bullseye.yaml must surface the error without looking like a
     // tool-call failure — session start should continue.
     let out = graph::startup_context_broken_file(
-        "/tmp/fake/docs/targets.yaml",
-        "failed to parse /tmp/fake/docs/targets.yaml: invalid YAML at line 4",
+        "/tmp/fake/bullseye.yaml",
+        "failed to parse /tmp/fake/bullseye.yaml: invalid YAML at line 4",
     );
     assert!(out.contains("# Startup context"));
-    assert!(out.contains("/tmp/fake/docs/targets.yaml"));
+    assert!(out.contains("/tmp/fake/bullseye.yaml"));
     assert!(out.contains("could not be loaded"));
     assert!(out.contains("invalid YAML at line 4"));
     assert!(out.contains("Session start is continuing"));
@@ -2130,9 +2135,7 @@ fn checks_field_survives_store_save_load() {
     // schema version stamp, migrations, etc.) to prove `checks`
     // survives a real save/load cycle, not just in-memory serde.
     let tmp = tempfile::tempdir().unwrap();
-    let docs = tmp.path().join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let path = docs.join("targets.yaml");
+    let path = tmp.path().join("bullseye.yaml");
 
     let mut file = load_fixture();
     file.targets.get_mut("T3").unwrap().checks = vec![

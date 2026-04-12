@@ -111,6 +111,31 @@ targets:
     - mnemo
     origin: manual
     discovered: 2026-04-07
+  T10:
+    name: Target file is bullseye.yaml at repo root
+    status: achieved
+    value: 5.0
+    cost: 3.0
+    actual_cost: 3.0
+    acceptance:
+    - store::discover looks only at root-level bullseye.yaml
+    - store::create_* creates bullseye.yaml at repo root
+    - repo_root_from_targets_path reduces to path.parent()
+    - render module deleted — no markdown output, no bullseye.md
+    - bullseye_render tool removed from tool list
+    - discover_markdown deleted
+    - handle_render deleted
+    - All tests use root-level bullseye.yaml
+    - This repo's own file is bullseye.yaml at root
+    - Docs (CLAUDE.md, agents-guide) reference bullseye.yaml, no mention of markdown rendering
+    - Old paths (docs/targets.yaml, targets.yaml) are ignored — migrated in a separate pass
+    context: Dual-layout support (docs/ vs root) added complexity for no benefit. Renaming from targets.yaml to bullseye.yaml makes the file self-identifying. The auto-rendered markdown view (targets.md / bullseye.md) is unwanted — gut the render module, the render tool, and all markdown output infrastructure entirely. Existing repos will be migrated in a bulk pass after this lands.
+    tags:
+    - refactor
+    - simplification
+    origin: user direction during Gap 3 discussion (2026-04-12)
+    discovered: 2026-04-12
+    achieved: 2026-04-12
   T2:
     name: Global portfolio view across all repos
     status: identified

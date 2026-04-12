@@ -11,7 +11,7 @@ use crate::schema::{
     migrate_gates_to_depends_on,
 };
 
-/// Parse a targets.md markdown file into a TargetsFile.
+/// Parse a markdown targets file into a TargetsFile.
 ///
 /// Tolerant of formatting variations across repos:
 /// - Free-text descriptions between the header and bullet list
@@ -368,84 +368,6 @@ fn parse_gates(s: &str) -> Vec<LegacyGateEdge> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_roundtrip() {
-        let yaml_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/docs/targets.yaml");
-        let file = crate::store::load(&yaml_path).unwrap();
-        let markdown = crate::render::render_markdown(&file);
-        let parsed = parse_markdown(&markdown).unwrap();
-
-        assert_eq!(parsed.targets.len(), file.targets.len());
-        assert_eq!(parsed.last_evaluated, file.last_evaluated);
-
-        for (id, original) in &file.targets {
-            let imported = parsed
-                .targets
-                .get(id)
-                .unwrap_or_else(|| panic!("missing target {id} in parsed output"));
-            assert_eq!(imported.name, original.name, "name mismatch for {id}");
-            assert_eq!(imported.kind, original.kind, "kind mismatch for {id}");
-            assert_eq!(imported.status, original.status, "status mismatch for {id}");
-            assert!(
-                (imported.value - original.value).abs() < 0.01,
-                "value mismatch for {id}: {} vs {}",
-                imported.value,
-                original.value
-            );
-            assert!(
-                (imported.cost - original.cost).abs() < 0.01,
-                "cost mismatch for {id}: {} vs {}",
-                imported.cost,
-                original.cost
-            );
-            assert_eq!(
-                imported.acceptance, original.acceptance,
-                "acceptance mismatch for {id}"
-            );
-            // depends_on may include converted parent refs; check subset.
-
-            assert_eq!(
-                imported.depends_on, original.depends_on,
-                "depends_on mismatch for {id}"
-            );
-            assert_eq!(
-                imported.verifies, original.verifies,
-                "verifies mismatch for {id}"
-            );
-            assert_eq!(imported.rework, original.rework, "rework mismatch for {id}");
-            assert_eq!(
-                imported.retry_budget, original.retry_budget,
-                "retry_budget mismatch for {id}"
-            );
-            assert_eq!(imported.tags, original.tags, "tags mismatch for {id}");
-            assert_eq!(
-                imported.discovered, original.discovered,
-                "discovered mismatch for {id}"
-            );
-            assert_eq!(
-                imported.achieved, original.achieved,
-                "achieved mismatch for {id}"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_self_targets() {
-        // Parse bullseye's own docs/targets.md — a real-world file.
-        let md_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/targets.md");
-        if !md_path.exists() {
-            return; // Skip if not present.
-        }
-        let content = std::fs::read_to_string(&md_path).unwrap();
-        let parsed = parse_markdown(&content).unwrap();
-        assert!(parsed.targets.len() >= 20, "expected at least 20 targets");
-
-        // Spot-check a known target.
-        let t5_1 = parsed.targets.get("T5.1").expect("T5.1 not found");
-        assert_eq!(t5_1.name, "Markdown-to-YAML target converter");
-    }
 
     #[test]
     fn parse_gates_migrates_to_depends_on() {

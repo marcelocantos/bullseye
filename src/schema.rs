@@ -86,7 +86,7 @@ pub struct Target {
     /// Chains of non-observable targets longer than a few hops form
     /// **tunnels** that the repo-level frontier ordering actively
     /// steers away from. See [`crate::graph::is_observable`] and
-    /// 🎯T7 in `docs/targets.yaml`.
+    /// 🎯T7 in `bullseye.yaml`.
     ///
     /// Default `false`; omitted from YAML when false so the common
     /// case stays clean.

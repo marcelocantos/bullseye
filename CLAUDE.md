@@ -19,7 +19,7 @@ Rust edition 2024, toolchain 1.94+.
 
 **Bullseye** is an MCP (Model Context Protocol) server that manages **targets** — desired project states expressed as testable properties, with dependency tracking and frontier computation.
 
-Targets live in `docs/targets.yaml` (YAML source of truth) with an auto-rendered `docs/targets.md` markdown view. The server discovers the targets file by walking up from the caller's `cwd`.
+Targets live in `bullseye.yaml` (YAML source of truth). The server discovers the targets file by walking up from the caller's `cwd`.
 
 Part of a planned **MCP triad**: targets (plan) + sawmill (code) + mnemo (history). See `docs/mcp-triad.md` for the integration design.
 
@@ -34,11 +34,10 @@ graph.rs       — Frontier (unblocked leaves), tunnel detection,
 ops.rs         — Rework cycle logic (verify failure → re-enter work target)
 handler.rs     — MCP tool request dispatch (routes tool name → implementation)
 tools.rs       — MCP tool definitions via #[mcp_tool] macro
-render.rs      — Markdown rendering of targets for docs/targets.md
 portfolio.rs   — Cross-repo discovery, scanning, and portfolio summary
 ```
 
-**Data flow**: Every MCP tool call receives a `cwd` parameter → `store::discover()` finds `targets.yaml` → `store::load()` deserializes → operation applied → `store::save()` writes back + `render::render()` updates markdown.
+**Data flow**: Every MCP tool call receives a `cwd` parameter → `store::discover()` finds `bullseye.yaml` → `store::load()` deserializes → operation applied → `store::save()` writes back.
 
 **Key domain concepts**:
 - `depends_on` edges express hard blocking dependencies. This is the
@@ -50,7 +49,7 @@ portfolio.rs   — Cross-repo discovery, scanning, and portfolio summary
 
 ## Tests
 
-Tests are split between unit tests in modules (`portfolio`, `import`) and integration tests in `tests/core_test.rs` using a fixture at `tests/fixtures/docs/targets.yaml`. Tests cover schema parsing, frontier, rework cycles, tunnel detection, validation, rendering, startup context, portfolio discovery, and YAML roundtrip.
+Tests are split between unit tests in modules (`portfolio`, `import`) and integration tests in `tests/core_test.rs` using a fixture at `tests/fixtures/bullseye.yaml`. Tests cover schema parsing, frontier, rework cycles, tunnel detection, validation, startup context, portfolio discovery, and YAML roundtrip.
 
 ## Delivery
 

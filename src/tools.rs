@@ -11,7 +11,7 @@ use rust_mcp_sdk::tool_box;
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ListTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Filter: "active" (default), "achieved", or "all".
@@ -26,7 +26,7 @@ pub struct ListTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GetTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Target ID (e.g., "T1", "T1.2").
@@ -57,7 +57,7 @@ pub struct GetTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct PutTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Target ID. Omit to create a new target with an auto-assigned ID.
@@ -134,7 +134,7 @@ pub struct PutTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct RetireTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Target ID to retire.
@@ -152,7 +152,7 @@ pub struct RetireTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct FrontierTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 }
 
@@ -163,7 +163,7 @@ pub struct FrontierTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ReworkTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// The verify target ID that failed.
@@ -181,7 +181,7 @@ pub struct ReworkTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct TunnelsTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Maximum hops before flagging (default: 2).
@@ -196,7 +196,7 @@ pub struct TunnelsTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ValidateTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 }
 
@@ -207,18 +207,18 @@ pub struct ValidateTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GraphTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 }
 
 /// Initialise a new targets file with a starter template.
 #[mcp_tool(
     name = "bullseye_init",
-    description = "Create a starter docs/targets.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_put for repos that already have targets."
+    description = "Create a starter bullseye.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_put for repos that already have targets."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct InitTool {
-    /// Working directory (project root) where docs/targets.yaml will be created.
+    /// Working directory (project root) where bullseye.yaml will be created.
     pub cwd: String,
 
     /// Project name for the sample target context (e.g., "my-app").
@@ -229,31 +229,20 @@ pub struct InitTool {
 /// Import targets from a markdown file into YAML.
 #[mcp_tool(
     name = "bullseye_import",
-    description = "Import targets from a markdown targets file (docs/targets.md) into docs/targets.yaml. Parses the markdown format produced by render.rs and other repos' /cv skills. Tolerant of minor formatting variations. Refuses to overwrite an existing targets.yaml — use this for initial migration only."
+    description = "Import targets from a markdown file into bullseye.yaml. Parses the markdown format produced by other repos' /cv skills. Tolerant of minor formatting variations. Refuses to overwrite an existing bullseye.yaml — use this for initial migration only. Requires an explicit `path` to the markdown source."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ImportTool {
-    /// Working directory (project root) where docs/targets.md will be read.
+    /// Working directory (project root).
     pub cwd: String,
 
-    /// Path to the markdown file to import (default: docs/targets.md discovered by walking up from cwd).
+    /// Path to the markdown file to import (required).
     #[serde(default)]
     pub path: Option<String>,
 
-    /// If true, overwrite an existing targets.yaml (default: false).
+    /// If true, overwrite an existing bullseye.yaml (default: false).
     #[serde(default)]
     pub force: bool,
-}
-
-/// Render targets.md from the YAML source.
-#[mcp_tool(
-    name = "bullseye_render",
-    description = "Render docs/targets.md from docs/targets.yaml. The YAML is the source of truth; the markdown is a human-readable view. Mutation tools (add, update, retire) auto-render, so this is only needed for manual re-rendering."
-)]
-#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
-pub struct RenderTool {
-    /// Working directory to discover targets.yaml from.
-    pub cwd: String,
 }
 
 /// Session startup context for a project.
@@ -263,7 +252,7 @@ pub struct RenderTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct StartupContextTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Number of days to look back for recently achieved targets (default: 14).
@@ -320,7 +309,7 @@ pub struct MomentumEntry {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct SummaryTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Optional per-target momentum multipliers, as a list of
@@ -358,7 +347,7 @@ pub struct SummaryTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct VerifyTool {
-    /// Working directory to discover targets.yaml from.
+    /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
     /// Target ID (e.g., "T1", "T1.2") whose checks should be planned.
@@ -378,7 +367,7 @@ pub struct VerifyTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ConvergenceTool {
-    /// Working directory to discover targets.yaml and the build file from.
+    /// Working directory to discover bullseye.yaml and the build file from.
     pub cwd: String,
 
     /// Optional per-target momentum multipliers (same shape as
@@ -406,7 +395,6 @@ tool_box!(
         TunnelsTool,
         ValidateTool,
         GraphTool,
-        RenderTool,
         InitTool,
         ImportTool,
         StartupContextTool,

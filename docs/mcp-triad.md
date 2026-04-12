@@ -172,7 +172,7 @@ verify target fails
 ### 5. What `/cv` becomes
 
 Today `/cv` is a ~200-line skill that:
-1. Reads and parses `docs/targets.md` (fragile markdown parsing)
+1. Reads and parses `bullseye.yaml` (fragile markdown parsing)
 2. Spawns an agent to assess gaps (expensive, non-deterministic)
 3. Formats and presents results
 
@@ -198,7 +198,7 @@ vs. the current unbounded agent exploration.
 2. **targets: `targets_verify` tool** — iterates checks, calls
    sawmill tools, returns structured report. Requires sawmill
    MCP client in the targets server (or composition at skill layer).
-3. **Skill rewrite: `/cv`** — replace markdown parsing + rank.py
+3. **Skill rewrite: `/cv`** — replace YAML parsing + rank.py
    with `targets_rank` + `mnemo_recent_activity` calls.
 4. **mnemo: target-aware compaction** — summarizer calls
    `targets_list` to anchor output (depends on 🎯T10).
@@ -228,7 +228,7 @@ competing demands across repos.
 
 ### The global graph
 
-Each repo has its own `targets.yaml` with an internal target graph.
+Each repo has its own `bullseye.yaml` with an internal target graph.
 The global view meshes these into a cross-repo quasi-graph:
 
 ```
@@ -253,7 +253,7 @@ computable.
 
 ### Discovery
 
-The targets server discovers all `targets.yaml` files across the
+The targets server discovers all `bullseye.yaml` files across the
 managed repo forest. Sources:
 
 1. **`~/.claude/managed-repos.md`** — canonical repo list
@@ -261,9 +261,7 @@ managed repo forest. Sources:
 3. **mnemo_repos** — repos with recent session activity (may include
    repos not yet in managed-repos.md)
 
-For each discovered repo, load `docs/targets.yaml` (if it exists).
-Repos still using markdown `docs/targets.md` are excluded until
-migrated, or optionally parsed with a best-effort adapter.
+For each discovered repo, load `bullseye.yaml` (if it exists).
 
 ### Cross-repo edges
 

@@ -17,7 +17,6 @@ use crate::graph;
 use crate::import;
 use crate::ops;
 use crate::portfolio;
-use crate::render;
 use crate::schema::{Status, Target};
 use crate::store;
 use crate::tools::TargetTools;
@@ -56,7 +55,6 @@ impl ServerHandler for TargetHandler {
             TargetTools::TunnelsTool(t) => handle_tunnels(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
-            TargetTools::RenderTool(t) => handle_render(t),
             TargetTools::InitTool(t) => handle_init(t),
             TargetTools::ImportTool(t) => handle_import(t),
             TargetTools::StartupContextTool(t) => handle_startup_context(t),
@@ -84,7 +82,7 @@ fn err(msg: impl Into<String>) -> ToolResult {
 
 fn load_file(cwd: &str) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {
     let dir = Path::new(cwd);
-    let path = store::discover(dir).ok_or_else(|| tool_err("no targets.yaml found"))?;
+    let path = store::discover(dir).ok_or_else(|| tool_err("no bullseye.yaml found"))?;
     let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
     Ok((path, file))
 }
@@ -104,10 +102,7 @@ fn load_or_create_file(
     }
 }
 
-/// Save the YAML. The markdown view is no longer auto-rendered on
-/// mutation (see commit 23ffbe9); callers that want a rendered view
-/// must invoke `bullseye_render` explicitly.
-fn save_and_render(path: &Path, file: &crate::schema::TargetsFile) -> Result<(), CallToolError> {
+fn save_file(path: &Path, file: &crate::schema::TargetsFile) -> Result<(), CallToolError> {
     store::save(path, file).map_err(tool_err)
 }
 
@@ -375,7 +370,7 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         }
     }
 
-    save_and_render(&path, &file)?;
+    save_file(&path, &file)?;
 
     let verb = if is_create { "Created" } else { "Updated" };
     let mut out = format!("{verb} 🎯{id}");
@@ -418,7 +413,7 @@ fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     let name = target.name.clone();
     let cost = target.cost;
 
-    save_and_render(&path, &file)?;
+    save_file(&path, &file)?;
 
     let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
     if let Some(actual) = t.actual_cost {
@@ -473,7 +468,7 @@ fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
     let result =
         ops::rework(&mut file, &t.id, &t.diagnosis).map_err(|e| tool_err(e.to_string()))?;
 
-    save_and_render(&path, &file)?;
+    save_file(&path, &file)?;
 
     let mut out = format!(
         "Rework triggered: 🎯{} → 🎯{} \"{}\"\nRetry {}",
@@ -558,7 +553,7 @@ fn handle_init(t: crate::tools::InitTool) -> ToolResult {
 
     // Refuse if a targets file already exists.
     if store::discover(dir).is_some() {
-        return err("targets.yaml already exists — use bullseye_put to add targets");
+        return err("bullseye.yaml already exists — use bullseye_put to add targets");
     }
 
     let project = t.project_name.unwrap_or_else(|| {
@@ -576,30 +571,23 @@ fn handle_init(t: crate::tools::InitTool) -> ToolResult {
     ))
 }
 
-fn handle_render(t: crate::tools::RenderTool) -> ToolResult {
-    let (path, file) = load_file(&t.cwd)?;
-    render::render_to_file(&path, &file).map_err(tool_err)?;
-    let md_path = render::markdown_path(&path);
-    text_result(format!("Rendered {}", md_path.display()))
-}
-
 fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
     let dir = Path::new(&t.cwd);
 
     // Refuse to overwrite unless force is set.
     if !t.force && store::discover(dir).is_some() {
         return err(
-            "targets.yaml already exists — use force: true to overwrite, \
+            "bullseye.yaml already exists — use force: true to overwrite, \
              or use bullseye_put to modify existing targets",
         );
     }
 
-    // Find the markdown file.
-    let md_path = if let Some(ref explicit) = t.path {
-        std::path::PathBuf::from(explicit)
-    } else {
-        discover_markdown(dir).ok_or_else(|| tool_err("no targets.md found"))?
-    };
+    // The import source must be an explicit path — no auto-discovery.
+    let md_path = t
+        .path
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| tool_err("path is required — specify the markdown file to import from"))?;
 
     let content = std::fs::read_to_string(&md_path)
         .map_err(|e| tool_err(format!("failed to read {}: {e}", md_path.display())))?;
@@ -616,11 +604,8 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
         ));
     }
 
-    // Write the YAML file.
-    let docs = dir.join("docs");
-    std::fs::create_dir_all(&docs)
-        .map_err(|e| tool_err(format!("failed to create {}: {e}", docs.display())))?;
-    let yaml_path = docs.join("targets.yaml");
+    // Write bullseye.yaml at the repo root.
+    let yaml_path = dir.join("bullseye.yaml");
     store::save(&yaml_path, &file).map_err(tool_err)?;
 
     text_result(format!(
@@ -642,9 +627,9 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
     // useful, so degrade gracefully for the three "not my problem
     // right now" cases:
     //
-    //   - no targets.yaml at all               → info message
-    //   - targets.yaml present but unreadable  → info message + detail
-    //   - targets.yaml present but won't parse → info message + detail
+    //   - no bullseye.yaml at all               → info message
+    //   - bullseye.yaml present but unreadable  → info message + detail
+    //   - bullseye.yaml present but won't parse → info message + detail
     //
     // The exception is [`store::LoadError::VersionTooNew`]: a newer
     // schema version is a correctness hazard that the user must
@@ -683,47 +668,20 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
     text_result(portfolio::format_portfolio(&scan))
 }
 
-/// Back-compute the repo root from a resolved `targets.yaml` path.
-/// Both layouts are supported:
-///
-///   <root>/docs/targets.yaml  → parent is `docs`, step up once more
-///   <root>/targets.yaml       → parent IS the repo root
-///
-/// `fallback` is used when neither parent walk is valid (pathological
-/// cases like a targets file with no parent directory). In practice
-/// `store::discover` always returns a path with a parent, so the
-/// fallback is defensive rather than load-bearing.
+/// Repo root is the parent of `bullseye.yaml`.
 pub(crate) fn repo_root_from_targets_path(path: &Path, fallback: &Path) -> std::path::PathBuf {
-    let parent = path.parent().unwrap_or(fallback);
-    if parent.file_name().is_some_and(|n| n == "docs") {
-        parent.parent().unwrap_or(fallback).to_path_buf()
-    } else {
-        parent.to_path_buf()
-    }
+    path.parent().unwrap_or(fallback).to_path_buf()
 }
 
-fn handle_convergence(t: crate::tools::ConvergenceTool) -> ToolResult {
+pub fn handle_convergence(
+    t: crate::tools::ConvergenceTool,
+) -> Result<CallToolResult, CallToolError> {
     use crate::convergence;
 
-    // Locate the targets file AND the repo root. Makefile/mkfile and
-    // .git live at the repo root; targets.yaml may live either at the
-    // repo root directly or one level down under `docs/`. Both layouts
-    // are supported by `store::discover`, so this handler must handle
-    // both shapes when back-computing the repo root from the resolved
-    // path — otherwise projects with a root-level targets.yaml
-    // accidentally report their grandparent directory as the repo root
-    // and no build file is ever found.
-    //
-    // If there's no targets file at all, fall back to a no-targets
-    // startup-context-style response — a project can't converge
-    // without targets, but the caller still deserves a useful
-    // response, not an error.
     let dir = Path::new(&t.cwd);
     let Some(path) = store::discover(dir) else {
         return text_result(graph::startup_context_no_file(&dir.display().to_string()));
     };
-    // Resolve the repo root from the targets file path. Both layouts
-    // are supported (see `repo_root_from_targets_path`).
     let repo_root = repo_root_from_targets_path(&path, dir);
 
     // Convergence handles missing-hook / parse-error / etc. internally
@@ -822,23 +780,6 @@ fn sawmill_tool_name(tool: ops::SawmillTool) -> &'static str {
     }
 }
 
-/// Discover a targets.md by walking up from start_dir.
-fn discover_markdown(start_dir: &Path) -> Option<std::path::PathBuf> {
-    let mut dir = start_dir.to_path_buf();
-    for _ in 0..64 {
-        for candidate in &["docs/targets.md", "targets.md"] {
-            let path = dir.join(candidate);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,9 +816,7 @@ targets:
 
     fn fixture() -> (tempfile::TempDir, String) {
         let tmp = tempfile::tempdir().unwrap();
-        let docs = tmp.path().join("docs");
-        std::fs::create_dir_all(&docs).unwrap();
-        std::fs::write(docs.join("targets.yaml"), FIXTURE_YAML).unwrap();
+        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE_YAML).unwrap();
         let cwd = tmp.path().to_string_lossy().to_string();
         (tmp, cwd)
     }
@@ -1002,40 +941,10 @@ targets:
     }
 
     #[test]
-    fn repo_root_from_docs_targets_yaml() {
-        // The conventional layout: <root>/docs/targets.yaml. Parent
-        // is `docs`, so the repo root is one level higher.
-        let path = Path::new("/tmp/myrepo/docs/targets.yaml");
+    fn repo_root_is_parent_of_bullseye_yaml() {
+        let path = Path::new("/tmp/myrepo/bullseye.yaml");
         let fallback = Path::new("/tmp/myrepo");
         let repo_root = repo_root_from_targets_path(path, fallback);
         assert_eq!(repo_root, Path::new("/tmp/myrepo"));
-    }
-
-    #[test]
-    fn repo_root_from_root_level_targets_yaml() {
-        // Regression for the mnemo layout: <root>/targets.yaml at the
-        // repo root, no docs/ dir. The parent IS the repo root; prior
-        // logic stepped up one level too far and landed in the
-        // grandparent directory, causing `make bullseye` detection to
-        // miss the Makefile and falsely report "hook not configured".
-        let path = Path::new("/tmp/mnemo/targets.yaml");
-        let fallback = Path::new("/tmp/mnemo");
-        let repo_root = repo_root_from_targets_path(path, fallback);
-        assert_eq!(repo_root, Path::new("/tmp/mnemo"));
-    }
-
-    #[test]
-    fn repo_root_from_nested_docs_like_dirname() {
-        // Edge case: a directory literally named `docs` that isn't
-        // the conventional layout. We still strip it — consistent
-        // with the conventional-case fix — because bullseye's
-        // contract is that `docs/targets.yaml` is the canonical
-        // docs-layout shape. Projects that want root-level targets
-        // should put the file at the root, not under a differently-
-        // named subdirectory.
-        let path = Path::new("/tmp/proj/docs/targets.yaml");
-        let fallback = Path::new("/tmp/proj");
-        let repo_root = repo_root_from_targets_path(path, fallback);
-        assert_eq!(repo_root, Path::new("/tmp/proj"));
     }
 }

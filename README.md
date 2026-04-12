@@ -4,9 +4,9 @@ An MCP server for managing **targets** — desired project states
 expressed as testable properties, with dependency tracking and
 frontier computation.
 
-Targets live in `docs/targets.yaml` (source of truth) with an
-auto-rendered `docs/targets.md` markdown view. The server discovers
-the targets file by walking up from the caller's working directory.
+Targets live in `bullseye.yaml` (source of truth). The server
+discovers the targets file by walking up from the caller's working
+directory.
 
 ## Installation
 
@@ -47,7 +47,7 @@ The server communicates over stdio using the MCP protocol.
 ## Tools
 
 Bullseye exposes 17 MCP tools. All accept a `cwd` parameter to locate
-the nearest `targets.yaml`.
+the nearest `bullseye.yaml`.
 
 | Tool | Description |
 |------|-------------|
@@ -62,15 +62,14 @@ the nearest `targets.yaml`.
 | `bullseye_validate` | Check schema conformance |
 | `bullseye_graph` | Generate Mermaid dependency graph |
 | `bullseye_import` | Import targets from markdown into YAML |
-| `bullseye_render` | Re-render docs/targets.md from YAML |
-| `bullseye_init` | Create starter targets.yaml with sample target |
+| `bullseye_init` | Create starter bullseye.yaml with sample target |
 | `bullseye_startup_context` | Session startup context (frontier, recent achievements, warnings) |
 | `bullseye_portfolio` | Cross-repo portfolio summary with frontier targets, including cross-repo edges |
 | `bullseye_summary` | Consolidated status overview: groups, frontier ordered by distance + fanout, blocked, stale |
 | `bullseye_convergence` | End-to-end convergence evaluation: runs `make bullseye` for invariants, scans git for unreleased fixes, emits summary with frontier detail inline, and computes a deterministic next-action recommendation. Single call, replaces the old multi-tool `/cv` worker. |
 
 See [agents-guide.md](docs/agents-guide.md) for detailed tool
-parameters, the targets.yaml schema, usage workflows, and a
+parameters, the bullseye.yaml schema, usage workflows, and a
 [copy-pasteable CLAUDE.md snippet](docs/agents-guide.md#agent-integration)
 for wiring Bullseye into your project's agent instructions.
 

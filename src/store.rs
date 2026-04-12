@@ -38,7 +38,7 @@ impl std::fmt::Display for LoadError {
                 path,
             } => write!(
                 f,
-                "{}: targets file declares schema_version {found}, but this \
+                "{}: bullseye.yaml declares schema_version {found}, but this \
                  bullseye binary only supports up to {supported}. \
                  Upgrade bullseye (e.g. `brew upgrade marcelocantos/tap/bullseye`) \
                  to read this file.",
@@ -57,18 +57,15 @@ impl From<LoadError> for String {
 }
 
 /// Discover the targets file by walking up from `start_dir`.
-/// Checks `docs/targets.yaml`, then `targets.yaml` at each level.
-/// Maximum directory levels to traverse upward when searching for targets.yaml.
+/// Looks for `bullseye.yaml` at each level.
 const MAX_DISCOVER_DEPTH: usize = 64;
 
 pub fn discover(start_dir: &Path) -> Option<PathBuf> {
     let mut dir = start_dir.to_path_buf();
     for _ in 0..MAX_DISCOVER_DEPTH {
-        for candidate in &["docs/targets.yaml", "targets.yaml"] {
-            let path = dir.join(candidate);
-            if path.is_file() {
-                return Some(path);
-            }
+        let path = dir.join("bullseye.yaml");
+        if path.is_file() {
+            return Some(path);
         }
         if !dir.pop() {
             return None;
@@ -77,13 +74,9 @@ pub fn discover(start_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Create an empty targets file at `start_dir/docs/targets.yaml`.
-/// Creates the `docs/` directory if it doesn't exist.
+/// Create an empty targets file at `start_dir/bullseye.yaml`.
 pub fn create_default(start_dir: &Path) -> Result<PathBuf, String> {
-    let docs = start_dir.join("docs");
-    std::fs::create_dir_all(&docs)
-        .map_err(|e| format!("failed to create {}: {e}", docs.display()))?;
-    let path = docs.join("targets.yaml");
+    let path = start_dir.join("bullseye.yaml");
     let file = TargetsFile {
         schema_version: Some(CURRENT_SCHEMA_VERSION),
         last_evaluated: None,
@@ -93,13 +86,9 @@ pub fn create_default(start_dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Create a starter targets file with a sample target at `start_dir/docs/targets.yaml`.
-/// Creates the `docs/` directory if it doesn't exist.
+/// Create a starter targets file at `start_dir/bullseye.yaml`.
 pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, String> {
-    let docs = start_dir.join("docs");
-    std::fs::create_dir_all(&docs)
-        .map_err(|e| format!("failed to create {}: {e}", docs.display()))?;
-    let path = docs.join("targets.yaml");
+    let path = start_dir.join("bullseye.yaml");
 
     let today = chrono::Local::now().date_naive();
     let mut targets = std::collections::BTreeMap::new();
