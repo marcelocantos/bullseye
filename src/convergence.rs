@@ -202,20 +202,22 @@ pub fn detect_invariants_command(repo_root: &Path) -> Result<Vec<String>, SetupR
 /// `bullseye` rule ran and actual invariants failed" (blocking).
 ///
 /// The signatures checked cover the three build tools bullseye
-/// supports: GNU make, BSD make, and plan9 mk. All three emit English
-/// error messages; we match a few stable substrings rather than exact
-/// strings so translations or minor phrasing drift don't break the
-/// cascade. A false positive here (classifying an actual build failure
-/// as "hook missing") is theoretically possible but unlikely — the
-/// phrases we match don't appear in normal rule output.
+/// supports: GNU make, BSD make, and marcelocantos/mk. All three emit
+/// English error messages; we match a few stable substrings rather
+/// than exact strings so translations or minor phrasing drift don't
+/// break the cascade. A false positive here (classifying an actual
+/// build failure as "hook missing") is theoretically possible but
+/// unlikely — the phrases we match don't appear in normal rule output.
 fn stderr_indicates_missing_rule(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
     // GNU make: "make: *** No rule to make target 'bullseye'.  Stop."
     lower.contains("no rule to make target")
         // BSD make: "make: don't know how to make bullseye. Stop"
         || lower.contains("don't know how to make")
-        // plan9 mk: "mk: don't know how to make 'bullseye'"
-        || lower.contains("no recipe to make")
+        // marcelocantos/mk: `mk: no rule to build "bullseye"`
+        // (verified against mk 2026-04-12 at
+        // github.com/marcelocantos/mk, graph.go:566).
+        || lower.contains("no rule to build")
 }
 
 /// Outcome of running the `make bullseye` / `mk bullseye` hook.
@@ -643,6 +645,15 @@ mod tests {
     #[test]
     fn stderr_missing_rule_matches_bsd_make_output() {
         let stderr = "make: don't know how to make bullseye. Stop\n";
+        assert!(stderr_indicates_missing_rule(stderr));
+    }
+
+    #[test]
+    fn stderr_missing_rule_matches_mk_output() {
+        // marcelocantos/mk emits this phrasing from graph.go:566 when
+        // asked to build an unknown target. Verified against a live
+        // `mk bullseye` run on an mkfile with no `bullseye` rule.
+        let stderr = "mk: no rule to build \"bullseye\"\n";
         assert!(stderr_indicates_missing_rule(stderr));
     }
 
