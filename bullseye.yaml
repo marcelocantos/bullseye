@@ -196,7 +196,7 @@ targets:
     achieved: 2026-04-11
   T2.3:
     name: Portfolio-level WSJF ranking
-    status: identified
+    status: achieved
     value: 8.0
     cost: 5.0
     observable: true
@@ -217,6 +217,7 @@ targets:
     - mnemo
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-12
   T2.4:
     name: /cv global mode
     status: identified
