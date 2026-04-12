@@ -81,5 +81,5 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 ## 2026-04-12 -- /release v0.14.0
 
-- **Commit**: pending
+- **Commit**: `184eda7`
 - **Outcome**: Released v0.14.0 (darwin-arm64, linux-amd64, linux-arm64). 🎯T10: renamed `targets.yaml` → `bullseye.yaml`, moved from `docs/` to repo root, deleted markdown rendering entirely (`render.rs`, `bullseye_render` tool, `discover_markdown`, auto-render-on-save). Net -618 lines. Fixed mk stderr pattern — was matching "no recipe to make" (plan9 guess); actual marcelocantos/mk phrasing is "no rule to build". Added handler-level regression test for root-level convergence. 85 tests (35 unit + 50 integration). Settling clock restarts — tool surface break (`bullseye_render` removed) and file format break (`targets.yaml` → `bullseye.yaml`). Homebrew formula updated.
