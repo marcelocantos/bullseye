@@ -689,13 +689,39 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
     text_result(portfolio::format_portfolio(&scan))
 }
 
+/// Back-compute the repo root from a resolved `targets.yaml` path.
+/// Both layouts are supported:
+///
+///   <root>/docs/targets.yaml  → parent is `docs`, step up once more
+///   <root>/targets.yaml       → parent IS the repo root
+///
+/// `fallback` is used when neither parent walk is valid (pathological
+/// cases like a targets file with no parent directory). In practice
+/// `store::discover` always returns a path with a parent, so the
+/// fallback is defensive rather than load-bearing.
+pub(crate) fn repo_root_from_targets_path(
+    path: &Path,
+    fallback: &Path,
+) -> std::path::PathBuf {
+    let parent = path.parent().unwrap_or(fallback);
+    if parent.file_name().is_some_and(|n| n == "docs") {
+        parent.parent().unwrap_or(fallback).to_path_buf()
+    } else {
+        parent.to_path_buf()
+    }
+}
+
 fn handle_convergence(t: crate::tools::ConvergenceTool) -> ToolResult {
     use crate::convergence;
 
-    // Locate the targets file AND the repo root. The repo root is the
-    // directory containing targets.yaml's parent (i.e. where docs/
-    // lives), not the targets.yaml directory itself — Makefile/mkfile
-    // and .git all live at the repo root, one level above docs/.
+    // Locate the targets file AND the repo root. Makefile/mkfile and
+    // .git live at the repo root; targets.yaml may live either at the
+    // repo root directly or one level down under `docs/`. Both layouts
+    // are supported by `store::discover`, so this handler must handle
+    // both shapes when back-computing the repo root from the resolved
+    // path — otherwise projects with a root-level targets.yaml
+    // accidentally report their grandparent directory as the repo root
+    // and no build file is ever found.
     //
     // If there's no targets file at all, fall back to a no-targets
     // startup-context-style response — a project can't converge
@@ -705,12 +731,9 @@ fn handle_convergence(t: crate::tools::ConvergenceTool) -> ToolResult {
     let Some(path) = store::discover(dir) else {
         return text_result(graph::startup_context_no_file(&dir.display().to_string()));
     };
-    // path is `<repo_root>/docs/targets.yaml`; step up twice.
-    let repo_root = path
-        .parent()
-        .and_then(|p| p.parent())
-        .unwrap_or(dir)
-        .to_path_buf();
+    // Resolve the repo root from the targets file path. Both layouts
+    // are supported (see `repo_root_from_targets_path`).
+    let repo_root = repo_root_from_targets_path(&path, dir);
 
     // Convergence handles missing-hook / parse-error / etc. internally
     // — no short-circuits here. The only hard-error path is the schema
@@ -985,5 +1008,43 @@ targets:
         let err = result.expect_err("kind patch must be rejected");
         let msg = format!("{err:?}");
         assert!(msg.contains("kind"), "error should mention kind: {msg}");
+    }
+
+    #[test]
+    fn repo_root_from_docs_targets_yaml() {
+        // The conventional layout: <root>/docs/targets.yaml. Parent
+        // is `docs`, so the repo root is one level higher.
+        let path = Path::new("/tmp/myrepo/docs/targets.yaml");
+        let fallback = Path::new("/tmp/myrepo");
+        let repo_root = repo_root_from_targets_path(path, fallback);
+        assert_eq!(repo_root, Path::new("/tmp/myrepo"));
+    }
+
+    #[test]
+    fn repo_root_from_root_level_targets_yaml() {
+        // Regression for the mnemo layout: <root>/targets.yaml at the
+        // repo root, no docs/ dir. The parent IS the repo root; prior
+        // logic stepped up one level too far and landed in the
+        // grandparent directory, causing `make bullseye` detection to
+        // miss the Makefile and falsely report "hook not configured".
+        let path = Path::new("/tmp/mnemo/targets.yaml");
+        let fallback = Path::new("/tmp/mnemo");
+        let repo_root = repo_root_from_targets_path(path, fallback);
+        assert_eq!(repo_root, Path::new("/tmp/mnemo"));
+    }
+
+    #[test]
+    fn repo_root_from_nested_docs_like_dirname() {
+        // Edge case: a directory literally named `docs` that isn't
+        // the conventional layout. We still strip it — consistent
+        // with the conventional-case fix — because bullseye's
+        // contract is that `docs/targets.yaml` is the canonical
+        // docs-layout shape. Projects that want root-level targets
+        // should put the file at the root, not under a differently-
+        // named subdirectory.
+        let path = Path::new("/tmp/proj/docs/targets.yaml");
+        let fallback = Path::new("/tmp/proj");
+        let repo_root = repo_root_from_targets_path(path, fallback);
+        assert_eq!(repo_root, Path::new("/tmp/proj"));
     }
 }

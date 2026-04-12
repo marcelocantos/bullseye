@@ -168,51 +168,54 @@ pub enum SetupReason {
     MissingRule { build_file: String },
 }
 
-/// Check whether the project has a usable `bullseye` rule and, if so,
-/// return the command to invoke it. Returns `Err(SetupReason)` if the
-/// build file is missing or the rule isn't defined — the caller uses
-/// [`setup_instructions`] to render the response.
+/// Return the command to invoke the project's standing-invariants
+/// hook, based purely on which build file is present. Does NOT parse
+/// the build file to pre-verify that a `bullseye` rule exists — that
+/// check happens downstream, by observing the build tool's own output
+/// when the command actually runs. Trying to second-guess Make's rule
+/// table by hand is brittle (`.PHONY: bullseye` is not a rule, tab vs
+/// space matters, `include` directives are ignored, etc.). The build
+/// tool is the authority on what rules it has; we just run it and
+/// cascade from the result.
+///
+/// Returns `Err(SetupReason::NoBuildFile)` only when neither a
+/// `Makefile` nor an `mkfile` exists at the repo root. A build file
+/// that lacks a `bullseye` rule still gets `Ok(argv)` — the
+/// "no such rule" case is detected in [`run_invariants_command`] by
+/// pattern-matching the build tool's stderr.
 pub fn detect_invariants_command(repo_root: &Path) -> Result<Vec<String>, SetupReason> {
     // Prefer mkfile when both are present: if the project went to the
     // trouble of using mk, that's the canonical build tool for it.
-    let mkfile = repo_root.join("mkfile");
-    if mkfile.is_file() {
-        return if has_bullseye_rule(&mkfile) {
-            Ok(vec!["mk".to_string(), "bullseye".to_string()])
-        } else {
-            Err(SetupReason::MissingRule {
-                build_file: "mkfile".to_string(),
-            })
-        };
+    if repo_root.join("mkfile").is_file() {
+        return Ok(vec!["mk".to_string(), "bullseye".to_string()]);
     }
-    let makefile = repo_root.join("Makefile");
-    if makefile.is_file() {
-        return if has_bullseye_rule(&makefile) {
-            Ok(vec!["make".to_string(), "bullseye".to_string()])
-        } else {
-            Err(SetupReason::MissingRule {
-                build_file: "Makefile".to_string(),
-            })
-        };
+    if repo_root.join("Makefile").is_file() {
+        return Ok(vec!["make".to_string(), "bullseye".to_string()]);
     }
     Err(SetupReason::NoBuildFile)
 }
 
-fn has_bullseye_rule(build_file: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(build_file) else {
-        return false;
-    };
-    // A rule line looks like `bullseye:` or `bullseye :` at column 0,
-    // optionally followed by dependencies. This is a loose check that
-    // accepts any rule name starting with `bullseye` followed by `:`.
-    content.lines().any(|line| {
-        let trimmed = line.trim_end();
-        (trimmed == "bullseye:"
-            || trimmed.starts_with("bullseye:")
-            || trimmed.starts_with("bullseye :"))
-            && !line.starts_with(' ')
-            && !line.starts_with('\t')
-    })
+/// Detect the "rule not found" signature in a build tool's stderr.
+/// Used as a fallback classification inside [`run_invariants_command`]
+/// when the hook exits non-zero — we need to distinguish "project has
+/// no `bullseye` rule" (hook not configured; non-blocking) from "the
+/// `bullseye` rule ran and actual invariants failed" (blocking).
+///
+/// The signatures checked cover the three build tools bullseye
+/// supports: GNU make, BSD make, and plan9 mk. All three emit English
+/// error messages; we match a few stable substrings rather than exact
+/// strings so translations or minor phrasing drift don't break the
+/// cascade. A false positive here (classifying an actual build failure
+/// as "hook missing") is theoretically possible but unlikely — the
+/// phrases we match don't appear in normal rule output.
+fn stderr_indicates_missing_rule(stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    // GNU make: "make: *** No rule to make target 'bullseye'.  Stop."
+    lower.contains("no rule to make target")
+        // BSD make: "make: don't know how to make bullseye. Stop"
+        || lower.contains("don't know how to make")
+        // plan9 mk: "mk: don't know how to make 'bullseye'"
+        || lower.contains("no recipe to make")
 }
 
 /// Outcome of running the `make bullseye` / `mk bullseye` hook.
@@ -252,6 +255,22 @@ fn run_invariants_command(argv: &[String], repo_root: &Path, out: &mut String) -
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Cascade: if the build tool reported "no such rule", classify as
+    // HookMissing and render the setup warning instead of the normal
+    // invariants block. This is the authoritative check — the build
+    // tool knows its own rule table, and we trust its output rather
+    // than pre-parsing the Makefile ourselves.
+    if exit_code != 0 && stderr_indicates_missing_rule(&stderr) {
+        let build_file = if argv[0] == "mk" { "mkfile" } else { "Makefile" };
+        render_setup_warning(
+            out,
+            &SetupReason::MissingRule {
+                build_file: build_file.to_string(),
+            },
+        );
+        return InvariantsResult::HookMissing;
+    }
 
     out.push_str("## Invariants\n\n");
     out.push_str(&format!("```\n$ {}\n", argv.join(" ")));
@@ -575,14 +594,16 @@ mod tests {
     }
 
     #[test]
-    fn detect_invariants_errors_on_makefile_without_rule() {
+    fn detect_invariants_returns_ok_for_any_makefile() {
+        // New design: detect_invariants_command does NOT pre-parse the
+        // Makefile to verify a `bullseye` rule exists. The rule check
+        // happens downstream, by observing the build tool's own output
+        // (see stderr_indicates_missing_rule). Here, as long as a
+        // Makefile exists, we return the argv to run it.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Makefile"), "all:\n\t@echo hello\n").unwrap();
-        let result = detect_invariants_command(tmp.path());
-        match result {
-            Err(SetupReason::MissingRule { build_file }) => assert_eq!(build_file, "Makefile"),
-            other => panic!("expected MissingRule, got {other:?}"),
-        }
+        let cmd = detect_invariants_command(tmp.path()).unwrap();
+        assert_eq!(cmd, vec!["make".to_string(), "bullseye".to_string()]);
     }
 
     #[test]
@@ -604,6 +625,32 @@ mod tests {
         .unwrap();
         let cmd = detect_invariants_command(tmp.path()).unwrap();
         assert_eq!(cmd, vec!["make".to_string(), "bullseye".to_string()]);
+    }
+
+    #[test]
+    fn stderr_missing_rule_matches_gnu_make_output() {
+        // GNU make emits this phrasing; the cascade detection must
+        // match it so run_invariants_command can classify the failure
+        // as HookMissing rather than Violated.
+        let stderr = "make: *** No rule to make target `bullseye'.  Stop.\n";
+        assert!(stderr_indicates_missing_rule(stderr));
+    }
+
+    #[test]
+    fn stderr_missing_rule_matches_bsd_make_output() {
+        let stderr = "make: don't know how to make bullseye. Stop\n";
+        assert!(stderr_indicates_missing_rule(stderr));
+    }
+
+    #[test]
+    fn stderr_missing_rule_ignores_real_failures() {
+        // An ordinary compile failure or test failure must NOT be
+        // mistaken for a missing rule — that would mask genuine
+        // invariant violations as "hook not configured".
+        let stderr = "error: cannot find module\nbuild failed with exit code 1\n";
+        assert!(!stderr_indicates_missing_rule(stderr));
+        let stderr = "test result: FAILED. 3 passed; 2 failed\n";
+        assert!(!stderr_indicates_missing_rule(stderr));
     }
 
     #[test]
