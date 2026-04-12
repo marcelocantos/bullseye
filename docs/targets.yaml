@@ -502,3 +502,20 @@ targets:
     origin: manual
     discovered: 2026-04-12
     achieved: 2026-04-12
+  T9:
+    name: agents-guide documents parallelised bullseye Makefile convention
+    status: identified
+    value: 3.0
+    cost: 1.0
+    observable: true
+    acceptance:
+    - '`docs/agents-guide.md` §`bullseye_convergence` hook documents the decomposed Makefile form — `bullseye:` as an aggregator phony target depending on independent `check-fmt`, `check-clippy`, `check-tests`, `check-clean` sub-rules (or equivalent per-tool split)'
+    - Preamble shows `NPROC := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)` followed by `MAKEFLAGS += -j$(NPROC)` with portable fallback chain
+    - 'Documents the caveat: parallelism only meaningfully helps projects with *mixed toolchains* (e.g. Go + Python + shellcheck + docs) because single-ecosystem builds (cargo, go test) already parallelise internally and contend on the workspace lock when run concurrently'
+    - Existing bullseye repo Makefile example retained for simplicity — decomposed form is offered as the alternative for projects that benefit
+    context: 'Discovered during the v0.13.0 release session when the user asked whether bullseye_convergence itself could be parallelised. Convergence-layer parallelism saves ~150ms at most (three branches — load+compute, make bullseye, git fix scan — can overlap but invariants dominates). Parallelising `make bullseye` via `-jN` is a separate lever: useful for projects with heterogeneous toolchains, near-useless for single-ecosystem cargo/go projects where internal build parallelism already saturates cores and clippy+test contend on target/. The convention should be documented in the agents-guide so new projects adopting bullseye know the option exists, along with when it''s worth the restructure. Also flags `~/.claude/CLAUDE.md` global directive "Never pass -j to make; projects that need parallel builds set MAKEFLAGS in their Makefiles" as the precedent being followed.'
+    tags:
+    - docs
+    - conventions
+    origin: Discovered during v0.13.0 release session
+    discovered: 2026-04-12
