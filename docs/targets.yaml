@@ -44,6 +44,7 @@ targets:
     status: converging
     value: 5.0
     cost: 3.0
+    observable: true
     acceptance:
     - bullseye_summary accepts an optional momentum parameter (map of target ID to multiplier)
     - When momentum is present, each target's WSJF score is multiplied by its value before ranking; targets missing from the map default to 1.0 (no-op)
@@ -60,6 +61,7 @@ targets:
     status: identified
     value: 8.0
     cost: 3.0
+    observable: true
     acceptance:
     - /cv calls targets_frontier + targets_rank (no markdown parsing)
     - /cv optionally calls mnemo_recent_activity for momentum
@@ -79,6 +81,7 @@ targets:
     status: identified
     value: 5.0
     cost: 3.0
+    observable: true
     acceptance:
     - mnemo summarizer calls targets_list to anchor compaction output
     - Compaction includes targets_active, targets_progressed, targets_next fields
@@ -94,6 +97,7 @@ targets:
     status: identified
     value: 5.0
     cost: 5.0
+    observable: true
     acceptance:
     - Verify target failure includes sawmill structural failure report
     - Rework diagnosis includes mnemo prior-attempt history
@@ -170,6 +174,7 @@ targets:
     status: identified
     value: 8.0
     cost: 5.0
+    observable: true
     acceptance:
     - '`bullseye_portfolio` returns repos ranked by an aggregate WSJF score combining per-target `value`/`cost`, caller-supplied momentum, and cross-repo enabler propagation'
     - 'Per-repo formula committed: `sum(value_i / cost_i × momentum_i × enabler_boost_i) / frontier_size_i`. The `frontier_size_i` divisor encodes the bias that parallelisable repos need less per-unit human attention'
@@ -192,6 +197,7 @@ targets:
     status: identified
     value: 5.0
     cost: 3.0
+    observable: true
     acceptance:
     - '"/cv global" runs portfolio-level evaluation'
     - Presents top 1-3 repos with reasoning
@@ -249,6 +255,7 @@ targets:
     status: identified
     value: 5.0
     cost: 3.0
+    observable: true
     acceptance:
     - Focus section renders above daily checklist
     - Shows top frontier targets with repo, weight, and name
@@ -495,3 +502,20 @@ targets:
     origin: manual
     discovered: 2026-04-12
     achieved: 2026-04-12
+  T9:
+    name: agents-guide documents parallelised bullseye Makefile convention
+    status: identified
+    value: 3.0
+    cost: 1.0
+    observable: true
+    acceptance:
+    - '`docs/agents-guide.md` §`bullseye_convergence` hook documents the decomposed Makefile form — `bullseye:` as an aggregator phony target depending on independent `check-fmt`, `check-clippy`, `check-tests`, `check-clean` sub-rules (or equivalent per-tool split)'
+    - Preamble shows `NPROC := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)` followed by `MAKEFLAGS += -j$(NPROC)` with portable fallback chain
+    - 'Documents the caveat: parallelism only meaningfully helps projects with *mixed toolchains* (e.g. Go + Python + shellcheck + docs) because single-ecosystem builds (cargo, go test) already parallelise internally and contend on the workspace lock when run concurrently'
+    - Existing bullseye repo Makefile example retained for simplicity — decomposed form is offered as the alternative for projects that benefit
+    context: 'Discovered during the v0.13.0 release session when the user asked whether bullseye_convergence itself could be parallelised. Convergence-layer parallelism saves ~150ms at most (three branches — load+compute, make bullseye, git fix scan — can overlap but invariants dominates). Parallelising `make bullseye` via `-jN` is a separate lever: useful for projects with heterogeneous toolchains, near-useless for single-ecosystem cargo/go projects where internal build parallelism already saturates cores and clippy+test contend on target/. The convention should be documented in the agents-guide so new projects adopting bullseye know the option exists, along with when it''s worth the restructure. Also flags `~/.claude/CLAUDE.md` global directive "Never pass -j to make; projects that need parallel builds set MAKEFLAGS in their Makefiles" as the precedent being followed.'
+    tags:
+    - docs
+    - conventions
+    origin: Discovered during v0.13.0 release session
+    discovered: 2026-04-12
