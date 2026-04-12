@@ -664,7 +664,16 @@ fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
     }
 
     let max_depth = t.max_depth.unwrap_or(5) as usize;
-    let scan = portfolio::discover_repos(root, max_depth);
+    let momentum: Vec<portfolio::Momentum> = t
+        .momentum
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| portfolio::Momentum {
+            id: m.id,
+            multiplier: m.multiplier,
+        })
+        .collect();
+    let scan = portfolio::discover_repos(root, max_depth, &momentum);
     text_result(portfolio::format_portfolio(&scan))
 }
 

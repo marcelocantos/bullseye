@@ -18,9 +18,17 @@ pub struct CrossRepoEdgeRef {
     pub edge: CrossEdge,
 }
 
+/// Fraction of downstream target value that propagates back through
+/// a `cross_enables` edge. Chosen so a single enabler edge to a
+/// high-value (v=13) downstream target roughly doubles the WSJF
+/// contribution: `1.0 + 0.25 * 13 = 4.25`. Low enough to avoid
+/// overwhelming local value; high enough to noticeably promote
+/// cross-repo enablers above equally-valued local-only targets.
+const ENABLER_FRACTION: f64 = 0.25;
+
 /// A frontier target within a portfolio summary. Carries the bits
-/// `format_portfolio` needs to render with priority boosts: value,
-/// cross-enables count, and the target name.
+/// `format_portfolio` needs to render with priority boosts and WSJF
+/// reasoning.
 #[derive(Debug, Clone)]
 pub struct PortfolioFrontierTarget {
     /// Target ID (e.g. `"T1"`, `"T1.2"`).
@@ -29,14 +37,24 @@ pub struct PortfolioFrontierTarget {
     pub name: String,
     /// Target value (for ordering).
     pub value: f64,
+    /// Target cost (for WSJF computation).
+    pub cost: f64,
     /// Number of cross-repo enablers attached to the target. A
     /// non-zero count boosts the target's rank in the portfolio view:
     /// finishing it unblocks work in other repos, so it deserves
     /// visibility ahead of targets that only pay out locally.
     pub cross_enables_count: usize,
+    /// Momentum multiplier applied to this target's WSJF contribution.
+    /// Defaults to 1.0 when no momentum is supplied.
+    pub momentum: f64,
+    /// Computed enabler boost: `1.0 + ENABLER_FRACTION * sum(downstream_values)`.
+    /// For targets without `cross_enables`, this is 1.0.
+    pub enabler_boost: f64,
+    /// Per-target WSJF contribution: `(value / cost) * momentum * enabler_boost`.
+    pub wsjf: f64,
 }
 
-/// A discovered repo with its targets summary.
+/// A discovered repo with its targets summary and aggregate WSJF score.
 #[derive(Debug, Clone)]
 pub struct RepoSummary {
     /// Repo identifier derived from the path (e.g., "marcelocantos/bullseye").
@@ -49,9 +67,13 @@ pub struct RepoSummary {
     pub frontier: usize,
     /// Number of achieved targets.
     pub achieved: usize,
-    /// Frontier targets, ordered by portfolio priority: targets with
-    /// `cross_enables` first (value propagates across repos), then by
-    /// plain value desc, then by ID for stable tiebreaks.
+    /// Aggregate WSJF score: `sum(wsjf_i) / frontier_size`.
+    /// The divisor encodes the bias that repos with many parallelisable
+    /// frontier targets need less per-unit human attention. Zero when
+    /// the frontier is empty.
+    pub wsjf_score: f64,
+    /// Frontier targets, ordered by per-target WSJF desc, then by ID
+    /// for stable tiebreaks.
     pub frontier_targets: Vec<PortfolioFrontierTarget>,
     /// All `cross_depends` edges from any active target in this repo.
     pub cross_depends: Vec<CrossRepoEdgeRef>,
@@ -102,39 +124,63 @@ pub struct PortfolioScan {
     pub warnings: Vec<RepoWarning>,
 }
 
-/// Scan a workspace root for repos containing `bullseye.yaml`.
+/// Per-target momentum multiplier entry. Mirrors the shape from
+/// `tools::MomentumEntry` but decoupled so portfolio doesn't depend
+/// on the MCP tool layer.
+#[derive(Debug, Clone)]
+pub struct Momentum {
+    pub id: String,
+    pub multiplier: f64,
+}
+
+/// Scan a workspace root for repos containing `bullseye.yaml` and
+/// compute WSJF-ranked portfolio output.
 ///
-/// Walks up to `max_depth` levels deep under `root`, looking for
-/// `bullseye.yaml` files. For each found, attempts to load and
-/// summarize. Failures become [`RepoWarning`] entries on the returned
-/// [`PortfolioScan`] — critically, this means a repo whose targets
-/// file declares a newer `schema_version` than this bullseye supports
-/// is visible in the scan output (flagged for upgrade) rather than
-/// silently disappearing.
-pub fn discover_repos(root: &Path, max_depth: usize) -> PortfolioScan {
+/// Two-pass architecture:
+/// 1. **Discover** — walk the tree, load each repo's targets, collect
+///    raw frontier data and cross-repo edges.
+/// 2. **Score** — resolve `cross_enables` edges against the scanned
+///    portfolio to compute weighted enabler boosts, apply momentum,
+///    compute per-target and per-repo WSJF.
+///
+/// The two passes are necessary because enabler boost computation
+/// requires the *downstream* target's value, which lives in a
+/// different repo that may not have been scanned yet during pass 1.
+pub fn discover_repos(root: &Path, max_depth: usize, momentum: &[Momentum]) -> PortfolioScan {
     let mut scan = PortfolioScan::default();
     let mut dirs = vec![(root.to_path_buf(), 0usize)];
 
+    // Build momentum lookup: target_id → multiplier. Last entry wins
+    // for duplicates, matching bullseye_summary behaviour.
+    let momentum_map: std::collections::HashMap<&str, f64> = momentum
+        .iter()
+        .map(|m| (m.id.as_str(), m.multiplier))
+        .collect();
+
+    // Pass 1: discover and load repos.
+    // We collect raw repo data alongside the loaded TargetsFile so
+    // pass 2 can resolve cross-repo enabler values.
+    struct RawRepo {
+        summary: RepoSummary,
+    }
+    let mut raw_repos: Vec<RawRepo> = Vec::new();
+
     while let Some((dir, depth)) = dirs.pop() {
-        // Check for bullseye.yaml at this level.
         let targets_path = dir.join("bullseye.yaml");
         if targets_path.is_file() {
-            match summarize_repo(&dir, &targets_path) {
-                Ok(summary) => scan.repos.push(summary),
+            match summarize_repo_raw(&dir, &targets_path, &momentum_map) {
+                Ok(summary) => raw_repos.push(RawRepo { summary }),
                 Err(warning) => scan.warnings.push(warning),
             }
-            // Don't recurse into repos that have targets — they're leaf repos.
             continue;
         }
 
-        // Recurse if within depth limit.
         if depth < max_depth
             && let Ok(entries) = std::fs::read_dir(&dir)
         {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    // Skip hidden directories and common non-repo dirs.
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
                     if !name_str.starts_with('.')
@@ -149,8 +195,91 @@ pub fn discover_repos(root: &Path, max_depth: usize) -> PortfolioScan {
         }
     }
 
-    // Sort both lists by repo name for stable output.
-    scan.repos.sort_by(|a, b| a.repo.cmp(&b.repo));
+    // Pass 2: resolve enabler boosts and compute final WSJF scores.
+    //
+    // Build an owned lookup: (repo_name, target_id) → value, so we
+    // can resolve cross_enables edges to downstream target values.
+    // Owned keys avoid borrow-checker conflicts with the mutable
+    // pass below.
+    let target_value_lookup: std::collections::HashMap<(String, String), f64> = raw_repos
+        .iter()
+        .flat_map(|r| {
+            r.summary
+                .frontier_targets
+                .iter()
+                .map(move |ft| ((r.summary.repo.clone(), ft.id.clone()), ft.value))
+        })
+        .collect();
+
+    for raw in &mut raw_repos {
+        // Build a map from source_target → list of cross_enables edges
+        // so we can efficiently look up edges per frontier target.
+        let mut enables_map: std::collections::HashMap<&str, Vec<&CrossRepoEdgeRef>> =
+            std::collections::HashMap::new();
+        for edge_ref in &raw.summary.cross_enables {
+            enables_map
+                .entry(edge_ref.source_target.as_str())
+                .or_default()
+                .push(edge_ref);
+        }
+
+        for ft in &mut raw.summary.frontier_targets {
+            let mut downstream_value_sum = 0.0f64;
+            if let Some(edges) = enables_map.get(ft.id.as_str()) {
+                for edge_ref in edges {
+                    // Try to resolve the downstream target's value from
+                    // the portfolio scan. If the edge references a
+                    // specific target, look it up. Otherwise (capability
+                    // reference or unresolvable), use a default boost
+                    // equivalent to enabling a value-5 target.
+                    let resolved_value = edge_ref
+                        .edge
+                        .target
+                        .as_ref()
+                        .and_then(|tid| {
+                            let key = (edge_ref.edge.repo.clone(), tid.clone());
+                            target_value_lookup.get(&key).copied()
+                        })
+                        .unwrap_or(5.0);
+                    downstream_value_sum += resolved_value;
+                }
+            }
+
+            ft.enabler_boost = 1.0 + ENABLER_FRACTION * downstream_value_sum;
+            ft.wsjf = if ft.cost > 0.0 {
+                (ft.value / ft.cost) * ft.momentum * ft.enabler_boost
+            } else {
+                // cost=0 shouldn't happen (Fibonacci scale starts at 1),
+                // but avoid division by zero.
+                0.0
+            };
+        }
+
+        // Re-sort frontier targets by WSJF desc, then ID for stability.
+        raw.summary.frontier_targets.sort_by(|a, b| {
+            b.wsjf
+                .partial_cmp(&a.wsjf)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        // Compute aggregate repo WSJF score.
+        let frontier_size = raw.summary.frontier_targets.len();
+        if frontier_size > 0 {
+            let wsjf_sum: f64 = raw.summary.frontier_targets.iter().map(|ft| ft.wsjf).sum();
+            raw.summary.wsjf_score = wsjf_sum / frontier_size as f64;
+        }
+    }
+
+    scan.repos = raw_repos.into_iter().map(|r| r.summary).collect();
+
+    // Sort repos by WSJF score desc (primary), then by name for stability.
+    scan.repos.sort_by(|a, b| {
+        b.wsjf_score
+            .partial_cmp(&a.wsjf_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.repo.cmp(&b.repo))
+    });
     scan.warnings.sort_by(|a, b| a.repo.cmp(&b.repo));
     scan
 }
@@ -189,7 +318,15 @@ pub fn repo_name_from_path(path: &Path) -> String {
     }
 }
 
-fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, RepoWarning> {
+/// First-pass repo summarization: loads targets, collects frontier and
+/// cross-repo edges, applies momentum, but leaves `enabler_boost` and
+/// `wsjf` at defaults (1.0 and 0.0). Pass 2 in `discover_repos`
+/// resolves these once the full portfolio is available.
+fn summarize_repo_raw(
+    repo_root: &Path,
+    targets_path: &Path,
+    momentum_map: &std::collections::HashMap<&str, f64>,
+) -> Result<RepoSummary, RepoWarning> {
     let file: TargetsFile = match store::load(targets_path) {
         Ok(f) => f,
         Err(store::LoadError::VersionTooNew {
@@ -218,9 +355,6 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
     let active_count = active.len();
     let achieved_count = file.achieved().len();
 
-    // Collect cross-repo edges across every active target so the
-    // portfolio view can surface them. Inactive (achieved) targets
-    // are skipped — their cross-refs no longer represent live work.
     let mut cross_depends: Vec<CrossRepoEdgeRef> = Vec::new();
     let mut cross_enables: Vec<CrossRepoEdgeRef> = Vec::new();
     for (id, t) in &active {
@@ -238,7 +372,6 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
         }
     }
 
-    // Only compute frontier if validation passes.
     let errors = graph::validate(&file);
     let frontier_targets = if errors.is_empty() {
         graph::frontier(&file)
@@ -246,41 +379,29 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
         Vec::new()
     };
 
-    // Turn frontier entries into PortfolioFrontierTarget and order
-    // them: targets with `cross_enables` first (their value
-    // propagates across repos and so gets priority in the portfolio
-    // view), then by target value desc, then by ID for stability.
-    let mut frontier_named: Vec<PortfolioFrontierTarget> = frontier_targets
+    // Build frontier entries with momentum applied but enabler_boost
+    // and wsjf deferred to pass 2.
+    let frontier_named: Vec<PortfolioFrontierTarget> = frontier_targets
         .iter()
         .map(|ft| {
-            let (value, cross_enables_count) = file
+            let (value, cost, cross_enables_count) = file
                 .targets
                 .get(&ft.id)
-                .map(|t| (t.value, t.cross_enables.len()))
-                .unwrap_or((0.0, 0));
+                .map(|t| (t.value, t.cost, t.cross_enables.len()))
+                .unwrap_or((0.0, 1.0, 0));
+            let mom = momentum_map.get(ft.id.as_str()).copied().unwrap_or(1.0);
             PortfolioFrontierTarget {
                 id: ft.id.clone(),
                 name: ft.name.clone(),
                 value,
+                cost,
                 cross_enables_count,
+                momentum: mom,
+                enabler_boost: 1.0, // pass 2
+                wsjf: 0.0,          // pass 2
             }
         })
         .collect();
-    frontier_named.sort_by(|a, b| {
-        let a_has = a.cross_enables_count > 0;
-        let b_has = b.cross_enables_count > 0;
-        // Cross-enablers first.
-        b_has
-            .cmp(&a_has)
-            // Then higher value first.
-            .then_with(|| {
-                b.value
-                    .partial_cmp(&a.value)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            // Stable tiebreak on ID.
-            .then_with(|| a.id.cmp(&b.id))
-    });
 
     Ok(RepoSummary {
         repo: repo_name_from_path(repo_root),
@@ -288,6 +409,7 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
         active: active_count,
         frontier: frontier_named.len(),
         achieved: achieved_count,
+        wsjf_score: 0.0, // pass 2
         frontier_targets: frontier_named,
         cross_depends,
         cross_enables,
@@ -295,6 +417,10 @@ fn summarize_repo(repo_root: &Path, targets_path: &Path) -> Result<RepoSummary, 
 }
 
 /// Format a portfolio summary for agent consumption.
+///
+/// Repos are ranked by aggregate WSJF score (already sorted by
+/// `discover_repos`). Each frontier target includes a WSJF breakdown
+/// showing the contributing factors.
 pub fn format_portfolio(scan: &PortfolioScan) -> String {
     let repos = &scan.repos;
     let warnings = &scan.warnings;
@@ -311,7 +437,8 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
     let mut out = format!(
         "# Portfolio\n\
          Repos scanned: {}, with active targets: {}\n\
-         Total: {} active, {} frontier, {} achieved\n\n",
+         Total: {} active, {} frontier, {} achieved\n\
+         Ranking: WSJF = sum(value/cost × momentum × enabler_boost) / frontier_size\n\n",
         repos.len(),
         repos_with_active,
         total_active,
@@ -319,10 +446,7 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
         total_achieved,
     );
 
-    // Warnings first — the user must see these, especially the
-    // VersionMismatch ones which tell them to upgrade bullseye.
-    // Silently dropping such repos would hide the whole point of
-    // the schema_version check.
+    // Warnings first.
     if !warnings.is_empty() {
         let version_mismatches: Vec<&RepoWarning> = warnings
             .iter()
@@ -350,41 +474,59 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
         }
     }
 
-    // Repos with frontier targets first (sorted by frontier count desc).
-    let mut with_frontier: Vec<&RepoSummary> = repos.iter().filter(|r| r.frontier > 0).collect();
-    with_frontier.sort_by(|a, b| b.frontier.cmp(&a.frontier));
+    // Repos with frontier targets, ranked by WSJF score desc.
+    let with_frontier: Vec<&RepoSummary> = repos.iter().filter(|r| r.frontier > 0).collect();
 
     if !with_frontier.is_empty() {
-        out.push_str("## Ready for work\n\n");
-        for repo in &with_frontier {
+        out.push_str("## Ready for work (ranked by WSJF)\n\n");
+        for (rank, repo) in with_frontier.iter().enumerate() {
             out.push_str(&format!(
-                "**{}** — {} active, {} frontier\n",
-                repo.repo, repo.active, repo.frontier,
+                "**#{rank} {repo_name}** — WSJF {score:.2}, {active} active, {frontier} frontier\n",
+                rank = rank + 1,
+                repo_name = repo.repo,
+                score = repo.wsjf_score,
+                active = repo.active,
+                frontier = repo.frontier,
             ));
+
+            // Per-repo reasoning: top contributing targets.
             for ft in &repo.frontier_targets {
-                // Annotate cross-enabler targets so the caller can see
-                // at a glance which frontier entries propagate value to
-                // other repos. These targets also sort to the top of
-                // the per-repo frontier list.
+                let mut annotations = Vec::new();
                 if ft.cross_enables_count > 0 {
-                    out.push_str(&format!(
-                        "  ★ 🎯{id} {name}  [enables {n} cross-repo]\n",
-                        id = ft.id,
-                        name = ft.name,
-                        n = ft.cross_enables_count,
-                    ));
-                } else {
-                    out.push_str(&format!("  🎯{id} {name}\n", id = ft.id, name = ft.name));
+                    annotations.push(format!("enables {} cross-repo", ft.cross_enables_count));
                 }
+                if (ft.enabler_boost - 1.0).abs() > f64::EPSILON {
+                    annotations.push(format!("boost {:.2}×", ft.enabler_boost));
+                }
+                if (ft.momentum - 1.0).abs() > f64::EPSILON {
+                    annotations.push(format!("momentum {:.2}×", ft.momentum));
+                }
+
+                let prefix = if ft.cross_enables_count > 0 {
+                    "★ "
+                } else {
+                    ""
+                };
+                let annotation_str = if annotations.is_empty() {
+                    String::new()
+                } else {
+                    format!("  [{}]", annotations.join(", "))
+                };
+                out.push_str(&format!(
+                    "  {prefix}🎯{id} {name}  (wsjf {wsjf:.2}: v={value}/c={cost}{annotation})\n",
+                    id = ft.id,
+                    name = ft.name,
+                    wsjf = ft.wsjf,
+                    value = ft.value,
+                    cost = ft.cost,
+                    annotation = annotation_str,
+                ));
             }
             out.push('\n');
         }
     }
 
-    // Cross-repo edges section — surfaces every `cross_depends` and
-    // `cross_enables` edge across the portfolio so the user sees the
-    // coupling that bullseye deliberately does not enforce via the
-    // frontier graph. Dangling refs are fine; they just show up as-is.
+    // Cross-repo edges section.
     let repos_with_cross: Vec<&RepoSummary> = repos
         .iter()
         .filter(|r| !r.cross_depends.is_empty() || !r.cross_enables.is_empty())
@@ -460,15 +602,46 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
 mod tests {
     use super::*;
 
-    /// Build a minimal [`PortfolioFrontierTarget`] without
-    /// cross-repo metadata — used by tests that predate the
-    /// cross-enabler priority boost.
+    /// Build a minimal [`PortfolioFrontierTarget`] with default
+    /// momentum (1.0), enabler_boost (1.0), and cost (1.0).
+    /// WSJF is computed as value/cost since momentum and boost are 1.0.
     fn pft(id: &str, name: &str, value: f64) -> PortfolioFrontierTarget {
         PortfolioFrontierTarget {
             id: id.to_string(),
             name: name.to_string(),
             value,
+            cost: 1.0,
             cross_enables_count: 0,
+            momentum: 1.0,
+            enabler_boost: 1.0,
+            wsjf: value, // value / cost(1.0) * momentum(1.0) * boost(1.0)
+        }
+    }
+
+    /// Build a [`PortfolioFrontierTarget`] with explicit cost and WSJF.
+    fn pft_full(
+        id: &str,
+        name: &str,
+        value: f64,
+        cost: f64,
+        momentum: f64,
+        enabler_boost: f64,
+        cross_enables_count: usize,
+    ) -> PortfolioFrontierTarget {
+        let wsjf = if cost > 0.0 {
+            (value / cost) * momentum * enabler_boost
+        } else {
+            0.0
+        };
+        PortfolioFrontierTarget {
+            id: id.to_string(),
+            name: name.to_string(),
+            value,
+            cost,
+            cross_enables_count,
+            momentum,
+            enabler_boost,
+            wsjf,
         }
     }
 
@@ -507,6 +680,7 @@ mod tests {
                     active: 3,
                     frontier: 2,
                     achieved: 1,
+                    wsjf_score: 4.0, // (5+3)/2
                     frontier_targets: vec![
                         pft("T1", "First target", 5.0),
                         pft("T2", "Second target", 3.0),
@@ -520,6 +694,7 @@ mod tests {
                     active: 0,
                     frontier: 0,
                     achieved: 5,
+                    wsjf_score: 0.0,
                     frontier_targets: vec![],
                     cross_depends: Vec::new(),
                     cross_enables: Vec::new(),
@@ -532,20 +707,16 @@ mod tests {
         assert!(out.contains("Repos scanned: 2"));
         assert!(out.contains("with active targets: 1"));
         assert!(out.contains("3 active, 2 frontier, 6 achieved"));
-        assert!(out.contains("**org/repo-a**"));
+        assert!(out.contains("org/repo-a"));
         assert!(out.contains("🎯T1 First target"));
+        assert!(out.contains("WSJF 4.00"));
         assert!(out.contains("## Complete"));
         assert!(out.contains("org/repo-b (5 achieved)"));
-        // No warnings → no warnings section.
         assert!(!out.contains("## ⚠ Warnings"));
     }
 
     #[test]
     fn format_portfolio_surfaces_version_mismatch_warning() {
-        // A repo whose bullseye.yaml declares a schema_version this
-        // binary doesn't support must appear prominently in the
-        // output — otherwise the user would silently lose the
-        // upgrade signal.
         let scan = PortfolioScan {
             repos: vec![RepoSummary {
                 repo: "org/ok-repo".to_string(),
@@ -553,6 +724,7 @@ mod tests {
                 active: 1,
                 frontier: 1,
                 achieved: 0,
+                wsjf_score: 3.0,
                 frontier_targets: vec![pft("T1", "A target", 3.0)],
                 cross_depends: Vec::new(),
                 cross_enables: Vec::new(),
@@ -577,9 +749,6 @@ mod tests {
 
     #[test]
     fn format_portfolio_surfaces_load_error_warning() {
-        // A repo whose bullseye.yaml is unparsable should also be
-        // surfaced, but under a different heading so the user can
-        // distinguish "my bullseye is stale" from "my YAML is broken".
         let scan = PortfolioScan {
             repos: Vec::new(),
             warnings: vec![RepoWarning {
@@ -602,9 +771,6 @@ mod tests {
 
     #[test]
     fn format_portfolio_surfaces_cross_repo_edges() {
-        // A repo with both cross_depends and cross_enables edges must
-        // see them rendered in a dedicated section with source target,
-        // direction, referenced repo, and (when present) a note.
         let edge_dep = CrossRepoEdgeRef {
             source_target: "T1".to_string(),
             edge: CrossEdge {
@@ -624,6 +790,9 @@ mod tests {
             },
         };
 
+        // T2 has enabler_boost from cross_enables (1 + 0.25*5 = 2.25),
+        // giving it wsjf = 3/1 * 1.0 * 2.25 = 6.75, which beats
+        // T1's wsjf = 5/1 * 1.0 * 1.0 = 5.0.
         let scan = PortfolioScan {
             repos: vec![RepoSummary {
                 repo: "org/linker".to_string(),
@@ -631,23 +800,10 @@ mod tests {
                 active: 2,
                 frontier: 2,
                 achieved: 0,
-                // Already in portfolio priority order: cross-enabler
-                // first, then by value. `summarize_repo` populates this
-                // list in this same order; tests that build summaries
-                // by hand must respect the invariant.
+                wsjf_score: 5.875, // (6.75 + 5.0) / 2
                 frontier_targets: vec![
-                    PortfolioFrontierTarget {
-                        id: "T2".to_string(),
-                        name: "Cross-repo enabler".to_string(),
-                        value: 3.0,
-                        cross_enables_count: 1,
-                    },
-                    PortfolioFrontierTarget {
-                        id: "T1".to_string(),
-                        name: "Plain work".to_string(),
-                        value: 5.0,
-                        cross_enables_count: 0,
-                    },
+                    pft_full("T2", "Cross-repo enabler", 3.0, 1.0, 1.0, 2.25, 1),
+                    pft_full("T1", "Plain work", 5.0, 1.0, 1.0, 1.0, 0),
                 ],
                 cross_depends: vec![edge_dep],
                 cross_enables: vec![edge_enable],
@@ -659,20 +815,18 @@ mod tests {
 
         // Dedicated cross-repo section appears.
         assert!(out.contains("## Cross-repo edges"));
-        // cross_depends line: source → dep (capability form) @ repo — note.
         assert!(
             out.contains("🎯T1 depends on Manager API @ marcelocantos/jevon"),
             "expected cross_depends line; got:\n{out}"
         );
         assert!(out.contains("needed for summarizer lifecycle"));
-        // cross_enables line: source → dep (target form) @ repo.
         assert!(
             out.contains("🎯T2 enables 🎯T1.4 @ marcelocantos/targets"),
             "expected cross_enables line; got:\n{out}"
         );
 
-        // Frontier rendering: cross-enabler is marked and boosted above
-        // the plain higher-value target.
+        // Frontier rendering: cross-enabler ranks above plain target
+        // due to higher WSJF from enabler_boost.
         let ready = out
             .split("## Ready for work")
             .nth(1)
@@ -683,22 +837,25 @@ mod tests {
         let t1_pos = ready_text.find("🎯T1").expect("T1 in ready section");
         assert!(
             t2_pos < t1_pos,
-            "T2 (cross-enabler, v=3) should rank above T1 (v=5) in portfolio; got:\n{ready_text}"
+            "T2 (cross-enabler, wsjf=6.75) should rank above T1 (wsjf=5.0); got:\n{ready_text}"
         );
         assert!(
             ready_text.contains("★ 🎯T2"),
             "cross-enabler should be marked with ★; got:\n{ready_text}"
         );
         assert!(
-            ready_text.contains("[enables 1 cross-repo]"),
+            ready_text.contains("enables 1 cross-repo"),
             "cross-enabler should be annotated; got:\n{ready_text}"
+        );
+        // WSJF breakdown is shown.
+        assert!(
+            ready_text.contains("wsjf 6.75"),
+            "per-target WSJF should appear; got:\n{ready_text}"
         );
     }
 
     #[test]
     fn format_portfolio_no_cross_section_when_empty() {
-        // A portfolio with no cross-repo edges must not emit an empty
-        // "Cross-repo edges" section.
         let scan = PortfolioScan {
             repos: vec![RepoSummary {
                 repo: "org/plain".to_string(),
@@ -706,6 +863,7 @@ mod tests {
                 active: 1,
                 frontier: 1,
                 achieved: 0,
+                wsjf_score: 5.0,
                 frontier_targets: vec![pft("T1", "Plain", 5.0)],
                 cross_depends: Vec::new(),
                 cross_enables: Vec::new(),
@@ -715,7 +873,110 @@ mod tests {
 
         let out = format_portfolio(&scan);
         assert!(!out.contains("## Cross-repo edges"));
-        // And plain frontier targets don't get the ★ marker.
         assert!(!out.contains("★"));
+    }
+
+    #[test]
+    fn wsjf_ranking_with_momentum() {
+        // Repo A has a lower-value target but with 2× momentum,
+        // giving it a higher WSJF than repo B's higher-value target.
+        let scan = PortfolioScan {
+            repos: vec![
+                RepoSummary {
+                    repo: "org/repo-a".to_string(),
+                    path: PathBuf::from("/work/org/repo-a"),
+                    active: 1,
+                    frontier: 1,
+                    achieved: 0,
+                    wsjf_score: 6.0, // 3/1 * 2.0 * 1.0 = 6.0
+                    frontier_targets: vec![pft_full("T1", "Boosted", 3.0, 1.0, 2.0, 1.0, 0)],
+                    cross_depends: Vec::new(),
+                    cross_enables: Vec::new(),
+                },
+                RepoSummary {
+                    repo: "org/repo-b".to_string(),
+                    path: PathBuf::from("/work/org/repo-b"),
+                    active: 1,
+                    frontier: 1,
+                    achieved: 0,
+                    wsjf_score: 5.0, // 5/1 * 1.0 * 1.0 = 5.0
+                    frontier_targets: vec![pft("T1", "Plain high-value", 5.0)],
+                    cross_depends: Vec::new(),
+                    cross_enables: Vec::new(),
+                },
+            ],
+            warnings: Vec::new(),
+        };
+
+        let out = format_portfolio(&scan);
+        let a_pos = out.find("org/repo-a").expect("repo-a in output");
+        let b_pos = out.find("org/repo-b").expect("repo-b in output");
+        assert!(
+            a_pos < b_pos,
+            "repo-a (WSJF 6.0) should rank above repo-b (WSJF 5.0); got:\n{out}"
+        );
+        assert!(
+            out.contains("momentum 2.00×"),
+            "momentum annotation should appear; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn wsjf_formula_components() {
+        // Verify the per-target WSJF formula:
+        // wsjf = (value / cost) * momentum * enabler_boost
+        let ft = pft_full("T1", "Test", 8.0, 2.0, 1.5, 2.0, 1);
+        // Expected: (8/2) * 1.5 * 2.0 = 12.0
+        assert!(
+            (ft.wsjf - 12.0).abs() < f64::EPSILON,
+            "expected wsjf=12.0, got {}",
+            ft.wsjf
+        );
+    }
+
+    #[test]
+    fn wsjf_aggregate_divides_by_frontier_size() {
+        // Per-repo WSJF is sum(wsjf_i) / frontier_size, encoding
+        // that parallelisable repos need less per-unit attention.
+        let scan = PortfolioScan {
+            repos: vec![
+                RepoSummary {
+                    repo: "org/focused".to_string(),
+                    path: PathBuf::from("/work/org/focused"),
+                    active: 1,
+                    frontier: 1,
+                    achieved: 0,
+                    wsjf_score: 8.0, // single target: 8/1 = 8.0
+                    frontier_targets: vec![pft("T1", "Solo", 8.0)],
+                    cross_depends: Vec::new(),
+                    cross_enables: Vec::new(),
+                },
+                RepoSummary {
+                    repo: "org/spread".to_string(),
+                    path: PathBuf::from("/work/org/spread"),
+                    active: 4,
+                    frontier: 4,
+                    achieved: 0,
+                    wsjf_score: 5.0, // 4 targets × 5.0 / 4 = 5.0
+                    frontier_targets: vec![
+                        pft("T1", "A", 5.0),
+                        pft("T2", "B", 5.0),
+                        pft("T3", "C", 5.0),
+                        pft("T4", "D", 5.0),
+                    ],
+                    cross_depends: Vec::new(),
+                    cross_enables: Vec::new(),
+                },
+            ],
+            warnings: Vec::new(),
+        };
+
+        let out = format_portfolio(&scan);
+        let focused_pos = out.find("org/focused").expect("focused in output");
+        let spread_pos = out.find("org/spread").expect("spread in output");
+        assert!(
+            focused_pos < spread_pos,
+            "focused repo (WSJF 8.0) should rank above spread repo (WSJF 5.0); got:\n{out}"
+        );
     }
 }

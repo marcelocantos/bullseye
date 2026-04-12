@@ -260,10 +260,16 @@ pub struct StartupContextTool {
     pub recent_days: Option<u32>,
 }
 
-/// Cross-repo portfolio view.
+/// Cross-repo portfolio view with WSJF ranking.
 #[mcp_tool(
     name = "bullseye_portfolio",
-    description = "Discover all repos with targets under a workspace root and return a portfolio summary: per-repo active/frontier/achieved counts and frontier target names. Scans ~/work/ by default. Use this for cross-project prioritisation and global convergence assessment."
+    description = "Discover all repos with targets under a workspace root and return a portfolio \
+        summary ranked by aggregate WSJF score. Per-repo score: \
+        sum(value_i / cost_i × momentum_i × enabler_boost_i) / frontier_size. \
+        Enabler boost propagates downstream target value across repos via cross_enables edges. \
+        Optionally accepts a `momentum` list ([{id, multiplier}, ...]) that scales per-target \
+        WSJF contributions; caller supplies the multipliers (e.g. from mnemo_recent_activity). \
+        Scans ~/work/ by default. Use this for cross-project prioritisation and global convergence assessment."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct PortfolioTool {
@@ -274,6 +280,16 @@ pub struct PortfolioTool {
     /// Maximum directory depth to scan (default: 5).
     #[serde(default)]
     pub max_depth: Option<u32>,
+
+    /// Optional per-target momentum multipliers, as a list of
+    /// `{id, multiplier}` entries. When provided, each frontier
+    /// target's WSJF contribution is scaled by its listed multiplier
+    /// (default 1.0 for targets not in the list). The caller
+    /// (typically the /cv skill) computes these values from
+    /// `mnemo_recent_activity` or any other external signal —
+    /// bullseye never calls mnemo directly.
+    #[serde(default)]
+    pub momentum: Option<Vec<MomentumEntry>>,
 }
 
 fn default_filter() -> String {

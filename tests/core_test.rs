@@ -669,7 +669,7 @@ fn portfolio_discovers_fixture() {
     use bullseye::portfolio;
 
     let fixture = fixture_path();
-    let scan = portfolio::discover_repos(&fixture, 3);
+    let scan = portfolio::discover_repos(&fixture, 3, &[]);
     // The fixture has a bullseye.yaml at its root.
     assert_eq!(scan.repos.len(), 1);
     assert_eq!(scan.repos[0].active, 4);
@@ -684,7 +684,7 @@ fn portfolio_format_includes_frontier_targets() {
     use bullseye::portfolio;
 
     let fixture = fixture_path();
-    let scan = portfolio::discover_repos(&fixture, 3);
+    let scan = portfolio::discover_repos(&fixture, 3, &[]);
     let out = portfolio::format_portfolio(&scan);
     assert!(out.contains("## Ready for work"));
     assert!(out.contains("🎯T1"));
@@ -713,7 +713,7 @@ fn portfolio_reports_version_mismatch_as_warning() {
     )
     .unwrap();
 
-    let scan = portfolio::discover_repos(tmp.path(), 5);
+    let scan = portfolio::discover_repos(tmp.path(), 5, &[]);
     assert!(
         scan.repos.is_empty(),
         "broken repo should not appear in repos list"
@@ -915,7 +915,7 @@ targets:
 "#;
     write!(std::fs::File::create(&path).unwrap(), "{yaml}").unwrap();
 
-    let scan = portfolio::discover_repos(tmp.path(), 5);
+    let scan = portfolio::discover_repos(tmp.path(), 5, &[]);
     assert_eq!(scan.repos.len(), 1);
     let r = &scan.repos[0];
 
