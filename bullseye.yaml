@@ -140,7 +140,7 @@ targets:
     achieved: 2026-04-12
   T2:
     name: Global portfolio view across all repos
-    status: identified
+    status: achieved
     value: 13.0
     cost: 8.0
     acceptance:
@@ -160,6 +160,7 @@ targets:
     - architecture
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-13
   T2.1:
     name: Cross-repo target discovery
     status: achieved
