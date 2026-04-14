@@ -304,6 +304,52 @@ bullseye:
 \t (echo "✗ dirty tree:"; git status --short; exit 1)
 ```
 
+**Parallelised variant** (optional): projects with *heterogeneous*
+toolchains can restructure the hook so independent checks run
+concurrently. The idea is to decompose `bullseye` into per-tool
+sub-rules and let make schedule them across cores:
+
+```make
+NPROC := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+MAKEFLAGS += -j$(NPROC)
+
+.PHONY: bullseye check-fmt check-clippy check-tests check-clean
+
+bullseye: check-fmt check-clippy check-tests check-clean
+
+check-fmt:
+\t@cargo fmt --check >/dev/null && echo "✓ fmt"
+
+check-clippy:
+\t@cargo clippy --quiet --all-targets -- -D warnings >/dev/null 2>&1 && echo "✓ clippy"
+
+check-tests:
+\t@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
+
+check-clean:
+\t@test -z "$$(git status --porcelain)" && echo "✓ clean tree" || \\
+\t (echo "✗ dirty tree:"; git status --short; exit 1)
+```
+
+The `NPROC` fallback chain works on Linux (`nproc`), macOS/BSD
+(`sysctl -n hw.ncpu`), and anywhere else with `getconf`; the final
+`echo 4` guards against exotic environments where none resolve.
+Setting `MAKEFLAGS` inside the Makefile is the convention — callers
+should never pass `-j` on the command line, since not every project
+is safe to parallelise.
+
+**When this is worth it**: parallelism only meaningfully helps
+projects with *mixed toolchains* — e.g. Go + Python + shellcheck +
+docs, where each tool uses a different working set and doesn't
+contend with the others. Single-ecosystem projects (pure cargo, pure
+go test) see little benefit because internal build parallelism
+already saturates cores and contenders like `clippy` and `test`
+fight over the same `target/` directory, serialising themselves via
+filesystem locks. The bullseye repo itself keeps the simple form
+above for that reason. Reach for the decomposed layout only when
+profiling shows `make bullseye` is genuinely CPU-bound across
+disjoint toolchains.
+
 If the hook is missing, convergence still runs to completion — the
 Invariants section carries a setup warning with an example rule, the
 frontier recommendation still fires, and the Next action ends with a
