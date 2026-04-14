@@ -546,7 +546,7 @@ targets:
     achieved: 2026-04-12
   T9:
     name: agents-guide documents parallelised bullseye Makefile convention
-    status: identified
+    status: achieved
     value: 3.0
     cost: 1.0
     observable: true
@@ -561,3 +561,4 @@ targets:
     - conventions
     origin: Discovered during v0.13.0 release session
     discovered: 2026-04-12
+    achieved: 2026-04-14
