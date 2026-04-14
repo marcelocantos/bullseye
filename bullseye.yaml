@@ -150,6 +150,35 @@ targets:
     origin: user direction during Gap 3 discussion (2026-04-12)
     discovered: 2026-04-12
     achieved: 2026-04-12
+  T11:
+    name: bullseye_put no longer requires value/cost at repo scope and its documentation reflects the phase-boundary model
+    status: identified
+    value: 13.0
+    cost: 5.0
+    acceptance:
+    - '`bullseye_put` can create a repo-scope target without supplying `value` or `cost` (schema marks them optional; tool accepts creation without them)'
+    - Tool description for `bullseye_put` explicitly states that value/cost are portfolio-scope metadata and `observable` is the relevant field at repo scope
+    - 'A test exercises: repo-scope target creation without value/cost succeeds; repo-scope frontier ordering is invariant under value/cost mutation; observable-flag flips change repo-scope ordering as designed'
+    - README, docs/mcp-triad.md §9, and the tool description all describe the phase boundary in consistent language
+    - Follow-up PRs to `~/.claude/convergence.md` and `~/.claude/CLAUDE.md` clarify repo vs portfolio scoring (may be tracked as a separate target in those surfaces, but this target is not retired until the clarification is in flight)
+    context: |-
+      The README (§ "Phase boundary") and docs/mcp-triad.md §9 describe bullseye as using two different prioritisation engines: at repo scope (sub-week horizon, human as decision-maker), ordering is driven by distance-to-observable-checkpoint and `value`/`cost` are explicitly not consumed; at portfolio scope (weekly-plus horizon, human as allocator), WSJF with momentum and cross-repo enabler propagation is in force.
+
+      The `bullseye_put` MCP tool schema, however, currently declares both `value` and `cost` as "Required on create". This forces every agent creating a repo-scope target to invent Fibonacci numbers that are ignored at repo scope — a consistent source of miscalibration. In the 2026-04-14 pageflip session this caused the agent to lean on WSJF/value-cost framing throughout, and to propose target sets scored as if ranking were value/cost-driven.
+
+      Audit scope:
+      1. Verify that the repo-scope frontier/ranking actually ignores value/cost (inspect the ranking module; run a test that mutates value/cost on a repo-scope fixture and asserts ordering is unchanged).
+      2. Verify that `observable: true/false` on work targets is actually consumed by repo-scope ordering (distance-to-nearest-observable shortest path).
+      3. If the design is implemented correctly: relax the tool schema so value/cost are optional; update the tool description to say "at repo scope, use `observable` on work targets that produce a human-reviewable checkpoint; value/cost are portfolio-scope metadata."
+      4. If the design is NOT implemented correctly: decide whether to implement it or revise the design; either way, update README/docs so all three surfaces (tool, README, mcp-triad §9) agree.
+      5. Propagate clarifications to downstream docs:
+         - `~/.claude/convergence.md` § "Value and cost" (lines 110-191) currently reads as if WSJF is the universal scoring model; needs a top-level section on scope phases with WSJF relegated to portfolio scope.
+         - `~/.claude/CLAUDE.md` § "Convergence targets" needs a paragraph stating "at repo scope, set `observable` on checkpoint targets; omit value/cost."
+         - Agent auto-memory entries pointing at bullseye need updating in step.
+
+      Doing this well upgrades every agent's target-creation behaviour without any per-agent prompt changes.
+    origin: pageflip target-creation session 2026-04-14 — agent consistently populated value/cost at repo scope because the tool schema requires them, contradicting the design
+    discovered: 2026-04-14
   T2:
     name: Global portfolio view across all repos
     status: achieved
