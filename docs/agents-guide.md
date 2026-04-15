@@ -12,57 +12,45 @@ and detects gaps in verification coverage.
 Every target-operating tool accepts a `cwd` parameter. Where the
 targets file is discovered depends on the configured storage mode.
 
-## Storage modes and first-run flow
+## Storage locations and first-use flow
 
-Bullseye is machine-wide configurable via `~/.config/bullseye/config.yaml`:
+Each repo chooses **once** where its `bullseye.yaml` lives:
 
-```yaml
-storage:
-  mode: in_repo          # or "external"
-  # root: ~/.local/share/bullseye   # only used in external mode
-```
-
-- `in_repo` — `bullseye.yaml` lives inside the project. Discovery
-  walks up from `cwd`.
-- `external` — `bullseye.yaml` lives in a shadow tree under
-  `storage.root` (default `~/.local/share/bullseye/`). The shadow path
-  mirrors the absolute `cwd`, so `/Users/alice/work/acme/api` maps to
+- `in_repo` — inside the project. Discovery walks up from `cwd`.
+- `external` — in a shadow tree under `~/.local/share/bullseye/`
+  mirroring the absolute `cwd`, so
+  `/Users/alice/work/acme/api` maps to
   `~/.local/share/bullseye/Users/alice/work/acme/api/bullseye.yaml`.
-  Discovery walks up the shadow tree identically to in-repo mode.
-  Path-driven — no git remote parsing.
+  Path-driven — no git-remote or layout assumptions.
 
-### First-run flow for agents
+After `bullseye_init`, every other tool calls
+`discover_anywhere(cwd)` which checks both locations and returns the
+first match. If both exist (edge case), **in-repo wins**.
 
-Every tool call requires the config to exist. If it doesn't, the
-server returns an actionable error containing a prompt you must pass
-to the user verbatim:
+There is no machine-wide config file. The location is encoded by
+where `bullseye.yaml` lives on disk.
 
-> **Store targets where?**
+### First-use flow for agents
+
+If the repo has no `bullseye.yaml` in either location, every
+target-operating tool returns an error ending with this prompt —
+pass it to the user verbatim:
+
+> **Create bullseye.yaml for this repo where?**
 > - **in_repo** — commit `bullseye.yaml` into the repo (you own it, team uses bullseye).
 > - **external** — shadow tree under `~/.local/share/bullseye/` (read-only repo, or personal use of bullseye).
 >
-> Answer: `in_repo` or `external`. Machine-wide; edit `~/.config/bullseye/config.yaml` to change.
+> Call `bullseye_init` with `location: in_repo` or `location: external`.
 
-After the user answers, call `bullseye_configure` with
-`mode=in_repo` or `mode=external` (optionally `root=<path>` to
-override the default external root). The tool writes the config
-file; subsequent calls proceed normally. Do not retry the original
-tool until `bullseye_configure` succeeds.
+After the user answers, call `bullseye_init` with the chosen `location`.
+Subsequent tool calls proceed normally. Do **not** retry the original
+tool until init succeeds.
 
-Malformed config, filesystem errors, and unknown modes surface as
-hard errors — the server never silently falls back to a default.
+The same prompt is returned when `bullseye_init` itself is called
+without a valid `location` — so the agent can route straight to `init`
+without first triggering an error elsewhere.
 
 ## Tools
-
-### bullseye_configure
-
-Record the one-time storage-mode choice. Call this exactly once per
-machine as part of the first-run flow above.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `mode` | string | required | `"in_repo"` or `"external"` |
-| `root` | string | — | External root directory (only valid with `mode: external`; defaults to `~/.local/share/bullseye`). Tildes are expanded. |
 
 ### bullseye_list
 
@@ -221,26 +209,29 @@ Generate a Mermaid dependency graph of active targets.
 
 ### bullseye_init
 
-Create a starter `bullseye.yaml` with a sample target. Refuses to
-overwrite an existing file — use `bullseye_put` for repos that
-already have targets.
+Create a starter `bullseye.yaml` with a sample target. **Location is
+required** — `"in_repo"` (committed into the repo) or `"external"`
+(shadow tree under `~/.local/share/bullseye/`). See
+[Storage locations and first-use flow](#storage-locations-and-first-use-flow).
+Refuses to overwrite an existing file at either location.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Project root directory |
+| `location` | string | required | `"in_repo"` or `"external"` — ask the user on first use; it's per-repo, not machine-wide |
 | `project_name` | string | directory name | Project name for sample target context |
 
 ### bullseye_import
 
-Import targets from a YAML file into `bullseye.yaml`. Validates the
-parsed result before writing.
-
-Refuses to overwrite an existing `bullseye.yaml` unless `force` is set.
+Import targets from a markdown file into `bullseye.yaml`. Validates the
+parsed result before writing. Refuses to overwrite an existing
+`bullseye.yaml` in either location unless `force: true`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Project root directory |
-| `path` | string | auto-discover | Explicit path to source file |
+| `path` | string | required | Explicit path to the markdown source |
+| `location` | string | required | `"in_repo"` or `"external"` (same semantics as `bullseye_init`) |
 | `force` | bool | `false` | Overwrite existing `bullseye.yaml` |
 
 ### bullseye_startup_context

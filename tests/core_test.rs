@@ -630,7 +630,12 @@ targets:
 #[test]
 fn create_starter_produces_valid_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let path = store::create_starter(tmp.path(), "test-project").unwrap();
+    let path = store::create_at(
+        tmp.path(),
+        bullseye::config::Location::InRepo,
+        "test-project",
+    )
+    .unwrap();
 
     assert!(path.exists());
     assert_eq!(path, tmp.path().join("bullseye.yaml"));
@@ -654,7 +659,7 @@ fn create_starter_does_not_overwrite() {
     let tmp = tempfile::tempdir().unwrap();
 
     // Create the first time.
-    let path = store::create_starter(tmp.path(), "project").unwrap();
+    let path = store::create_at(tmp.path(), bullseye::config::Location::InRepo, "project").unwrap();
     assert!(path.exists());
 
     // discover should now find it, so handler-level guard works.
@@ -1349,28 +1354,21 @@ fn handle_convergence_resolves_repo_root() {
     // inversion of `repo_root_from_targets_path` or
     // `store::discover`'s candidate order is caught at the handler
     // boundary.
-    use bullseye::config::{self, Config, Mode, Storage};
+    use bullseye::config;
     use bullseye::handler::handle_convergence;
     use bullseye::tools::ConvergenceTool;
 
     let tmp = tempfile::tempdir().unwrap();
     write_project(tmp.path(), "bullseye:\n\t@true\n", SIMPLE_TARGETS_YAML);
 
-    // Machine-wide config is required for every tool call; point it
-    // at a throwaway dir and record in_repo mode.
-    let cfg_tmp = tempfile::tempdir().unwrap();
-    config::set_config_dir_override(Some(cfg_tmp.path().to_path_buf()));
-    config::save(&Config {
-        storage: Storage {
-            mode: Mode::InRepo,
-            root: None,
-        },
-    })
-    .expect("save in-repo config");
+    // Isolate the external shadow root so discover_anywhere can't pick
+    // up state from the developer's real ~/.local/share/bullseye.
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
     struct Cleanup;
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            config::set_config_dir_override(None);
+            bullseye::config::set_external_root_override(None);
         }
     }
     let _cleanup = Cleanup;
@@ -2312,236 +2310,250 @@ fn verify_report_structure_serializes_file_line_detail() {
 }
 
 // ---------------------------------------------------------------------
-// External-storage / configuration integration tests (🎯T12).
+// Per-repo discovery integration tests (v0.16.0+).
 // ---------------------------------------------------------------------
 
-/// RAII helper used by the external-storage tests to install a
-/// thread-local config override and guarantee cleanup.
-struct ConfigFixture {
+/// RAII helper: isolate the external shadow root to a tempdir so the
+/// tests don't touch the developer's real `~/.local/share/bullseye`,
+/// and cleanly restore on drop.
+struct ShadowFixture {
     _tmp: tempfile::TempDir,
 }
 
-impl ConfigFixture {
-    fn external(root: PathBuf) -> Self {
-        use bullseye::config::{self, Config, Mode, Storage};
-        let tmp = tempfile::tempdir().unwrap();
-        config::set_config_dir_override(Some(tmp.path().to_path_buf()));
-        config::save(&Config {
-            storage: Storage {
-                mode: Mode::External,
-                root: Some(root),
-            },
-        })
-        .unwrap();
-        ConfigFixture { _tmp: tmp }
+impl ShadowFixture {
+    fn with_root(root: &std::path::Path) -> Self {
+        bullseye::config::set_external_root_override(Some(root.to_path_buf()));
+        // Caller owns the tempdir; this holder just flips the override back.
+        ShadowFixture {
+            _tmp: tempfile::tempdir().unwrap(),
+        }
     }
 }
 
-impl Drop for ConfigFixture {
+impl Drop for ShadowFixture {
     fn drop(&mut self) {
-        bullseye::config::set_config_dir_override(None);
+        bullseye::config::set_external_root_override(None);
     }
 }
 
 #[test]
-fn missing_config_surfaces_imperative_error_with_prompt() {
-    use bullseye::config;
-    use bullseye::handler::handle_convergence;
-    use bullseye::tools::ConvergenceTool;
+fn missing_targets_file_surfaces_location_prompt() {
+    use bullseye::handler::handle_list;
+    use bullseye::tools::ListTool;
 
-    // Point the config dir at an empty tempdir so `load()` returns
-    // NotConfigured regardless of the developer's real config.
-    let tmp = tempfile::tempdir().unwrap();
-    config::set_config_dir_override(Some(tmp.path().to_path_buf()));
-    struct Cleanup;
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            bullseye::config::set_config_dir_override(None);
-        }
-    }
-    let _cleanup = Cleanup;
+    // Isolate the shadow root so discover_anywhere's external probe
+    // can't accidentally hit an unrelated file.
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
 
     let work = tempfile::tempdir().unwrap();
-    let err = handle_convergence(ConvergenceTool {
+    let err = handle_list(ListTool {
         cwd: work.path().to_string_lossy().into_owned(),
-        momentum: None,
-        skip_invariants: None,
+        filter: "active".to_string(),
     })
-    .expect_err("missing config must surface as an error");
+    .expect_err("missing targets file must surface as error");
     let msg = format!("{err:?}");
 
-    // The error must carry enough instruction for the agent to ask
-    // the user and call bullseye_configure.
+    // The error names where we looked and carries the init prompt.
     assert!(
-        msg.contains("Store targets where?"),
-        "prompt missing: {msg}"
+        msg.contains("no bullseye.yaml found"),
+        "not-found preamble missing: {msg}"
     );
-    assert!(msg.contains("in_repo"), "modes missing: {msg}");
-    assert!(msg.contains("external"), "modes missing: {msg}");
     assert!(
-        msg.contains("bullseye_configure"),
+        msg.contains("Create bullseye.yaml for this repo where?"),
+        "location prompt missing: {msg}"
+    );
+    assert!(msg.contains("in_repo"), "in_repo choice missing: {msg}");
+    assert!(msg.contains("external"), "external choice missing: {msg}");
+    assert!(
+        msg.contains("bullseye_init"),
         "call-to-action missing: {msg}"
     );
 }
 
 #[test]
-fn external_mode_shadow_tree_roundtrip() {
-    use bullseye::handler;
+fn init_without_location_returns_prompt() {
+    use bullseye::handler::handle_init;
+    use bullseye::tools::InitTool;
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+
+    let work = tempfile::tempdir().unwrap();
+    let err = handle_init(InitTool {
+        cwd: work.path().to_string_lossy().into_owned(),
+        location: String::new(), // empty → unknown → prompt
+        project_name: None,
+    })
+    .expect_err("empty location must surface as error");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("unknown location"),
+        "parse error missing: {msg}"
+    );
+    assert!(
+        msg.contains("Create bullseye.yaml for this repo where?"),
+        "location prompt missing: {msg}"
+    );
+}
+
+#[test]
+fn init_in_repo_creates_file_in_cwd() {
+    use bullseye::handler::{handle_init, handle_list};
     use bullseye::tools::{InitTool, ListTool};
 
-    let data_root = tempfile::tempdir().unwrap();
-    let _cfg = ConfigFixture::external(data_root.path().to_path_buf());
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
 
-    // Work in a cwd that has no physical bullseye.yaml — external mode
-    // must write targets to the shadow path under data_root.
     let work = tempfile::tempdir().unwrap();
     let cwd = work.path().to_string_lossy().into_owned();
 
-    let init_result = handler::handle_convergence;
-    let _ = init_result; // silence unused-import warning if reordered
-
-    let result = bullseye::handler::handle_list(ListTool {
+    handle_init(InitTool {
         cwd: cwd.clone(),
-        filter: "active".to_string(),
-    })
-    .err();
-    // No targets yet → either "no bullseye.yaml found" (discover miss)
-    // or an init is required. We expect a "not found" message that
-    // names external mode and the shadow root so the agent knows
-    // where bullseye looked.
-    let err = result.expect("expected error when no shadow-tree targets exist");
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("external mode"),
-        "mode missing from error: {msg}"
-    );
-    assert!(
-        msg.contains(&data_root.path().display().to_string()),
-        "root missing from error: {msg}"
-    );
-
-    // Init creates the file at the shadow path, not the cwd.
-    let init_out = bullseye::handler::handle_init(InitTool {
-        cwd: cwd.clone(),
+        location: "in_repo".to_string(),
         project_name: Some("demo".to_string()),
     })
-    .expect("init should succeed in external mode");
+    .expect("init should succeed");
 
-    // The physical cwd stays clean.
     assert!(
-        !work.path().join("bullseye.yaml").exists(),
-        "external mode must not write into the cwd"
+        work.path().join("bullseye.yaml").is_file(),
+        "in-repo init must write into the cwd"
     );
 
-    // The shadow path contains the new file.
-    let mut shadow = data_root.path().to_path_buf();
-    for component in work.path().components() {
-        use std::path::Component;
-        if let Component::Normal(part) = component {
-            shadow.push(part);
+    // Discovery finds it, list works.
+    let text = text_from_call_result(
+        handle_list(ListTool {
+            cwd,
+            filter: "active".to_string(),
+        })
+        .expect("list after init should succeed"),
+    );
+    assert!(text.contains("🎯T1"), "listing missing T1: {text}");
+}
+
+#[test]
+fn init_external_creates_file_in_shadow_tree() {
+    use bullseye::handler::{handle_init, handle_list};
+    use bullseye::tools::{InitTool, ListTool};
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().to_string_lossy().into_owned();
+
+    handle_init(InitTool {
+        cwd: cwd.clone(),
+        location: "external".to_string(),
+        project_name: Some("demo".to_string()),
+    })
+    .expect("external init should succeed");
+
+    // cwd stays clean.
+    assert!(
+        !work.path().join("bullseye.yaml").exists(),
+        "external init must not write into the cwd"
+    );
+
+    // Shadow path contains the file.
+    let mut expected = shadow.path().to_path_buf();
+    for c in work.path().components() {
+        if let std::path::Component::Normal(part) = c {
+            expected.push(part);
         }
     }
-    let expected = shadow.join("bullseye.yaml");
+    expected.push("bullseye.yaml");
     assert!(
         expected.is_file(),
-        "shadow-path targets file not created: {}",
+        "shadow-tree file missing: {}",
         expected.display()
     );
 
-    // And handle_list now succeeds because discover_with_config walks
-    // up the shadow tree from the cwd.
-    let listed = bullseye::handler::handle_list(ListTool {
-        cwd,
-        filter: "active".to_string(),
-    })
-    .expect("list after init should succeed");
-    let text = text_from_call_result(listed);
+    // Discovery finds it through discover_anywhere's external branch.
+    let text = text_from_call_result(
+        handle_list(ListTool {
+            cwd,
+            filter: "active".to_string(),
+        })
+        .expect("list after external init should succeed"),
+    );
     assert!(text.contains("🎯T1"), "listing missing T1: {text}");
-    // init_out should also reference the shadow path, proving the
-    // message is faithful to where the file actually lives.
-    let init_text = text_from_call_result(init_out);
+}
+
+#[test]
+fn init_refuses_when_file_already_exists_in_either_location() {
+    use bullseye::handler::handle_init;
+    use bullseye::tools::InitTool;
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().to_string_lossy().into_owned();
+
+    handle_init(InitTool {
+        cwd: cwd.clone(),
+        location: "in_repo".to_string(),
+        project_name: None,
+    })
+    .expect("first init should succeed");
+
+    // Second init — even with a different location — is refused.
+    let err = handle_init(InitTool {
+        cwd,
+        location: "external".to_string(),
+        project_name: None,
+    })
+    .expect_err("second init must be refused");
     assert!(
-        init_text.contains(&expected.display().to_string()),
-        "init output should name the shadow path: {init_text}"
+        format!("{err:?}").contains("already exists"),
+        "expected already-exists error"
     );
 }
 
 #[test]
-fn configure_tool_writes_config_file() {
-    use bullseye::config::{self, Mode};
-    use bullseye::handler::handle_configure;
-    use bullseye::tools::ConfigureTool;
+fn in_repo_wins_when_both_locations_have_files() {
+    use bullseye::handler::handle_list;
+    use bullseye::store;
+    use bullseye::tools::ListTool;
 
-    let tmp = tempfile::tempdir().unwrap();
-    config::set_config_dir_override(Some(tmp.path().to_path_buf()));
-    struct Cleanup;
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            bullseye::config::set_config_dir_override(None);
-        }
-    }
-    let _cleanup = Cleanup;
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
 
-    handle_configure(ConfigureTool {
-        mode: "external".to_string(),
-        root: Some("/tmp/bullseye-data-test".to_string()),
-    })
-    .expect("configure should succeed");
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().to_string_lossy().into_owned();
 
-    let loaded = config::load().expect("config should load after configure");
-    assert_eq!(loaded.storage.mode, Mode::External);
-    assert_eq!(
-        loaded.storage.root.as_deref(),
-        Some(std::path::Path::new("/tmp/bullseye-data-test"))
+    // Pre-seed both locations. Use distinguishable content so the
+    // assertion can prove which file was read.
+    let in_repo_path = work.path().join("bullseye.yaml");
+    std::fs::write(
+        &in_repo_path,
+        "schema_version: 1\ntargets:\n  T1:\n    name: IN_REPO_WINS\n    kind: work\n    status: identified\n    value: 5\n    cost: 3\n    acceptance:\n      - a\n    origin: manual\n    discovered: 2026-01-01\n",
+    )
+    .unwrap();
+
+    let mut shadow_file = store::shadow_path(shadow.path(), work.path());
+    std::fs::create_dir_all(&shadow_file).unwrap();
+    shadow_file.push("bullseye.yaml");
+    std::fs::write(
+        &shadow_file,
+        "schema_version: 1\ntargets:\n  T1:\n    name: SHADOW_SHOULD_LOSE\n    kind: work\n    status: identified\n    value: 5\n    cost: 3\n    acceptance:\n      - a\n    origin: manual\n    discovered: 2026-01-01\n",
+    )
+    .unwrap();
+
+    let text = text_from_call_result(
+        handle_list(ListTool {
+            cwd,
+            filter: "active".to_string(),
+        })
+        .expect("list should succeed"),
     );
-}
-
-#[test]
-fn configure_tool_rejects_unknown_mode() {
-    use bullseye::config;
-    use bullseye::handler::handle_configure;
-    use bullseye::tools::ConfigureTool;
-
-    let tmp = tempfile::tempdir().unwrap();
-    config::set_config_dir_override(Some(tmp.path().to_path_buf()));
-    struct Cleanup;
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            bullseye::config::set_config_dir_override(None);
-        }
-    }
-    let _cleanup = Cleanup;
-
-    let err = handle_configure(ConfigureTool {
-        mode: "sideways".to_string(),
-        root: None,
-    })
-    .expect_err("unknown mode must be rejected");
-    assert!(format!("{err:?}").contains("unknown storage mode"));
-    // Config file must not have been written.
-    assert!(!tmp.path().join("config.yaml").exists());
-}
-
-#[test]
-fn configure_tool_rejects_root_with_in_repo_mode() {
-    use bullseye::config;
-    use bullseye::handler::handle_configure;
-    use bullseye::tools::ConfigureTool;
-
-    let tmp = tempfile::tempdir().unwrap();
-    config::set_config_dir_override(Some(tmp.path().to_path_buf()));
-    struct Cleanup;
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            bullseye::config::set_config_dir_override(None);
-        }
-    }
-    let _cleanup = Cleanup;
-
-    let err = handle_configure(ConfigureTool {
-        mode: "in_repo".to_string(),
-        root: Some("/some/where".to_string()),
-    })
-    .expect_err("root+in_repo combination must be rejected");
-    assert!(format!("{err:?}").contains("root is only meaningful"));
+    assert!(
+        text.contains("IN_REPO_WINS"),
+        "in-repo precedence broken: {text}"
+    );
+    assert!(
+        !text.contains("SHADOW_SHOULD_LOSE"),
+        "shadow file should not have been consulted: {text}"
+    );
 }

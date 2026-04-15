@@ -214,12 +214,25 @@ pub struct GraphTool {
 /// Initialise a new targets file with a starter template.
 #[mcp_tool(
     name = "bullseye_init",
-    description = "Create a starter bullseye.yaml with a sample target. Refuses to overwrite an existing file — use bullseye_put for repos that already have targets."
+    description = "Create a starter bullseye.yaml with a sample target. \
+        Requires a `location` argument that is either \"in_repo\" (file is \
+        committed into the repo, for repos you own where the team uses bullseye) \
+        or \"external\" (file is stored in a shadow tree under \
+        ~/.local/share/bullseye/ mirroring the cwd's absolute path — for \
+        read-only repos, or personal use of bullseye). Refuses to create a \
+        file if one already exists at either location."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct InitTool {
-    /// Working directory (project root) where bullseye.yaml will be created.
+    /// Working directory (project root) where bullseye.yaml will be
+    /// created (in-repo location) or whose absolute path will be
+    /// mirrored under the external shadow root.
     pub cwd: String,
+
+    /// Where to store the new bullseye.yaml: "in_repo" or "external".
+    /// Ask the user if you don't know. This is a per-repo choice, not
+    /// a machine-wide one — pick it once per repo at init time.
+    pub location: String,
 
     /// Project name for the sample target context (e.g., "my-app").
     #[serde(default)]
@@ -229,7 +242,12 @@ pub struct InitTool {
 /// Import targets from a markdown file into YAML.
 #[mcp_tool(
     name = "bullseye_import",
-    description = "Import targets from a markdown file into bullseye.yaml. Parses the markdown format produced by other repos' /cv skills. Tolerant of minor formatting variations. Refuses to overwrite an existing bullseye.yaml — use this for initial migration only. Requires an explicit `path` to the markdown source."
+    description = "Import targets from a markdown file into bullseye.yaml. Parses \
+        the markdown format produced by other repos' /cv skills. Tolerant of minor \
+        formatting variations. Requires `path` (the markdown source) and \
+        `location` (\"in_repo\" or \"external\" — same semantics as bullseye_init). \
+        Refuses to overwrite an existing bullseye.yaml in either location unless \
+        `force: true`."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ImportTool {
@@ -239,6 +257,10 @@ pub struct ImportTool {
     /// Path to the markdown file to import (required).
     #[serde(default)]
     pub path: Option<String>,
+
+    /// Where to write the resulting bullseye.yaml: "in_repo" or "external".
+    /// Same semantics as bullseye_init's location field.
+    pub location: String,
 
     /// If true, overwrite an existing bullseye.yaml (default: false).
     #[serde(default)]
@@ -399,27 +421,6 @@ pub struct ConvergenceTool {
     pub skip_invariants: Option<bool>,
 }
 
-/// Configure bullseye's machine-wide storage mode.
-#[mcp_tool(
-    name = "bullseye_configure",
-    description = "Record the user's choice of storage mode. Writes ~/.config/bullseye/config.yaml. \
-        Call this after asking the user 'Store targets where? in_repo (commit bullseye.yaml into \
-        the repo — you own it, team uses bullseye) or external (shadow tree under \
-        ~/.local/share/bullseye/ — read-only repo, or personal use of bullseye)'. \
-        Accepts `mode: in_repo | external`. Optional `root` overrides the default external root \
-        (~/.local/share/bullseye). Call this once per machine, then resume normal tool use."
-)]
-#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
-pub struct ConfigureTool {
-    /// Storage mode: "in_repo" or "external".
-    pub mode: String,
-
-    /// Optional external root directory (default: ~/.local/share/bullseye).
-    /// Ignored when mode is "in_repo".
-    #[serde(default)]
-    pub root: Option<String>,
-}
-
 tool_box!(
     TargetTools,
     [
@@ -438,7 +439,6 @@ tool_box!(
         PortfolioTool,
         SummaryTool,
         VerifyTool,
-        ConvergenceTool,
-        ConfigureTool
+        ConvergenceTool
     ]
 );
