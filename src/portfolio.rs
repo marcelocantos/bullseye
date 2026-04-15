@@ -249,8 +249,9 @@ pub fn discover_repos(root: &Path, max_depth: usize, momentum: &[Momentum]) -> P
             ft.wsjf = if ft.cost > 0.0 {
                 (ft.value / ft.cost) * ft.momentum * ft.enabler_boost
             } else {
-                // cost=0 shouldn't happen (Fibonacci scale starts at 1),
-                // but avoid division by zero.
+                // cost=0 means "not set at repo scope" (portfolio metadata
+                // is optional since 🎯T11). These targets score 0 in WSJF
+                // and won't rank in cross-repo prioritisation.
                 0.0
             };
         }
