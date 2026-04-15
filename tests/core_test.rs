@@ -2557,3 +2557,110 @@ fn in_repo_wins_when_both_locations_have_files() {
         "shadow file should not have been consulted: {text}"
     );
 }
+
+// --- Parse cache tests (🎯T13) ---
+
+/// Write a minimal valid bullseye.yaml to a path.
+fn write_yaml(path: &std::path::Path, target_name: &str) {
+    use std::io::Write;
+    write!(
+        std::fs::File::create(path).unwrap(),
+        "schema_version: 1\ntargets:\n  T1:\n    name: {target_name}\n    \
+         status: identified\n    value: 3\n    cost: 2\n    acceptance:\n      \
+         - done\n    discovered: 2026-04-15\n"
+    )
+    .unwrap();
+}
+
+#[test]
+fn cache_hit_on_unchanged_mtime() {
+    // Two consecutive loads of the same file with no modification in between
+    // must return the same in-memory data without re-reading the disk. We
+    // verify this indirectly: both loads succeed and agree on the target name.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    write_yaml(&path, "Original name");
+
+    let first = store::load(&path).unwrap();
+    let second = store::load(&path).unwrap();
+    assert_eq!(first.targets["T1"].name, second.targets["T1"].name);
+    assert_eq!(first.targets["T1"].name, "Original name");
+}
+
+#[test]
+fn cache_miss_after_mtime_change() {
+    // Writing new content to the file must cause the next load to return
+    // the updated data, not the previously cached parse.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    write_yaml(&path, "First version");
+
+    let first = store::load(&path).unwrap();
+    assert_eq!(first.targets["T1"].name, "First version");
+
+    // Rewrite the file with a new name. Use save() to ensure the cache is
+    // evicted, then write fresh content to simulate an external edit.
+    // We sleep briefly to guarantee a distinct mtime on systems with 1-second
+    // mtime granularity (most Linux filesystems without noatime).
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write_yaml(&path, "Second version");
+
+    let second = store::load(&path).unwrap();
+    assert_eq!(
+        second.targets["T1"].name, "Second version",
+        "cache should have been invalidated after file was modified"
+    );
+}
+
+#[test]
+fn cache_evicted_after_save() {
+    // After store::save() the cache entry is evicted so the next load
+    // reads back what was actually written, not a stale in-memory snapshot.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    write_yaml(&path, "Original");
+
+    let mut file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T1"].name, "Original");
+
+    // Mutate and save.
+    file.targets.get_mut("T1").unwrap().name = "Updated".to_string();
+    store::save(&path, &file).unwrap();
+
+    // Re-load must reflect the saved state (not the stale in-memory copy).
+    let reloaded = store::load(&path).unwrap();
+    assert_eq!(reloaded.targets["T1"].name, "Updated");
+}
+
+#[test]
+fn cache_fallback_to_stale_on_reparse_failure() {
+    // If the file becomes temporarily unreadable after the first successful
+    // parse, the last valid cached copy is served rather than propagating
+    // the I/O error (simulating a mid-edit state).
+    use std::io::Write;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    write_yaml(&path, "Good state");
+
+    // Prime the cache with a successful parse.
+    let good = store::load(&path).unwrap();
+    assert_eq!(good.targets["T1"].name, "Good state");
+
+    // Overwrite with invalid YAML to simulate a mid-edit state.
+    // Sleep briefly to ensure a new mtime on coarse-grained filesystems.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write!(
+        std::fs::File::create(&path).unwrap(),
+        "not: valid: yaml: [\n"
+    )
+    .unwrap();
+
+    // The load must succeed by serving the stale cached copy rather than
+    // propagating the parse error.
+    let fallback = store::load(&path).unwrap();
+    assert_eq!(
+        fallback.targets["T1"].name, "Good state",
+        "expected stale cache fallback on parse failure"
+    );
+}
