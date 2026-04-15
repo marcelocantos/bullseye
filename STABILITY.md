@@ -9,40 +9,56 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.15.0. Changes since v0.14.0 affecting the
+Snapshot as of v0.16.0. Changes since v0.15.0 affecting the
 interaction surface:
 
-- **External storage mode added** (🎯T12). Bullseye now requires a
-  one-time machine-wide choice between two storage modes, recorded
-  at `~/.config/bullseye/config.yaml`:
-  - `mode: in_repo` — `bullseye.yaml` lives in the repo, discovered
-    by walking up from `cwd` (original behaviour).
-  - `mode: external` — `bullseye.yaml` lives in a shadow tree under
-    `storage.root` (default `~/.local/share/bullseye/`) mirroring
-    the absolute `cwd`. Discovery walks up the shadow tree the same
-    way in-repo mode walks up the real tree. Path-driven; no
-    git-remote, host/org/repo, or layout assumptions.
+- **Per-repo storage, no machine-wide config** (redesign of 🎯T12).
+  The v0.15.0 machine-wide `~/.config/bullseye/config.yaml` and
+  `bullseye_configure` tool are **removed**. Location is now a
+  per-repo property, encoded by where `bullseye.yaml` lives on disk:
+  - `in_repo` — `bullseye.yaml` inside the project, discovered by
+    walking up from `cwd`.
+  - `external` — `bullseye.yaml` in a shadow tree under
+    `~/.local/share/bullseye/` mirroring the absolute `cwd`.
+  Every tool calls `discover_anywhere(cwd)`, which checks the
+  in-repo walk-up first and then the shadow walk-up. If both exist
+  (edge case), **in-repo wins**. There is no config file to sync
+  across machines, no global default, and no machine-wide state.
 
-  A new `bullseye_configure` MCP tool records the choice. Until it
-  is called, every other tool returns a structured error containing
-  the first-run prompt for the agent to relay to the user. The
-  prompt wording is locked in `config::FIRST_RUN_PROMPT`:
-  "Store targets where? in_repo — commit bullseye.yaml into the
-  repo (you own it, team uses bullseye). external — shadow tree
-  under ~/.local/share/bullseye/ (read-only repo, or personal use
-  of bullseye). Answer: in_repo or external. Machine-wide; edit
-  ~/.config/bullseye/config.yaml to change."
+- **`bullseye_init` requires `location`** — `"in_repo"` or
+  `"external"`. Called without it, the tool returns the locked
+  prompt (`config::LOCATION_PROMPT`) so the agent can ask the user.
+  Refuses to create a file if one already exists in either location.
 
-  Invariant: every tool entry point terminates in success-with-config
-  or an explicit actionable error; malformed config, filesystem
-  errors, and unknown modes surface as hard errors with no silent
-  fallback.
+- **`bullseye_import` requires `location`** — same semantics as
+  `bullseye_init`. Also refuses to overwrite an existing file in
+  either location unless `force: true`.
 
-- **Portfolio-level WSJF ranking** (🎯T2.3). `bullseye_portfolio`
-  now ranks repos by aggregate WSJF, with per-target momentum
-  multipliers and cross-repo enabler-boost propagation. The
-  `momentum` parameter accepts a list of `{id, multiplier}` entries.
-  Cross-repo edges (`cross_enables`) are resolved during the scan.
+- **`bullseye_put` no longer auto-creates** — returns the locked
+  prompt (via `load_file`'s not-found message) when no targets file
+  exists for `cwd`. Forces the location choice to happen once,
+  explicitly, at `bullseye_init` time rather than on an arbitrary
+  first `put`.
+
+- **`bullseye_configure` removed.** `config::Config`,
+  `config::Mode`, `config::Storage`, `config::ConfigError`,
+  `config::FIRST_RUN_PROMPT`, and `config::load`/`save` are gone.
+  The remaining public surface of the module is
+  `config::Location`, `config::external_root`,
+  `config::expand_tilde`, `config::LOCATION_PROMPT`, and
+  `config::set_external_root_override` (tests only).
+
+- **Invariant retained**: every tool entry terminates in either a
+  successful result or an explicit actionable error. Missing-file
+  errors embed the locked prompt so the agent can route the user to
+  `bullseye_init` in one hop.
+
+Earlier changes still in effect from v0.15.0:
+- **Portfolio-level WSJF ranking across repos** (🎯T2.3).
+  `bullseye_portfolio` ranks repos by aggregate WSJF with per-target
+  `momentum` multipliers and cross-repo enabler-boost propagation via
+  `cross_enables` edges. The `momentum` parameter shape is a list of
+  `{id, multiplier}` entries (same shape as `bullseye_summary`).
 
 Earlier changes still in effect from v0.14.0:
 - **`bullseye_render` removed** (🎯T10). Markdown rendering is deleted

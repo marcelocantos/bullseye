@@ -209,7 +209,8 @@ targets:
     achieved: 2026-04-15
   T12.1:
     name: Bullseye offers first-run storage-mode prompt via MCP elicitation when clients support it, with timeout fallback to error-message path
-    status: identified
+    status: achieved
+    achieved: 2026-04-15
     value: 3.0
     cost: 5.0
     acceptance:

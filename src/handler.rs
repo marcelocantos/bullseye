@@ -13,7 +13,7 @@ use rust_mcp_sdk::schema::{
     CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, RpcError,
 };
 
-use crate::config::{self, Config, ConfigError, Mode, Storage};
+use crate::config::{self, LOCATION_PROMPT, Location};
 use crate::graph;
 use crate::import;
 use crate::ops;
@@ -63,7 +63,6 @@ impl ServerHandler for TargetHandler {
             TargetTools::SummaryTool(t) => handle_summary(t),
             TargetTools::VerifyTool(t) => handle_verify(t),
             TargetTools::ConvergenceTool(t) => handle_convergence(t),
-            TargetTools::ConfigureTool(t) => handle_configure(t),
         }
     }
 }
@@ -82,54 +81,23 @@ fn err(msg: impl Into<String>) -> ToolResult {
     Err(tool_err(msg))
 }
 
-/// Load the machine-wide storage config, or translate its absence /
-/// brokenness into a tool error the agent can act on. The
-/// `NotConfigured` variant embeds the locked first-run prompt and
-/// directs the agent to call `bullseye_configure`.
-fn ensure_configured() -> Result<Config, CallToolError> {
-    config::load().map_err(|e| tool_err(e.to_string()))
-}
-
 fn load_file(cwd: &str) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {
-    let cfg = ensure_configured()?;
     let dir = Path::new(cwd);
-    let path = store::discover_with_config(dir, &cfg)
-        .ok_or_else(|| tool_err(no_targets_file_message(dir, &cfg)))?;
+    let path =
+        store::discover_anywhere(dir).ok_or_else(|| tool_err(no_targets_file_message(dir)))?;
     let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
     Ok((path, file))
 }
 
-/// Load the targets file, or create an empty one if none exists.
-fn load_or_create_file(
-    cwd: &str,
-) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {
-    let cfg = ensure_configured()?;
-    let dir = Path::new(cwd);
-    if let Some(path) = store::discover_with_config(dir, &cfg) {
-        let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
-        Ok((path, file))
-    } else {
-        let path = store::create_default_with_config(dir, &cfg).map_err(tool_err)?;
-        let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
-        Ok((path, file))
-    }
-}
-
-/// Explanatory text when `discover_with_config` finds nothing. Names
-/// the expected location so the agent (and the user) can see where
-/// bullseye looked.
-fn no_targets_file_message(cwd: &Path, cfg: &Config) -> String {
-    match cfg.storage.mode {
-        Mode::InRepo => format!(
-            "no bullseye.yaml found for {} (in_repo mode; expected somewhere at or above the cwd)",
-            cwd.display()
-        ),
-        Mode::External => format!(
-            "no bullseye.yaml found for {} (external mode; expected under shadow root {})",
-            cwd.display(),
-            cfg.effective_root().display()
-        ),
-    }
+/// Explanatory text when `discover_anywhere` finds nothing. Routes
+/// the agent to `bullseye_init` with the locked location prompt.
+fn no_targets_file_message(cwd: &Path) -> String {
+    format!(
+        "no bullseye.yaml found for {} (checked in-repo walk-up from cwd and shadow tree under {}).\n\n{}",
+        cwd.display(),
+        config::external_root().display(),
+        LOCATION_PROMPT,
+    )
 }
 
 fn save_file(path: &Path, file: &crate::schema::TargetsFile) -> Result<(), CallToolError> {
@@ -224,7 +192,7 @@ fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
 }
 
 fn handle_put(t: crate::tools::PutTool) -> ToolResult {
-    let (path, mut file) = load_or_create_file(&t.cwd)?;
+    let (path, mut file) = load_file(&t.cwd)?;
 
     // Resolve target ID. None → auto-assign a new top-level ID.
     let (id, is_create) = match t.id.clone() {
@@ -579,13 +547,21 @@ fn handle_graph(t: crate::tools::GraphTool) -> ToolResult {
 }
 
 pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
-    let cfg = ensure_configured()?;
     let dir = Path::new(&t.cwd);
 
-    // Refuse if a targets file already exists for this cwd under the
-    // configured mode.
-    if store::discover_with_config(dir, &cfg).is_some() {
-        return err("bullseye.yaml already exists — use bullseye_put to add targets");
+    // `location` is required. An empty or unknown value returns the
+    // locked prompt so the agent can ask the user.
+    let location =
+        Location::parse(&t.location).map_err(|e| tool_err(format!("{e}\n\n{LOCATION_PROMPT}",)))?;
+
+    // Refuse if a targets file already exists in *either* location.
+    // Two files for the same repo would make discovery ambiguous; the
+    // user must resolve before init can proceed.
+    if let Some(existing) = store::discover_anywhere(dir) {
+        return err(format!(
+            "bullseye.yaml already exists at {} — use bullseye_put to add targets",
+            existing.display(),
+        ));
     }
 
     let project = t.project_name.unwrap_or_else(|| {
@@ -593,26 +569,33 @@ pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
             .map_or("my-project".into(), |n| n.to_string_lossy().into_owned())
     });
 
-    let path = store::create_starter_with_config(dir, &cfg, &project).map_err(tool_err)?;
+    let path = store::create_at(dir, location, &project).map_err(tool_err)?;
     let _ = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
 
     text_result(format!(
-        "Created starter targets file at {}\n\
+        "Created starter targets file at {} (location: {}).\n\
          Contains 1 sample target (🎯T1) — edit or replace it with your own.",
         path.display(),
+        location.as_str(),
     ))
 }
 
 fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
-    let cfg = ensure_configured()?;
     let dir = Path::new(&t.cwd);
 
-    // Refuse to overwrite unless force is set.
-    if !t.force && store::discover_with_config(dir, &cfg).is_some() {
-        return err(
-            "bullseye.yaml already exists — use force: true to overwrite, \
+    let location =
+        Location::parse(&t.location).map_err(|e| tool_err(format!("{e}\n\n{LOCATION_PROMPT}")))?;
+
+    // Refuse to overwrite unless force is set. Look in both locations
+    // — an existing file anywhere is a collision.
+    if !t.force
+        && let Some(existing) = store::discover_anywhere(dir)
+    {
+        return err(format!(
+            "bullseye.yaml already exists at {} — use force: true to overwrite, \
              or use bullseye_put to modify existing targets",
-        );
+            existing.display(),
+        ));
     }
 
     // The import source must be an explicit path — no auto-discovery.
@@ -637,8 +620,8 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
         ));
     }
 
-    // Write to the configured target path (in-repo or shadow).
-    let yaml_path = store::target_path_for_new(dir, &cfg);
+    // Write to the requested target path (in-repo or shadow).
+    let yaml_path = store::target_path_for_new(dir, location);
     if let Some(parent) = yaml_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| tool_err(format!("failed to create {}: {e}", parent.display())))?;
@@ -647,11 +630,12 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
 
     text_result(format!(
         "Imported {} targets from {}\n\
-         Written to {}\n\
+         Written to {} (location: {})\n\
          Validation: OK",
         file.targets.len(),
         md_path.display(),
         yaml_path.display(),
+        location.as_str(),
     ))
 }
 
@@ -673,15 +657,8 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
     // resolve (by upgrading bullseye), so we deliberately keep that
     // as a hard tool-call error. Silently degrading it would hide
     // the whole point of the version check.
-    // startup_context is a graceful-degradation tool — but config
-    // state is a different kind of problem: a session that begins
-    // without the agent knowing about the missing config will silently
-    // misbehave on the *next* call. Surface NotConfigured as a hard
-    // error here so the agent is prompted to run bullseye_configure
-    // before anything else.
-    let cfg = ensure_configured()?;
     let dir = Path::new(&t.cwd);
-    let Some(path) = store::discover_with_config(dir, &cfg) else {
+    let Some(path) = store::discover_anywhere(dir) else {
         return text_result(graph::startup_context_no_file(&dir.display().to_string()));
     };
     match store::load(&path) {
@@ -698,17 +675,11 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
 }
 
 fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
-    let cfg = ensure_configured()?;
-    // Default root depends on mode: in_repo mode defaults to ~/work as
-    // before; external mode defaults to the configured shadow root so
-    // the portfolio scan walks the same tree that discover does.
-    let default_root: std::path::PathBuf = match cfg.storage.mode {
-        Mode::InRepo => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/marcelo".to_string());
-            std::path::PathBuf::from(format!("{home}/work"))
-        }
-        Mode::External => cfg.effective_root(),
-    };
+    // Default root is the user's workspace (`~/work`). Callers
+    // wanting to scan external-mode repos pass the external shadow
+    // root explicitly (e.g. `~/.local/share/bullseye`).
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/marcelo".to_string());
+    let default_root = std::path::PathBuf::from(format!("{home}/work"));
     let root = t
         .root
         .as_deref()
@@ -743,9 +714,8 @@ pub fn handle_convergence(
 ) -> Result<CallToolResult, CallToolError> {
     use crate::convergence;
 
-    let cfg = ensure_configured()?;
     let dir = Path::new(&t.cwd);
-    let Some(path) = store::discover_with_config(dir, &cfg) else {
+    let Some(path) = store::discover_anywhere(dir) else {
         return text_result(graph::startup_context_no_file(&dir.display().to_string()));
     };
     let repo_root = repo_root_from_targets_path(&path, dir);
@@ -846,53 +816,6 @@ fn sawmill_tool_name(tool: ops::SawmillTool) -> &'static str {
     }
 }
 
-pub fn handle_configure(t: crate::tools::ConfigureTool) -> ToolResult {
-    let mode = Mode::parse(&t.mode).map_err(tool_err)?;
-
-    // Validate root: only meaningful for external mode; a supplied
-    // root in in_repo mode is a user mistake worth flagging rather
-    // than silently keeping.
-    let root = match (mode, t.root.as_deref()) {
-        (Mode::InRepo, Some(r)) if !r.is_empty() => {
-            return err(format!(
-                "root is only meaningful with mode: external (got root={r:?} with mode: in_repo). \
-                 Re-call with mode: external, or omit root."
-            ));
-        }
-        (Mode::External, Some(r)) if !r.is_empty() => Some(config::expand_tilde(Path::new(r))),
-        _ => None,
-    };
-
-    let cfg = Config {
-        storage: Storage { mode, root },
-    };
-    config::save(&cfg).map_err(tool_err)?;
-
-    let summary = match cfg.storage.mode {
-        Mode::InRepo => format!(
-            "Configured bullseye: mode=in_repo.\nConfig written to {}.\n\
-             Targets will be stored as bullseye.yaml inside each repo you work on.",
-            config::config_path().display(),
-        ),
-        Mode::External => format!(
-            "Configured bullseye: mode=external, root={}.\nConfig written to {}.\n\
-             Targets will be stored under the shadow tree at that root.",
-            cfg.effective_root().display(),
-            config::config_path().display(),
-        ),
-    };
-    text_result(summary)
-}
-
-/// The top-level `ConfigError` type is useful to callers who need to
-/// discriminate paths; the handler here treats every variant as a
-/// tool error. Kept as a thin wrapper so the compiler checks we
-/// handle each variant if more are added.
-#[allow(dead_code)]
-fn format_config_error(e: &ConfigError) -> String {
-    e.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -927,41 +850,33 @@ targets:
     discovered: 2026-03-01
 "#;
 
-    /// RAII guard: clears the thread-local config override on drop so
-    /// a test panic doesn't leak state into the next test sharing the
-    /// same worker thread.
-    pub(super) struct ConfigScope {
-        _config_tmp: tempfile::TempDir,
+    /// RAII guard: redirects the external shadow root to an isolated
+    /// tempdir so any external-mode discovery attempts can't touch the
+    /// developer's real `~/.local/share/bullseye`. Cleared on drop.
+    pub(super) struct ShadowScope {
+        _shadow_tmp: tempfile::TempDir,
     }
 
-    impl Drop for ConfigScope {
+    impl Drop for ShadowScope {
         fn drop(&mut self) {
-            config::set_config_dir_override(None);
+            config::set_external_root_override(None);
         }
     }
 
-    /// Stand up an in-repo-mode config in an isolated config dir, plus
-    /// a tempdir with the fixture `bullseye.yaml` at its root. Handler
-    /// tests drop both guards together to guarantee isolation.
-    fn fixture() -> (tempfile::TempDir, ConfigScope, String) {
+    /// Stand up an in-repo fixture at a fresh tempdir and isolate the
+    /// external shadow root so both discovery branches are deterministic.
+    fn fixture() -> (tempfile::TempDir, ShadowScope, String) {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE_YAML).unwrap();
         let cwd = tmp.path().to_string_lossy().to_string();
 
-        let cfg_tmp = tempfile::tempdir().unwrap();
-        config::set_config_dir_override(Some(cfg_tmp.path().to_path_buf()));
-        config::save(&Config {
-            storage: Storage {
-                mode: Mode::InRepo,
-                root: None,
-            },
-        })
-        .expect("save in-repo config");
+        let shadow_tmp = tempfile::tempdir().unwrap();
+        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
         (
             tmp,
-            ConfigScope {
-                _config_tmp: cfg_tmp,
+            ShadowScope {
+                _shadow_tmp: shadow_tmp,
             },
             cwd,
         )

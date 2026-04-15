@@ -4,11 +4,12 @@ An MCP server for managing **targets** — desired project states
 expressed as testable properties, with dependency tracking and
 frontier computation.
 
-Targets live in `bullseye.yaml` (source of truth). Storage is
-machine-wide configurable — bullseye either reads `bullseye.yaml`
-in-repo (walking up from the caller's working directory) or stores it
-in an external shadow tree keyed to the cwd's absolute path. See
-[Storage modes](#storage-modes) below.
+Targets live in `bullseye.yaml` (source of truth). Each repo chooses —
+once, at `bullseye_init` time — whether its `bullseye.yaml` lives
+**in-repo** (committed alongside the code) or **external** (in a shadow
+tree under `~/.local/share/bullseye/` mirroring the cwd's absolute path).
+Discovery checks both locations and uses whichever already exists. See
+[Storage locations](#storage-locations) below.
 
 ## Installation
 
@@ -46,43 +47,46 @@ claude mcp add --scope user bullseye -- bullseye
 
 The server communicates over stdio using the MCP protocol.
 
-## Storage modes
+## Storage locations
 
-On first use, bullseye requires a one-time choice recorded at
-`~/.config/bullseye/config.yaml`:
+Each repo picks its location **once**, when you call `bullseye_init`:
 
-| Mode | Where `bullseye.yaml` lives | Use when |
-|------|-----------------------------|----------|
+| Location | Where `bullseye.yaml` lives | Use when |
+|----------|-----------------------------|----------|
 | `in_repo` | Inside the repo, discovered by walking up from `cwd`. | You own the repo and the team has adopted bullseye. |
-| `external` | Shadow tree under `~/.local/share/bullseye/` mirroring the cwd's absolute path. Discovery walks up the shadow tree the same way `in_repo` walks up the real tree. | Repo is read-only to you (corporate repos where bullseye isn't adopted), or targets are personal to you. |
+| `external` | Shadow tree under `~/.local/share/bullseye/` mirroring the cwd's absolute path. Discovery walks up the shadow tree the same way it walks up the real tree. | Repo is read-only to you (corporate repos where bullseye isn't adopted), or targets are personal to you. |
 
-External mode is purely path-driven — no assumptions about git
-remotes or `host/org/repo` layouts — so monorepos, non-git
-directories, and unconventional workspaces all resolve identically.
+External mode is purely path-driven — no assumptions about git remotes
+or `host/org/repo` layouts — so monorepos, non-git directories, and
+unconventional workspaces all resolve identically.
 
-Until configured, every tool call returns an actionable error
-instructing the agent to ask the user and then call
-`bullseye_configure`. Configure explicitly:
+**Discovery is automatic after init.** Every target-operating tool calls
+`discover_anywhere(cwd)`, which checks the in-repo walk-up first and
+then the shadow walk-up. Whichever file already exists wins. If both
+exist (edge case — e.g. a moved repo), **in-repo wins**: an explicit
+committed file is always authoritative.
+
+**No global config file.** Each repo's location is encoded by where
+its `bullseye.yaml` lives on disk. There's nothing to sync across
+machines, no `~/.config/bullseye/` directory, and no machine-wide
+setting to get wrong.
+
+**First time in a new repo:**
 
 ```
-# Team-adopted repo (commits bullseye.yaml alongside code):
-bullseye_configure mode=in_repo
+# Pick in-repo (team-adopted repo, committing alongside code):
+bullseye_init location=in_repo
 
-# Personal or read-only use (shadow tree under ~/.local/share/bullseye/):
-bullseye_configure mode=external
-# or with a custom root:
-bullseye_configure mode=external root=/path/to/data
+# Or external (read-only / corporate repo, or personal use):
+bullseye_init location=external
 ```
 
-The config file is small, hand-editable YAML, and can be version-
-controlled (`yadm add`, `stow`, `chezmoi`, etc.) if you want the
-mode to follow you across machines.
+After that, every other bullseye tool just works.
 
 ## Tools
 
-Bullseye exposes 18 MCP tools. All target-operating tools accept a
-`cwd` parameter to locate the nearest `bullseye.yaml` under the
-configured storage mode.
+Bullseye exposes 17 MCP tools. All target-operating tools accept a
+`cwd` parameter; discovery resolves the targets file automatically.
 
 | Tool | Description |
 |------|-------------|
@@ -102,7 +106,6 @@ configured storage mode.
 | `bullseye_portfolio` | Cross-repo portfolio summary with frontier targets, including cross-repo edges |
 | `bullseye_summary` | Consolidated status overview: groups, frontier ordered by distance + fanout, blocked, stale |
 | `bullseye_convergence` | End-to-end convergence evaluation: runs `make bullseye` for invariants, scans git for unreleased fixes, emits summary with frontier detail inline, and computes a deterministic next-action recommendation. Single call, replaces the old multi-tool `/cv` worker. |
-| `bullseye_configure` | Record the one-time storage-mode choice (`in_repo` or `external`, with optional external `root`). Writes `~/.config/bullseye/config.yaml`. |
 
 See [agents-guide.md](docs/agents-guide.md) for detailed tool
 parameters, the bullseye.yaml schema, usage workflows, and a
