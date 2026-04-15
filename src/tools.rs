@@ -399,6 +399,27 @@ pub struct ConvergenceTool {
     pub skip_invariants: Option<bool>,
 }
 
+/// Configure bullseye's machine-wide storage mode.
+#[mcp_tool(
+    name = "bullseye_configure",
+    description = "Record the user's choice of storage mode. Writes ~/.config/bullseye/config.yaml. \
+        Call this after asking the user 'Store targets where? in_repo (commit bullseye.yaml into \
+        the repo — you own it, team uses bullseye) or external (shadow tree under \
+        ~/.local/share/bullseye/ — read-only repo, or personal use of bullseye)'. \
+        Accepts `mode: in_repo | external`. Optional `root` overrides the default external root \
+        (~/.local/share/bullseye). Call this once per machine, then resume normal tool use."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ConfigureTool {
+    /// Storage mode: "in_repo" or "external".
+    pub mode: String,
+
+    /// Optional external root directory (default: ~/.local/share/bullseye).
+    /// Ignored when mode is "in_repo".
+    #[serde(default)]
+    pub root: Option<String>,
+}
+
 tool_box!(
     TargetTools,
     [
@@ -417,6 +438,7 @@ tool_box!(
         PortfolioTool,
         SummaryTool,
         VerifyTool,
-        ConvergenceTool
+        ConvergenceTool,
+        ConfigureTool
     ]
 );

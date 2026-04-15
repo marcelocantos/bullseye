@@ -9,10 +9,60 @@ testable properties. It stores targets in
 `bullseye.yaml`, computes which are unblocked (the frontier),
 and detects gaps in verification coverage.
 
-Every tool accepts a `cwd` parameter. The server walks up from `cwd`
-to find the nearest `bullseye.yaml`.
+Every target-operating tool accepts a `cwd` parameter. Where the
+targets file is discovered depends on the configured storage mode.
+
+## Storage modes and first-run flow
+
+Bullseye is machine-wide configurable via `~/.config/bullseye/config.yaml`:
+
+```yaml
+storage:
+  mode: in_repo          # or "external"
+  # root: ~/.local/share/bullseye   # only used in external mode
+```
+
+- `in_repo` — `bullseye.yaml` lives inside the project. Discovery
+  walks up from `cwd`.
+- `external` — `bullseye.yaml` lives in a shadow tree under
+  `storage.root` (default `~/.local/share/bullseye/`). The shadow path
+  mirrors the absolute `cwd`, so `/Users/alice/work/acme/api` maps to
+  `~/.local/share/bullseye/Users/alice/work/acme/api/bullseye.yaml`.
+  Discovery walks up the shadow tree identically to in-repo mode.
+  Path-driven — no git remote parsing.
+
+### First-run flow for agents
+
+Every tool call requires the config to exist. If it doesn't, the
+server returns an actionable error containing a prompt you must pass
+to the user verbatim:
+
+> **Store targets where?**
+> - **in_repo** — commit `bullseye.yaml` into the repo (you own it, team uses bullseye).
+> - **external** — shadow tree under `~/.local/share/bullseye/` (read-only repo, or personal use of bullseye).
+>
+> Answer: `in_repo` or `external`. Machine-wide; edit `~/.config/bullseye/config.yaml` to change.
+
+After the user answers, call `bullseye_configure` with
+`mode=in_repo` or `mode=external` (optionally `root=<path>` to
+override the default external root). The tool writes the config
+file; subsequent calls proceed normally. Do not retry the original
+tool until `bullseye_configure` succeeds.
+
+Malformed config, filesystem errors, and unknown modes surface as
+hard errors — the server never silently falls back to a default.
 
 ## Tools
+
+### bullseye_configure
+
+Record the one-time storage-mode choice. Call this exactly once per
+machine as part of the first-run flow above.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `mode` | string | required | `"in_repo"` or `"external"` |
+| `root` | string | — | External root directory (only valid with `mode: external`; defaults to `~/.local/share/bullseye`). Tildes are expanded. |
 
 ### bullseye_list
 

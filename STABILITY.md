@@ -9,9 +9,42 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.14.0. Changes since v0.13.0 affecting the
+Snapshot as of v0.15.0. Changes since v0.14.0 affecting the
 interaction surface:
 
+- **External storage mode added** (🎯T12). Bullseye now requires a
+  one-time machine-wide choice between two storage modes, recorded
+  at `~/.config/bullseye/config.yaml`:
+  - `mode: in_repo` — `bullseye.yaml` lives in the repo, discovered
+    by walking up from `cwd` (original behaviour).
+  - `mode: external` — `bullseye.yaml` lives in a shadow tree under
+    `storage.root` (default `~/.local/share/bullseye/`) mirroring
+    the absolute `cwd`. Discovery walks up the shadow tree the same
+    way in-repo mode walks up the real tree. Path-driven; no
+    git-remote, host/org/repo, or layout assumptions.
+
+  A new `bullseye_configure` MCP tool records the choice. Until it
+  is called, every other tool returns a structured error containing
+  the first-run prompt for the agent to relay to the user. The
+  prompt wording is locked in `config::FIRST_RUN_PROMPT`:
+  "Store targets where? in_repo — commit bullseye.yaml into the
+  repo (you own it, team uses bullseye). external — shadow tree
+  under ~/.local/share/bullseye/ (read-only repo, or personal use
+  of bullseye). Answer: in_repo or external. Machine-wide; edit
+  ~/.config/bullseye/config.yaml to change."
+
+  Invariant: every tool entry point terminates in success-with-config
+  or an explicit actionable error; malformed config, filesystem
+  errors, and unknown modes surface as hard errors with no silent
+  fallback.
+
+- **Portfolio-level WSJF ranking** (🎯T2.3). `bullseye_portfolio`
+  now ranks repos by aggregate WSJF, with per-target momentum
+  multipliers and cross-repo enabler-boost propagation. The
+  `momentum` parameter accepts a list of `{id, multiplier}` entries.
+  Cross-repo edges (`cross_enables`) are resolved during the scan.
+
+Earlier changes still in effect from v0.14.0:
 - **`bullseye_render` removed** (🎯T10). Markdown rendering is deleted
   entirely — the render module, tool, and auto-render-on-save are gone.
   `bullseye_import` no longer auto-discovers markdown files; the `path`

@@ -179,6 +179,72 @@ targets:
       Doing this well upgrades every agent's target-creation behaviour without any per-agent prompt changes.
     origin: pageflip target-creation session 2026-04-14 — agent consistently populated value/cost at repo scope because the tool schema requires them, contradicting the design
     discovered: 2026-04-14
+  T12:
+    name: Bullseye supports external targets storage with a configured mode and a guided first-run flow
+    status: achieved
+    value: 8.0
+    cost: 8.0
+    observable: true
+    actual_cost: 8.0
+    acceptance:
+    - ~/.config/bullseye/config.yaml declares storage.mode as in_repo or external, with storage.root configurable (default ~/.local/share/bullseye)
+    - 'mode: in_repo preserves current walk-up discovery behaviour'
+    - 'mode: external resolves cwd by mirroring the absolute cwd path under storage.root as a shadow tree; external discover() walks up the shadow tree the same way in-repo discover() walks up the real tree'
+    - No git-remote parsing or host/org/repo assumptions — resolution is purely path-driven and works for monorepos, non-git directories, and unconventional layouts
+    - bullseye_portfolio in external mode roots scanning at storage.root
+    - Missing config causes every tool to return a structured, imperative error instructing the agent to ask the user and then call bullseye_configure
+    - A new bullseye_configure tool writes ~/.config/bullseye/config.yaml from validated mode and optional root parameters; rejects unknown modes; surfaces filesystem write errors
+    - When the client advertises elicitation capability, the server offers the prompt via elicitation with a bounded timeout; on timeout, decline, or empty response it falls back to the error-message path
+    - 'The elicitation prompt reads: ''Store targets where? in_repo — commit bullseye.yaml into the repo (you own it, team uses bullseye). external — shadow tree under ~/.local/share/bullseye/ (read-only repo, or personal use of bullseye). Answer: in_repo or external. Machine-wide; edit ~/.config/bullseye/config.yaml to change.'''
+    - Malformed config file is reported with a parse error naming the file and field, never silently treated as default
+    - No tool entry point returns empty/ambiguous success when configuration or resolution fails
+    - README and docs/agents-guide.md describe both modes, the first-run flow, and the bullseye_configure tool
+    context: 'Corporate adoption is blocked when the user can''t commit bullseye.yaml into managed repos. We need a supported external-storage mode, not a convention. Design points agreed in conversation 2026-04-15: (1) storage mode is an explicit setting, not auto-inferred; (2) external mode mirrors the cwd''s absolute path as a shadow tree under storage.root (default ~/.local/share/bullseye/) — purely path-driven, no git-remote or host/org/repo assumptions, so it works for monorepos, non-git dirs, and unconventional layouts; (3) external-mode discover() walks up the shadow tree identically to in-repo walk-up, keeping the algorithm symmetric; (4) MCP elicitation is unreliable across the client mix in use (Claude Code, opencode, Roo Code, Cline, VS Code extension) — detection via initialize capabilities is deterministic but ''advertised ≠ working'', so elicitation is a fast path with timeout + fallback, never the contract; (5) the fallback path must be easy for the agent to follow — a dedicated bullseye_configure tool is the single action it''s instructed to call, avoiding ad-hoc file writes; (6) invariant: every tool entry point terminates in either success-with-config or an explicit actionable error — no silent degradation, no infinite hangs. Personal-overlay mode (per-repo personal targets alongside in-repo team targets) was discussed and deferred — would bloat every tool''s surface area; revisit as a separate target if the need persists after real use.'
+    tags:
+    - storage
+    - mcp
+    - adoption
+    origin: conversation 2026-04-15 — corporate adoption where repos can't host bullseye.yaml
+    discovered: 2026-04-15
+    achieved: 2026-04-15
+  T12.1:
+    name: Bullseye offers first-run storage-mode prompt via MCP elicitation when clients support it, with timeout fallback to error-message path
+    status: identified
+    value: 3.0
+    cost: 5.0
+    acceptance:
+    - When the client advertises elicitation capability at initialize, the server offers the locked first-run prompt via rust_mcp_sdk::McpServer::request_elicitation on the first tool call that needs config
+    - Elicitation is wrapped in a bounded timeout (≤30s); on timeout, user decline, or empty response the server falls back to the error-message path, never hanging or silently succeeding
+    - On successful elicitation response, the server writes ~/.config/bullseye/config.yaml and continues with the originally-requested tool call
+    - Plumbing the Arc<dyn McpServer> runtime to individual tool handlers is done cleanly (e.g., stored on TargetHandler at initialize time) rather than by threading it through every function signature
+    - The existing error-message path remains the contract for clients that don't advertise elicitation; no regression in cross-client compatibility (opencode, Roo Code, VS Code Claude Code extension, Cline, Claude Code)
+    - 'Tests cover: elicitation-capable client successful prompt, timeout fallback, decline fallback, capability-absent client (uses error message only)'
+    context: 'Deferred from 🎯T12 in favour of shipping the error-message-only path first. rust-mcp-sdk 0.9.0 exposes `McpServer::request_elicitation` on the runtime; threading it to handlers is a moderate refactor (handlers are currently sync and take no runtime). Elicitation is a UX fast-path, not a correctness contract — the error-message path must remain fully functional regardless. Invariant from 🎯T12 still holds: every tool entry point terminates in either success-with-config or explicit actionable error. Client mix in use at the target corporate team: Claude Code, opencode, Roo Code, Cline, VS Code Claude Code extension — support varies, and ''advertised ≠ working'', so detection-plus-timeout is mandatory.'
+    depends_on:
+    - T12
+    tags:
+    - storage
+    - mcp
+    - elicitation
+    - ux
+    origin: forked from 🎯T12 during implementation on 2026-04-15
+    discovered: 2026-04-15
+  T13:
+    name: File-watch handlers are cheap — heavy work deferred and debounced
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - fsnotify event handlers do minimal work (mark dirty / enqueue), with no inline YAML parsing or validation on the event-handling goroutine
+    - Burst events for targets.yaml (editor save + formatter, or rapid edits) coalesce into a single reload via a 200–500ms debounce
+    - A flush/worker goroutine drains the dirty queue; if reload fails, the previous valid state remains served
+    - 'Lazy alternative is acceptable: parse on next query if no change has been observed since last parse — either approach satisfies the target so long as inline work on the event path is eliminated'
+    context: 'bullseye watches docs/targets.yaml (and likely a small number of related files) per repo. As more MCP servers run concurrently, the per-event work each does in response to file changes becomes the dominant cost (kernel notifications themselves are cheap). Apply the same pattern as mnemo 🎯T23: keep event handlers minimal (mark dirty / enqueue), defer parse + validation to a debounced flush or to query time. Debounce window 200–500ms coalesces editor save storms and formatter rewrites into a single reload. Scope here is smaller than mnemo''s because bullseye watches few files per repo, but the pattern is the same and the cost is low.'
+    tags:
+    - performance
+    - watching
+    origin: manual
+    discovered: 2026-04-15
   T2:
     name: Global portfolio view across all repos
     status: achieved
