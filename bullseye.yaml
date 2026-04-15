@@ -210,7 +210,6 @@ targets:
   T12.1:
     name: Bullseye offers first-run storage-mode prompt via MCP elicitation when clients support it, with timeout fallback to error-message path
     status: achieved
-    achieved: 2026-04-15
     value: 3.0
     cost: 5.0
     acceptance:
@@ -230,17 +229,21 @@ targets:
     - ux
     origin: forked from 🎯T12 during implementation on 2026-04-15
     discovered: 2026-04-15
+    achieved: 2026-04-15
   T13:
     name: File-watch handlers are cheap — heavy work deferred and debounced
-    status: identified
+    status: converging
     value: 3.0
     cost: 2.0
     acceptance:
-    - fsnotify event handlers do minimal work (mark dirty / enqueue), with no inline YAML parsing or validation on the event-handling goroutine
-    - Burst events for targets.yaml (editor save + formatter, or rapid edits) coalesce into a single reload via a 200–500ms debounce
-    - A flush/worker goroutine drains the dirty queue; if reload fails, the previous valid state remains served
-    - 'Lazy alternative is acceptable: parse on next query if no change has been observed since last parse — either approach satisfies the target so long as inline work on the event path is eliminated'
-    context: 'bullseye watches docs/targets.yaml (and likely a small number of related files) per repo. As more MCP servers run concurrently, the per-event work each does in response to file changes becomes the dominant cost (kernel notifications themselves are cheap). Apply the same pattern as mnemo 🎯T23: keep event handlers minimal (mark dirty / enqueue), defer parse + validation to a debounced flush or to query time. Debounce window 200–500ms coalesces editor save storms and formatter rewrites into a single reload. Scope here is smaller than mnemo''s because bullseye watches few files per repo, but the pattern is the same and the cost is low.'
+    - store::load() caches parsed TargetsFile keyed by absolute path, invalidated on mtime change
+    - Repeated tool calls against an unchanged bullseye.yaml do not re-parse YAML
+    - When the file is modified (mtime changes), the next call re-parses and serves fresh state
+    - If a re-parse fails (malformed YAML mid-edit), the previous valid cached state is preserved and served
+    - 'Thread safety: concurrent tool calls cannot race on the cache (std::sync::Mutex around HashMap<PathBuf, CacheEntry>)'
+    - 'Tests: cache hit on unchanged mtime, cache miss + refresh on changed mtime, cache eviction after save, fallback to cached state when reparse fails'
+    - No fsnotify/watcher dependency — lazy mtime-check approach satisfies the target without a file-watch event path
+    context: 'Bullseye has no file watcher (no notify/fsnotify crate). The event-handler premise in the original description was moot. The lazy alternative is the right approach: an mtime-keyed parse cache in store::load() eliminates repeated YAML parses for unchanged files without any watcher infrastructure. The debounce window in the original description applied to a watcher architecture that doesn''t exist; this implementation sidesteps it entirely.'
     tags:
     - performance
     - watching

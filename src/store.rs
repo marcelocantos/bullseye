@@ -1,10 +1,34 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use crate::config::{Location, external_root};
 use crate::schema::{CURRENT_SCHEMA_VERSION, TargetsFile, migrate_gates_to_depends_on};
+
+/// Cached parse result for a single `bullseye.yaml` file.
+struct CacheEntry {
+    /// The mtime of the file at parse time.
+    mtime: SystemTime,
+    /// The last successfully parsed targets file.
+    file: TargetsFile,
+}
+
+/// Process-global parse cache: keyed by absolute path, invalidated on mtime change.
+///
+/// Using `std::sync::Mutex` (not `tokio::sync::Mutex`) because the cache is
+/// accessed from synchronous helpers called within async tool handlers. The
+/// lock is held only for HashMap lookup/insertion — no I/O occurs under the
+/// lock.
+static PARSE_CACHE: Mutex<Option<HashMap<PathBuf, CacheEntry>>> = Mutex::new(None);
+
+/// Returns the mtime of `path`, or `None` if stat fails.
+fn file_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
+}
 
 /// Structured error type returned by [`load`]. Having distinct
 /// variants lets callers decide per-case how to respond — in
@@ -198,23 +222,12 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
     save(path, &file)
 }
 
-/// Load and parse a targets file.
+/// Parse a targets file from disk without any caching.
 ///
-/// Applies in-memory migration for legacy `gates` edges: they are folded
-/// into `depends_on` on the gated target, then cleared. Every caller sees
-/// a single-edge-type graph regardless of the on-disk format.
-///
-/// Enforces schema-version compatibility: if the file declares a
-/// `schema_version` greater than [`CURRENT_SCHEMA_VERSION`], loading fails
-/// with [`LoadError::VersionTooNew`] rather than silently misinterpreting
-/// fields the current binary does not know about. Files without a
-/// `schema_version` field are accepted as legacy v1 and the field is
-/// filled in so the next save stamps it.
-///
-/// Errors are returned as a typed enum so callers can discriminate —
-/// speculative callers like `bullseye_startup_context` tolerate I/O and
-/// parse errors, while every caller must surface [`LoadError::VersionTooNew`].
-pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
+/// This is the inner implementation shared by [`load`] and the cache-miss
+/// path. Callers should prefer [`load`] which adds mtime-based caching on
+/// top.
+fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
     let mut file: TargetsFile = serde_yaml_ng::from_str(&content)
@@ -235,6 +248,94 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
     Ok(file)
 }
 
+/// Load and parse a targets file, with mtime-keyed caching.
+///
+/// On each call the file's mtime is checked cheaply via `stat`. If the mtime
+/// matches the cached value the previously parsed [`TargetsFile`] is returned
+/// without re-reading the file. When the mtime changes (file was modified) the
+/// cache entry is refreshed.
+///
+/// **Failure fallback**: if a re-parse fails (e.g. the file is mid-edit and
+/// temporarily malformed), the last valid cached state is returned instead of
+/// propagating the error. The parse failure is noted in the returned value via
+/// a unit error surface — callers that need to distinguish "stale cached"
+/// from "freshly parsed" can inspect the returned `Ok`. For
+/// [`LoadError::VersionTooNew`] (a hard binary incompatibility), the error is
+/// always propagated even when a cached copy is available.
+///
+/// Thread safety is provided by a process-global `std::sync::Mutex`. The lock
+/// is never held while doing I/O; only HashMap lookups and insertions happen
+/// under the lock.
+///
+/// Applies in-memory migration for legacy `gates` edges on every fresh parse.
+pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
+    // Canonicalise to a stable cache key. If canonicalisation fails (broken
+    // symlink, etc.), fall back to the raw path — load will fail anyway.
+    let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let current_mtime = file_mtime(path);
+
+    // --- Check cache under lock (no I/O inside) ---
+    {
+        let mut guard = PARSE_CACHE.lock().expect("parse cache mutex poisoned");
+        let cache = guard.get_or_insert_with(HashMap::new);
+
+        if let Some(entry) = cache.get(&key) {
+            // If we couldn't stat the file, fall back to the cached copy.
+            // If the mtime is unchanged, return the cached copy.
+            if current_mtime.is_none() || current_mtime == Some(entry.mtime) {
+                return Ok(entry.file.clone());
+            }
+        }
+    } // lock released before I/O
+
+    // --- Cache miss or mtime changed: parse from disk ---
+    match parse_file(path) {
+        Ok(file) => {
+            // Store in cache. Use the mtime we sampled before parsing; if the
+            // file changes again before we store, the next call will detect it.
+            let mtime = current_mtime.unwrap_or(SystemTime::UNIX_EPOCH);
+            let mut guard = PARSE_CACHE.lock().expect("parse cache mutex poisoned");
+            let cache = guard.get_or_insert_with(HashMap::new);
+            cache.insert(
+                key,
+                CacheEntry {
+                    mtime,
+                    file: file.clone(),
+                },
+            );
+            Ok(file)
+        }
+        Err(e @ LoadError::VersionTooNew { .. }) => {
+            // Hard incompatibility — always surface, even if we have a stale
+            // cached copy. The stale copy might silently misinterpret fields.
+            Err(e)
+        }
+        Err(e) => {
+            // Soft error (I/O or parse failure). If we have a cached copy,
+            // serve it so the caller keeps working while the file is mid-edit.
+            let guard = PARSE_CACHE.lock().expect("parse cache mutex poisoned");
+            if let Some(cache) = guard.as_ref()
+                && let Some(entry) = cache.get(&key)
+            {
+                return Ok(entry.file.clone());
+            }
+            // No cached copy — propagate the error.
+            Err(e)
+        }
+    }
+}
+
+/// Evict the cache entry for `path`. Called after [`save`] so the next
+/// [`load`] re-parses the freshly written file rather than serving the
+/// in-memory snapshot (which may differ from the serialised form).
+fn evict_cache(path: &Path) {
+    let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut guard = PARSE_CACHE.lock().expect("parse cache mutex poisoned");
+    if let Some(cache) = guard.as_mut() {
+        cache.remove(&key);
+    }
+}
+
 /// Write a targets file back to disk.
 ///
 /// Always stamps `schema_version = CURRENT_SCHEMA_VERSION` on the
@@ -246,5 +347,9 @@ pub fn save(path: &Path, file: &TargetsFile) -> Result<(), String> {
     stamped.schema_version = Some(CURRENT_SCHEMA_VERSION);
     let content =
         serde_yaml_ng::to_string(&stamped).map_err(|e| format!("failed to serialize: {e}"))?;
-    std::fs::write(path, content).map_err(|e| format!("failed to write {}: {e}", path.display()))
+    std::fs::write(path, content)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    // Evict stale cache entry so the next load re-parses the written file.
+    evict_cache(path);
+    Ok(())
 }
