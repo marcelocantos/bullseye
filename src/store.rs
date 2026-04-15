@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::config::{Config, Mode};
 use crate::schema::{CURRENT_SCHEMA_VERSION, TargetsFile, migrate_gates_to_depends_on};
 
 /// Structured error type returned by [`load`]. Having distinct
@@ -74,9 +75,78 @@ pub fn discover(start_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Create an empty targets file at `start_dir/bullseye.yaml`.
-pub fn create_default(start_dir: &Path) -> Result<PathBuf, String> {
-    let path = start_dir.join("bullseye.yaml");
+/// Compute the shadow path for an absolute `cwd` under `root` —
+/// `root` + `cwd` with the leading component(s) stripped so that
+/// `/Users/marcelo/work/x` becomes `<root>/Users/marcelo/work/x`.
+/// Handles the macOS/Linux convention of paths anchored at `/`; on
+/// Windows we treat a drive prefix the same way (strip the prefix,
+/// join the rest).
+fn shadow_path(root: &Path, cwd: &Path) -> PathBuf {
+    let mut shadow = root.to_path_buf();
+    for comp in cwd.components() {
+        use std::path::Component;
+        match comp {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // `..` in cwd shouldn't happen for an absolute canonical
+                // path, but guard anyway — treat as no-op rather than
+                // escaping upward out of root.
+            }
+            Component::Normal(part) => shadow.push(part),
+        }
+    }
+    shadow
+}
+
+/// Shadow-mode discovery: walk up the shadow tree from
+/// `shadow_path(root, cwd)` the same way [`discover`] walks up the
+/// real tree. Stops at `root` — we never walk above it.
+pub fn discover_external(root: &Path, cwd: &Path) -> Option<PathBuf> {
+    let start = shadow_path(root, cwd);
+    let mut dir = start;
+    for _ in 0..MAX_DISCOVER_DEPTH {
+        let path = dir.join("bullseye.yaml");
+        if path.is_file() {
+            return Some(path);
+        }
+        if dir == root || !dir.starts_with(root) {
+            return None;
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+    None
+}
+
+/// Config-aware discovery. Returns `Some(path)` when a targets file
+/// exists for `cwd` under the configured storage mode.
+pub fn discover_with_config(cwd: &Path, cfg: &Config) -> Option<PathBuf> {
+    match cfg.storage.mode {
+        Mode::InRepo => discover(cwd),
+        Mode::External => discover_external(&cfg.effective_root(), cwd),
+    }
+}
+
+/// Target path for a *new* targets file for `cwd` under the configured
+/// storage mode. Does not create the file — callers pair this with
+/// [`save`] or [`create_default_with_config`].
+pub fn target_path_for_new(cwd: &Path, cfg: &Config) -> PathBuf {
+    match cfg.storage.mode {
+        Mode::InRepo => cwd.join("bullseye.yaml"),
+        Mode::External => shadow_path(&cfg.effective_root(), cwd).join("bullseye.yaml"),
+    }
+}
+
+/// Config-aware companion to [`create_default`]. Creates parent dirs
+/// under the configured root when in external mode.
+pub fn create_default_with_config(cwd: &Path, cfg: &Config) -> Result<PathBuf, String> {
+    let path = target_path_for_new(cwd, cfg);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+    }
     let file = TargetsFile {
         schema_version: Some(CURRENT_SCHEMA_VERSION),
         last_evaluated: None,
@@ -86,10 +156,22 @@ pub fn create_default(start_dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Create a starter targets file at `start_dir/bullseye.yaml`.
-pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, String> {
-    let path = start_dir.join("bullseye.yaml");
+/// Config-aware companion to [`create_starter`].
+pub fn create_starter_with_config(
+    cwd: &Path,
+    cfg: &Config,
+    project_name: &str,
+) -> Result<PathBuf, String> {
+    let path = target_path_for_new(cwd, cfg);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+    }
+    write_starter_file(&path, project_name)?;
+    Ok(path)
+}
 
+fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
     let today = chrono::Local::now().date_naive();
     let mut targets = std::collections::BTreeMap::new();
     targets.insert(
@@ -128,7 +210,27 @@ pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, S
         last_evaluated: None,
         targets,
     };
+    save(path, &file)
+}
+
+/// Create an empty targets file at `start_dir/bullseye.yaml` (in-repo
+/// mode). Prefer [`create_default_with_config`] in new code.
+pub fn create_default(start_dir: &Path) -> Result<PathBuf, String> {
+    let path = start_dir.join("bullseye.yaml");
+    let file = TargetsFile {
+        schema_version: Some(CURRENT_SCHEMA_VERSION),
+        last_evaluated: None,
+        targets: Default::default(),
+    };
     save(&path, &file)?;
+    Ok(path)
+}
+
+/// Create a starter targets file at `start_dir/bullseye.yaml` (in-repo
+/// mode). Prefer [`create_starter_with_config`] in new code.
+pub fn create_starter(start_dir: &Path, project_name: &str) -> Result<PathBuf, String> {
+    let path = start_dir.join("bullseye.yaml");
+    write_starter_file(&path, project_name)?;
     Ok(path)
 }
 
