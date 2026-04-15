@@ -52,8 +52,16 @@ pub struct GetTool {
     description = "Upsert a target: create if the ID doesn't exist, patch if it does. \
         Omit `id` to create a new target with an auto-assigned ID. \
         Provide `id` (e.g., 'T1.2') to create a sub-target at a specific ID or to patch an existing one. \
-        On create, `name`, `value`, `cost`, and `acceptance` are required; on patch, all fields are optional. \
-        Use `depends_on` to declare this target's blockers, or `blocks` (sugar) to inject this target into other targets' depends_on lists — handy when adding a new prerequisite above existing work."
+        On create, `name` and `acceptance` are required; all other fields are optional. \
+        `value` and `cost` are portfolio-scope metadata used for cross-repo WSJF ranking (weekly-plus horizon) — \
+        they are NOT consumed by repo-level frontier ordering, which uses distance-to-observable-checkpoint instead. \
+        Omit value/cost when working at repo scope; supply them only when you also intend to participate in \
+        cross-repo portfolio prioritisation and have a meaningful estimate. \
+        The key repo-scope field is `observable`: set it on work targets whose completion produces a human-visible \
+        checkpoint (a running build, a passing test suite, a demo) — this drives frontier ordering. \
+        On patch, all fields are optional. \
+        Use `depends_on` to declare this target's blockers, or `blocks` (sugar) to inject this target into other \
+        targets' depends_on lists — handy when adding a new prerequisite above existing work."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct PutTool {
@@ -69,11 +77,17 @@ pub struct PutTool {
     #[serde(default)]
     pub name: Option<String>,
 
-    /// User-scored value (Fibonacci: 1, 2, 3, 5, 8, 13, 20). Required on create.
+    /// Portfolio-scope: user-scored value (Fibonacci: 1, 2, 3, 5, 8, 13, 20).
+    /// Consumed by cross-repo WSJF ranking only. Not used by repo-level
+    /// frontier ordering (which uses observable distance instead). Omit
+    /// when working at repo scope; 0.0 is stored and means "not set".
     #[serde(default)]
     pub value: Option<f64>,
 
-    /// Agent-estimated cost (Fibonacci: 1, 2, 3, 5, 8, 13, 20). Required on create.
+    /// Portfolio-scope: agent-estimated cost (Fibonacci: 1, 2, 3, 5, 8, 13, 20).
+    /// Consumed by cross-repo WSJF ranking only. Not used by repo-level
+    /// frontier ordering (which uses observable distance instead). Omit
+    /// when working at repo scope; 0.0 is stored and means "not set".
     #[serde(default)]
     pub cost: Option<f64>,
 

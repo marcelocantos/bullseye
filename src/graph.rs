@@ -342,12 +342,15 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
             errors.push(format!("{id}: duplicate target ID"));
         }
 
-        // Value/cost must be positive.
-        if t.value <= 0.0 {
-            errors.push(format!("{id}: value must be positive, got {}", t.value));
+        // Value/cost: 0.0 means "not set at repo scope" (portfolio-scope
+        // metadata is optional). Only reject explicitly negative values,
+        // which are always a mistake, and non-zero sub-1 values that
+        // would produce meaningless WSJF ratios.
+        if t.value < 0.0 {
+            errors.push(format!("{id}: value must be non-negative, got {}", t.value));
         }
-        if t.cost <= 0.0 {
-            errors.push(format!("{id}: cost must be positive, got {}", t.cost));
+        if t.cost < 0.0 {
+            errors.push(format!("{id}: cost must be non-negative, got {}", t.cost));
         }
 
         // Acceptance must be non-empty.

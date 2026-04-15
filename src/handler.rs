@@ -191,7 +191,7 @@ fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
     format!("T{}", max_num + 1)
 }
 
-fn handle_put(t: crate::tools::PutTool) -> ToolResult {
+pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     let (path, mut file) = load_file(&t.cwd)?;
 
     // Resolve target ID. None → auto-assign a new top-level ID.
@@ -204,17 +204,18 @@ fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     };
 
     if is_create {
-        // Creation path — name/value/cost/acceptance are required.
+        // Creation path — name and acceptance are required.
+        // value and cost are optional at repo scope (they are portfolio-scope
+        // metadata consumed by cross-repo WSJF ranking, not by the repo-level
+        // frontier ordering which uses distance-to-observable instead).
+        // Omitting them defaults to 0.0, which signals "not set at repo scope"
+        // and is skipped by portfolio WSJF scoring.
         let name = t
             .name
             .clone()
             .ok_or_else(|| tool_err("name is required when creating a target"))?;
-        let value = t
-            .value
-            .ok_or_else(|| tool_err("value is required when creating a target"))?;
-        let cost = t
-            .cost
-            .ok_or_else(|| tool_err("cost is required when creating a target"))?;
+        let value = t.value.unwrap_or(0.0);
+        let cost = t.cost.unwrap_or(0.0);
         let acceptance = t
             .acceptance
             .clone()

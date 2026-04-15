@@ -1760,6 +1760,286 @@ fn frontier_ordering_prefers_observable_then_fanout() {
     assert_eq!(by_id("T108").distance, None);
 }
 
+// --- Phase-boundary tests (🎯T11): value/cost optional at repo scope ---
+
+/// Creating a repo-scope target without value or cost must succeed.
+/// value/cost are portfolio-scope metadata (cross-repo WSJF ranking) and
+/// must not be required when working within a single repo.
+#[test]
+fn put_create_without_value_cost_succeeds() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "phase-boundary-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+    // Cleared at end of test.
+
+    let result = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        name: Some("Repo-scope target with no portfolio metadata".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["CI green".to_string()]),
+        context: None,
+        kind: None,
+        status: None,
+        depends_on: None,
+        observable: None,
+        blocks: None,
+        verifies: None,
+        origin: None,
+        tags: None,
+    });
+    assert!(
+        result.is_ok(),
+        "create without value/cost must succeed: {result:?}"
+    );
+
+    // The created target must pass validation.
+    let file = store::load(&path).unwrap();
+    // Find the newly created target (it will be auto-assigned an ID beyond T1).
+    let new_target = file
+        .targets
+        .values()
+        .find(|t| t.name.contains("Repo-scope target"))
+        .expect("new target should exist after put");
+    assert_eq!(new_target.value, 0.0, "value should default to 0.0");
+    assert_eq!(new_target.cost, 0.0, "cost should default to 0.0");
+
+    // Validate: 0.0 value/cost must not produce validation errors.
+    let errors = graph::validate(&file);
+    let value_cost_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| e.contains("value") || e.contains("cost"))
+        .collect();
+    assert!(
+        value_cost_errors.is_empty(),
+        "0.0 value/cost should not produce validation errors: {value_cost_errors:?}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// Repo-scope frontier ordering (observable distance + fanout) must be
+/// invariant under value/cost mutation. Changing a target's portfolio
+/// metadata must not change where it appears in the repo frontier.
+#[test]
+fn frontier_order_invariant_under_value_cost_mutation() {
+    use bullseye::schema::Target;
+    use chrono::NaiveDate;
+
+    let date = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+
+    let mk_work = |name: &str, observable: bool, deps: &[&str], v: f64, c: f64| -> Target {
+        Target {
+            name: name.to_string(),
+            kind: Kind::Work,
+            status: Status::Identified,
+            value: v,
+            cost: c,
+            observable,
+            actual_cost: None,
+            acceptance: vec!["done".to_string()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            cross_depends: vec![],
+            cross_enables: vec![],
+            verifies: vec![],
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        }
+    };
+
+    // Build a graph: T200(observable) → T201 → T202(no observable reachable).
+    // T200 is observable (dist=0), T201 has dist=1 via reverse graph,
+    // T202 has no observable reachable (tunnel).
+    // All have value=1, cost=1 initially.
+    let mut file = TargetsFile {
+        schema_version: Some(1),
+        last_evaluated: None,
+        targets: Default::default(),
+    };
+    file.targets
+        .insert("T200".into(), mk_work("Observable", true, &[], 1.0, 1.0));
+    file.targets
+        .insert("T201".into(), mk_work("Near", false, &[], 1.0, 1.0));
+    file.targets
+        .insert("T202".into(), mk_work("Tunnel", false, &[], 1.0, 1.0));
+
+    // Add a verify target for T201 so it has an observable at distance 1.
+    file.targets.insert(
+        "T203".into(),
+        Target {
+            name: "Verify T201".to_string(),
+            kind: Kind::Verify,
+            status: Status::Identified,
+            value: 1.0,
+            cost: 1.0,
+            observable: false,
+            actual_cost: None,
+            acceptance: vec!["verified".to_string()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: vec!["T201".to_string()],
+            cross_depends: vec![],
+            cross_enables: vec![],
+            verifies: vec!["T201".to_string()],
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        },
+    );
+
+    let front = graph::frontier(&file);
+    let ranked_before: Vec<&str> = graph::rank_frontier(&file, &front)
+        .iter()
+        .map(|r| {
+            // Leak the string to extend lifetime — OK in tests.
+            Box::leak(r.target.id.clone().into_boxed_str()) as &str
+        })
+        .collect();
+
+    // Now mutate value/cost dramatically on all targets.
+    // Portfolio-scope numbers that vary by orders of magnitude.
+    for (i, t) in file.targets.values_mut().enumerate() {
+        t.value = (i as f64 + 1.0) * 100.0;
+        t.cost = (i as f64 + 1.0) * 0.01;
+    }
+
+    let front2 = graph::frontier(&file);
+    let ranked_after: Vec<&str> = graph::rank_frontier(&file, &front2)
+        .iter()
+        .map(|r| Box::leak(r.target.id.clone().into_boxed_str()) as &str)
+        .collect();
+
+    assert_eq!(
+        ranked_before, ranked_after,
+        "repo-level frontier order changed after value/cost mutation — \
+         ordering must depend only on observable distance and fanout"
+    );
+}
+
+/// Flipping `observable: true` on a work target must change repo-scope
+/// frontier ordering: an observable target should rank above a non-observable
+/// peer (distance 0 beats distance >0).
+#[test]
+fn observable_flag_changes_frontier_order() {
+    use bullseye::schema::Target;
+    use chrono::NaiveDate;
+
+    let date = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+
+    let mk_work = |name: &str, observable: bool| -> Target {
+        Target {
+            name: name.to_string(),
+            kind: Kind::Work,
+            status: Status::Identified,
+            value: 1.0,
+            cost: 1.0,
+            observable,
+            actual_cost: None,
+            acceptance: vec!["done".to_string()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: vec![],
+            cross_depends: vec![],
+            cross_enables: vec![],
+            verifies: vec![],
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        }
+    };
+
+    // Two plain work targets, no observable anywhere.
+    let mut file = TargetsFile {
+        schema_version: Some(1),
+        last_evaluated: None,
+        targets: Default::default(),
+    };
+    file.targets
+        .insert("T300".into(), mk_work("Plain A", false));
+    file.targets
+        .insert("T301".into(), mk_work("Plain B", false));
+
+    let front = graph::frontier(&file);
+    let ranked_before: Vec<String> = graph::rank_frontier(&file, &front)
+        .iter()
+        .map(|r| r.target.id.clone())
+        .collect();
+
+    // Both are tunnels (no observable reachable), so they rank equally by ID.
+    // T300 comes before T301 lexicographically as the tiebreaker.
+    assert_eq!(
+        ranked_before,
+        vec!["T300", "T301"],
+        "before: {ranked_before:?}"
+    );
+    assert!(
+        graph::rank_frontier(&file, &front)
+            .iter()
+            .all(|r| r.distance.is_none()),
+        "both should be tunnels before any observable flag"
+    );
+
+    // Now flip T301 to observable.
+    file.targets.get_mut("T301").unwrap().observable = true;
+
+    let front2 = graph::frontier(&file);
+    let ranked_after: Vec<String> = graph::rank_frontier(&file, &front2)
+        .iter()
+        .map(|r| r.target.id.clone())
+        .collect();
+
+    // T301 (observable, dist=0) must now rank above T300 (no observable reachable).
+    assert_eq!(
+        ranked_after,
+        vec!["T301", "T300"],
+        "observable target should rank first after flag flip; got: {ranked_after:?}"
+    );
+
+    let by_id = |id: &str| {
+        graph::rank_frontier(&file, &front2)
+            .into_iter()
+            .find(|r| r.target.id == id)
+            .unwrap()
+    };
+    assert_eq!(
+        by_id("T301").distance,
+        Some(0),
+        "observable target is at distance 0"
+    );
+    assert_eq!(
+        by_id("T300").distance,
+        None,
+        "non-observable tunnel has no reachable observable"
+    );
+}
+
 #[test]
 fn tunnels_treats_observable_work_as_checkpoint() {
     use bullseye::schema::Target;
