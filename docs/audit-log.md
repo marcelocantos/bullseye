@@ -96,5 +96,5 @@ maintenance activities. Append-only -- newest entries at the bottom.
 
 ## 2026-04-18 -- /release v0.17.0
 
-- **Commit**: `pending`
+- **Commit**: `04e698b`
 - **Outcome**: Released v0.17.0 (darwin-arm64, linux-amd64, linux-arm64). Headline: 🎯T11 makes `bullseye_put` `value`/`cost` optional on create. Both default to `0.0` (the "not set at repo scope" sentinel) and the validator accepts `>= 0` instead of `> 0`. They remain portfolio-scope inputs only — never consumed by repo-level ordering — so omitting them is appropriate inside a single repo. Eliminates a consistent miscalibration source where agents invented Fibonacci numbers that were immediately ignored. Also includes 🎯T13 perf work (mtime-keyed parse cache in `store::load()` to avoid redundant YAML parses on hot paths) and a clippy regression fix for Rust 1.95 (`recent_achieved` sort uses `sort_by_key` with `std::cmp::Reverse`; test helper uses `writeln!`). Doc sweep updates the agent guide and STABILITY.md to reflect the new `bullseye_put` contract. STABILITY.md settling-threshold note corrected — was stale at v0.14.0; reset to v0.16.0 for the storage redesign, with v0.17.0 noted as additive. Homebrew formula updated.
