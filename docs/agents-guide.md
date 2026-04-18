@@ -78,8 +78,13 @@ Omit `id` to create a new target with an auto-assigned top-level ID
 for sub-targets like `T1.2`) or to patch an existing target — the
 handler decides create-vs-patch based on whether the ID exists.
 
-On create, `name`, `value`, `cost`, and `acceptance` are required.
-On patch, all fields are optional; only the ones provided are changed.
+On create, `name` and `acceptance` are required. `value` and `cost`
+default to `0` (the "not set at repo scope" sentinel) when omitted —
+they're portfolio-scope inputs only, never consumed by repo-level
+ordering, so leaving them unset is appropriate when you're working
+inside a single repo. Provide them when adding a target intended to
+participate in cross-repo WSJF ranking. On patch, all fields are
+optional; only the ones provided are changed.
 
 **Achieved targets are immutable.** As of v0.13.0 `bullseye_put`
 rejects content edits (name/acceptance/context/value/cost/tags/
@@ -97,8 +102,8 @@ transitions on achieved targets remain allowed, and
 | `cwd` | string | required | Working directory |
 | `id` | string | null | Target ID (omit to auto-assign a new top-level ID) |
 | `name` | string | null | Desired state assertion (required on create) |
-| `value` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create). **Portfolio-scope input only** — not consumed by repo-level ordering. |
-| `cost` | number | null | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20 (required on create). **Portfolio-scope input only** — not consumed by repo-level ordering. |
+| `value` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
+| `cost` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
 | `acceptance` | string[] | null | How to verify the target is achieved (required on create) |
 | `context` | string | null | Why this target matters |
 | `kind` | string | `"work"` on create | `"work"` or `"verify"`; settable only on create |
@@ -525,8 +530,9 @@ bullseye_frontier(cwd) → unblocked targets ready for work
 ### Add and track a target
 
 ```
-bullseye_put(cwd, name, value, cost, acceptance)
-  → creates target with auto-assigned ID
+bullseye_put(cwd, name, acceptance)
+  → creates target with auto-assigned ID; value/cost optional
+    at repo scope (set them only for portfolio-scope ranking)
 bullseye_put(cwd, id, status: "converging")
   → mark as in progress (patch by ID)
 bullseye_retire(cwd, id, actual_cost)
@@ -536,7 +542,7 @@ bullseye_retire(cwd, id, actual_cost)
 ### Add a new prerequisite above existing work
 
 ```
-bullseye_put(cwd, name, value, cost, acceptance, blocks: [T5, T7])
+bullseye_put(cwd, name, acceptance, blocks: [T5, T7])
   → creates a new target and injects it into T5 and T7's depends_on,
     so both become blocked on the new prerequisite in one call
 ```
@@ -604,8 +610,8 @@ available.
 ### Managing targets
 
 - `bullseye_put` — upsert a target. Omit `id` to create a new
-  target with an auto-assigned ID (provide `name`, `value`, `cost`,
-  `acceptance`). Provide `id` to create at a specific ID (sub-targets
+  target with an auto-assigned ID (provide `name` and `acceptance`;
+  `value`/`cost` are optional at repo scope). Provide `id` to create at a specific ID (sub-targets
   like `T1.2`) or to patch an existing target (only the provided
   fields change). Supports `depends_on` and `blocks` (sugar for
   injecting this target into other targets' `depends_on`).

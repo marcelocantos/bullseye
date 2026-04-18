@@ -9,9 +9,19 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.16.0. Changes since v0.15.0 affecting the
+Snapshot as of v0.17.0. Changes since v0.16.0 affecting the
 interaction surface:
 
+- **`bullseye_put` value/cost optional at repo scope** (🎯T11).
+  `value` and `cost` are no longer required on create. Both default
+  to `0.0`, which the validator now accepts as the "not set at repo
+  scope" sentinel (previously required `> 0`). They remain
+  portfolio-scope inputs only — never consumed by repo-level
+  ordering — so omitting them is appropriate when the target is
+  meant for single-repo work. Set them when the target should
+  participate in cross-repo WSJF ranking.
+
+Earlier changes still in effect from v0.16.0:
 - **Per-repo storage, no machine-wide config** (redesign of 🎯T12).
   The v0.15.0 machine-wide `~/.config/bullseye/config.yaml` and
   `bullseye_configure` tool are **removed**. Location is now a
@@ -126,7 +136,7 @@ from `targets.yaml` to `bullseye.yaml` is a file-format break).
 |------|--------|-------|
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, observable?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 adds an `observable` parameter (for the new schema field) and refuses content patches on achieved targets — see 🎯T8. |
+| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, observable?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 adds an `observable` parameter (for the new schema field) and refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. |
 | `bullseye_retire(cwd, id, actual_cost)` | Stable | |
 | `bullseye_frontier(cwd)` | Stable | v0.13.0 ordering: ascending distance-to-nearest-observable-target, tiebroken by unblocking fanout, then ID. Per-target value/cost are NOT consumed. |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
@@ -237,10 +247,13 @@ Planned additions:
 - **Portfolio-level WSJF (🎯T2.3)**: Cross-repo enabler propagation is
   currently a binary flag; the value-weighted upgrade is pending.
   Should land before 1.0 so the portfolio engine is stable.
-- **Settling threshold reset**: v0.14.0 removed `bullseye_render` and
-  renamed the targets file from `targets.yaml` to `bullseye.yaml`.
-  Both are interaction-surface breaks. The settling clock restarts
-  from v0.14.0.
+- **Settling threshold reset**: v0.16.0 redesigned storage discovery
+  (per-repo location, `bullseye_configure` removed, `location`
+  required on `bullseye_init`/`bullseye_import`, no auto-create on
+  `bullseye_put`). The settling clock restarts from v0.16.0.
+  v0.17.0 relaxes the `bullseye_put` input contract (`value`/`cost`
+  optional on create) — this is additive for existing callers and
+  doesn't reset the clock.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
