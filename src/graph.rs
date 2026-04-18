@@ -479,7 +479,7 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
         .into_iter()
         .filter(|(_, t)| t.achieved.is_some_and(|d| d >= cutoff))
         .collect();
-    recent_achieved.sort_by(|a, b| b.1.achieved.cmp(&a.1.achieved));
+    recent_achieved.sort_by_key(|b| std::cmp::Reverse(b.1.achieved));
 
     let tuns = if errors.is_empty() {
         tunnels(file, 2)

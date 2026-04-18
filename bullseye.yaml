@@ -152,7 +152,7 @@ targets:
     achieved: 2026-04-12
   T11:
     name: bullseye_put no longer requires value/cost at repo scope and its documentation reflects the phase-boundary model
-    status: identified
+    status: achieved
     value: 13.0
     cost: 5.0
     acceptance:
@@ -179,6 +179,7 @@ targets:
       Doing this well upgrades every agent's target-creation behaviour without any per-agent prompt changes.
     origin: pageflip target-creation session 2026-04-14 — agent consistently populated value/cost at repo scope because the tool schema requires them, contradicting the design
     discovered: 2026-04-14
+    achieved: 2026-04-15
   T12:
     name: Bullseye supports external targets storage with a configured mode and a guided first-run flow
     status: achieved
@@ -232,7 +233,7 @@ targets:
     achieved: 2026-04-15
   T13:
     name: File-watch handlers are cheap — heavy work deferred and debounced
-    status: converging
+    status: achieved
     value: 3.0
     cost: 2.0
     acceptance:
@@ -249,6 +250,95 @@ targets:
     - watching
     origin: manual
     discovered: 2026-04-15
+    achieved: 2026-04-15
+  T14:
+    name: '"observable" is renamed to "showcase" and forces visible demonstration before retirement'
+    status: identified
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - The `observable` field is renamed to `showcase` (or equivalent) throughout schema, docs, and tooling
+    - Target retirement requires a showcase step when the flag is set — documented in the convention and enforced in the bullseye_retire flow
+    - 'Existing targets with `observable: true` are migrated to the new name'
+    - Documentation explains the difference between a showcase target (must be demonstrated) and a regular work target (technical verification suffices)
+    context: |-
+      The current `observable` flag on work-kind targets signals that completion should produce something a human can look at. In practice, agents often stop at technical verification (server connected, tests pass, binary built) and never actually show the user-visible result. The flag's name reads as a description rather than an obligation, so agents treat it as informational.
+
+      Renaming to `showcase` (or `user_demo`) reframes the field as an action the agent must perform before marking the target achieved: literally showing the result to the user. Completion of a showcase target should include a concrete demonstration step — run the binary with a player attached, publish the screenshot, open the dashboard, etc. — not just a "builds clean" report.
+
+      Discovered while working on 🎯T10 (ge sample app): the tiltbuggy server connected to ged successfully but the user couldn't see anything until the player was actually launched, which required a follow-up prompt. The "observable" intent was there but the obligation wasn't codified.
+    origin: discovered while working on 🎯T10 in squz/ge — tiltbuggy sample did not self-demo on completion
+    discovered: 2026-04-16
+  T15:
+    name: A bullseye-native executor converges declared-strategy targets without human intervention
+    status: identified
+    value: 13.0
+    cost: 13.0
+    acceptance:
+    - Targets in bullseye.yaml can declare a `strategy` block (command, trigger, timeout, retry/backoff policy)
+    - A daemon reads strategy-bearing targets and runs them on a convergence loop, persisting per-target attempt state
+    - 'Daemon implements the mechanical escalation ladder: per-attempt timeout, tick-level backoff, circuit-break on N consecutive failures, notification on threshold M'
+    - Per-target status (last_attempt_at, last_success_at, consecutive_failures, cooldown_until) is queryable via CLI and MCP
+    - At least one real-world target (yadm sync) is converged by the daemon, with the launchd-driven script retired
+    - Documentation explains the strategy schema and the escalation ladder, with worked examples
+    context: |-
+      Targets are desired states. Many states are converged by mechanical action (push, sync, build, deploy) rather than human design work. Today these live as ad-hoc launchd jobs and shell scripts that fight the scheduler's quirks (no overlap protection on cron, no SSH timeout in launchd, no retry/backoff machinery, no observability into "is this state currently satisfied"). A bullseye-native executor would let targets declare their convergence strategy alongside their acceptance criteria, then run a stateless convergence loop that asks "is the target satisfied? if not, run the strategy" on each tick.
+
+      Design decisions reached so far:
+
+      **State-convergence framing simplifies retry semantics.** Each tick is independent — check target, run strategy if unsatisfied, note outcome. Stranded work, missed runs, and transient failures all converge on the next tick automatically. No separate "resume retry" state machine needed.
+
+      **Non-agentic escalation ladder** for simple strategies:
+      1. Per-attempt timeout (hard ceiling — kills hung-action class immediately)
+      2. Tick-level backoff (consecutive failures stretch next-attempt interval: 30m → 2h → 6h)
+      3. Circuit break (after N failures, skip attempts for cooldown; target shows as stalled, surfaces on frontier)
+      4. Human notification (alerter at threshold M, push notification at threshold N)
+      5. Escalation to agent (opt-in per target only; off by default for mechanical strategies like yadm push)
+
+      Per-target state needed: consecutive_failures, last_attempt_at, last_success_at, cooldown_until. Trivial to persist alongside bullseye's existing state.
+
+      **Why homegrown over windmill/dagu/kestra:**
+      - Off-the-shelf tools think in jobs/workflows, not target-state convergence — bending them into shape is awkward.
+      - Windmill's infrastructure weight (Postgres + Rust server + SvelteKit UI) is heavy for personal-laptop use.
+      - bullseye+executor sharing one worldview (targets are first-class, strategies hang off them) gives a property the alternatives can't: one truth source, one CLI, one MCP surface.
+      - Estimated 500-800 lines of Go/Rust for the daemon — smaller than the YAML config you'd write for ten tasks in windmill.
+
+      **Likely shape:**
+      - Daemon (Go or Rust, single binary) with launchd KeepAlive.
+      - Strategy declared in target YAML: command, trigger (cron expr / fswatch path / on-wake / manual), timeout, retry policy, depends_on (already exists).
+      - SQLite state (sqlift if Go).
+      - MCP server for status/control (established pattern across mnemo/sysinfo-mcp/sawmill).
+      - CLI for adhoc invocation and inspection.
+
+      The executor will likely live in its own repo (working name TBD — crosshair? bullseye-agent?) but the strategic design lives in bullseye.yaml because the two are conceptually one system.
+    origin: designed in conversation 2026-04-17 — emerged from yadm-auto-sync resilience problem (SSH push hung 9.5h, blocking subsequent launchd runs); generalised into "state convergence is the right abstraction for many recurring jobs"
+    discovered: 2026-04-17
+  T15.1:
+    name: yadm-tracked dotfiles converge to clean+pushed state via the executor, replacing the launchd script
+    status: identified
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - The launchd job com.marcelocantos.yadm-auto-sync is unloaded and the plist removed
+    - The script ~/.local/bin/yadm-auto-sync is removed (or reduced to a thin invocation of the executor CLI)
+    - yadm-tracked dotfiles converge automatically without human intervention, with no commits stranded for >1 hour after the working tree settles
+    - A single SSH timeout no longer halts subsequent convergence attempts
+    - Status of the yadm-sync target is queryable via the executor's MCP/CLI
+    context: |-
+      Proof point for 🎯T15. The current ~/.local/bin/yadm-auto-sync script + com.marcelocantos.yadm-auto-sync launchd job has a structural flaw: `yadm push` has no SSH timeout, so a half-dead TCP session can hang the script for hours, and launchd serialises by default so subsequent runs are blocked until the hung push gives up. Observed 2026-04-17: a push hung for 9.5 hours, blocking all morning syncs.
+
+      Once the executor exists, this becomes a target with a tiny strategy declaration:
+      - desired state: `yadm log @{u}..HEAD` empty AND `yadm status --short` clean
+      - strategy: `yadm add -u && yadm commit -m "..." && yadm push` (or split into commit + push sub-strategies)
+      - timeout: 60s per attempt (push with ConnectTimeout=15, ServerAlive)
+      - backoff: 30m → 2h → 6h
+      - circuit break: notify after 3 consecutive failures, push notification after 10
+
+      Until the executor lands, the script needs a stopgap fix (add SSH timeout + push pending commits on heartbeat) so it stops failing visibly. That stopgap is intentionally NOT part of this target — it's pre-work to stop the bleeding while the proper solution is built.
+    depends_on:
+    - T15
+    origin: forked-from T15 design conversation 2026-04-17
+    discovered: 2026-04-17
   T2:
     name: Global portfolio view across all repos
     status: achieved

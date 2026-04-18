@@ -2930,11 +2930,7 @@ fn cache_fallback_to_stale_on_reparse_failure() {
     // Overwrite with invalid YAML to simulate a mid-edit state.
     // Sleep briefly to ensure a new mtime on coarse-grained filesystems.
     std::thread::sleep(std::time::Duration::from_millis(10));
-    write!(
-        std::fs::File::create(&path).unwrap(),
-        "not: valid: yaml: [\n"
-    )
-    .unwrap();
+    writeln!(std::fs::File::create(&path).unwrap(), "not: valid: yaml: [").unwrap();
 
     // The load must succeed by serving the stale cached copy rather than
     // propagating the parse error.
