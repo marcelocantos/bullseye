@@ -339,6 +339,31 @@ targets:
     - T15
     origin: forked-from T15 design conversation 2026-04-17
     discovered: 2026-04-17
+  T16:
+    name: Bullseye's repo-scope output is self-describing, so agents don't default to WSJF/SAFe framing at repo scope
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - '`bullseye_frontier`, `bullseye_summary`, and `bullseye_convergence` output include a one-line banner naming the repo-scope ordering function (min distance-to-observable, max fanout) and explicitly disavowing WSJF/value/cost at repo scope'
+    - The per-entry annotations (`dist=N`, `fanout=N`, `observable`) are grouped under a brief legend so their meaning is visible without cross-referencing docs
+    - '`~/.claude/convergence.md` notes the anti-pattern — do not frame repo-scope prioritisation in WSJF, story-points, or SAFe terms'
+    context: |-
+      Observed in a sibling-repo session (bullseye 0.17.0): an agent reasoning about frontier ordering reached for SAFe/WSJF framing out of training-data habit ("WSJF 2.67, same as T20"), even though bullseye 0.17.0's `bullseye_put` docstring already explains the phase boundary. The user challenged it; the agent self-corrected by quoting the docstring.
+
+      The T11 docstring fix helps, but only activates when the agent reads `bullseye_put`'s schema. An agent reasoning about ranking from `bullseye_frontier` output sees `dist=1, fanout=2` with no in-band explanation of what those mean or what ordering they imply — and WSJF is much more available in training data than "distance-to-observable + unblocking fanout".
+
+      Highest-leverage fix: put the correct framing in the context at the exact moment the agent is looking at the ranking. A one-line header on frontier/summary/convergence output is cheap and doesn't depend on the agent having read the tool docs first. The global convergence.md note is a backstop for general reasoning where the agent isn't staring at frontier output.
+
+      Tradeoff: small amount of boilerplate on every frontier call, and it's a prompting-against-a-bad-habit fix rather than a root-cause fix. Still cheaper than the confusion it prevents. If the ordering function changes later, the banner changes with it.
+
+      Not urgent — existing users are self-correcting on challenge. File for later work.
+    tags:
+    - docs
+    - agent-ux
+    origin: discovered in sibling-repo session 2026-04-18 — agent reached for WSJF framing at repo scope despite 🎯T11 docstring fix
+    discovered: 2026-04-19
   T2:
     name: Global portfolio view across all repos
     status: achieved
