@@ -115,11 +115,11 @@ targets:
     - T1.1
     cross_depends:
     - repo: marcelocantos/sawmill
-      capability: structured pass/fail reports with file/line detail
-      note: sawmill's check_conventions returns plain violation strings today; need structured output for rework diagnosis payload
+      target: T24
+      note: sawmill T24 (filed 2026-04-18) — structured failure payloads from check_conventions/check_invariants/query, consumed here as the "what failed" half of the rework diagnosis payload
     - repo: marcelocantos/mnemo
       capability: prior-attempt history retrieval per target
-      note: mnemo currently indexes sessions but has no rework-aware query that returns prior attempts for a given target ID
+      note: mnemo currently indexes sessions but has no rework-aware query that returns prior attempts for a given target ID; target not yet filed upstream
     tags:
     - sawmill
     - mnemo
