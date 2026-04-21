@@ -71,6 +71,43 @@ its `bullseye.yaml` lives on disk. There's nothing to sync across
 machines, no `~/.config/bullseye/` directory, and no machine-wide
 setting to get wrong.
 
+## Concurrency protocol
+
+`bullseye.yaml` is expected to be edited by bullseye **and** by humans,
+scripts, and other tools. Every mutating bullseye tool follows this
+protocol so concurrent writers serialise cleanly and lost-update races
+don't silently clobber each other:
+
+1. **Sibling lockfile.** Bullseye acquires an exclusive advisory lock
+   on `<dir>/bullseye.yaml.lock` — a 0-byte sentinel file next to the
+   yaml. POSIX uses `flock(2) LOCK_EX`; Windows uses `LockFileEx`.
+   The lock is on the separate lockfile (not the yaml itself) so the
+   anchor stays stable across atomic renames of the yaml.
+2. **Bounded wait.** Lock acquisition times out after ~5 s with a
+   structured error naming the contended lockfile. Another tool
+   hanging on the lock does not hang bullseye indefinitely.
+3. **Fresh read.** Inside the lock, bullseye re-reads the yaml from
+   disk, bypassing its in-memory parse cache. Any prior-version state
+   held across tool calls is invalidated.
+4. **CAS on `(mtime, len)`.** Before writing back, bullseye re-stats
+   the yaml. If either field changed between read and write — caught
+   when a non-flock-honouring writer (a text editor, a quick-edit
+   script) modified the file under our nose — the mutation fails with
+   a conflict error and is not applied.
+5. **Atomic write.** The new yaml is written to a sibling tempfile in
+   the same directory, fsync'd, then renamed into place. Readers see
+   either the old or the new file, never a half-written one.
+6. **Lock release on drop.** The flock is released when bullseye's
+   file handle drops at the end of the operation.
+
+**If your tool wants to edit `bullseye.yaml` safely alongside bullseye:**
+acquire an exclusive `flock(2)` / `LockFileEx` on
+`<dir>/bullseye.yaml.lock` before your read-modify-write window and
+release it after. The lockfile will be auto-created if it doesn't yet
+exist. If you don't honour advisory locks (e.g. a plain `vi` or a
+shell one-liner), bullseye's CAS check will detect your edit and
+report a conflict rather than clobbering it — on conflict, retry.
+
 **First time in a new repo:**
 
 ```

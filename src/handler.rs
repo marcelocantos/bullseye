@@ -100,8 +100,13 @@ fn no_targets_file_message(cwd: &Path) -> String {
     )
 }
 
-fn save_file(path: &Path, file: &crate::schema::TargetsFile) -> Result<(), CallToolError> {
-    store::save(path, file).map_err(tool_err)
+/// Discover the `bullseye.yaml` path for `cwd` without loading its
+/// contents. Mutating handlers call this first so they can enter the
+/// locked read-modify-write block without holding the parse cache's
+/// copy across the lock boundary.
+fn discover_path(cwd: &str) -> Result<std::path::PathBuf, CallToolError> {
+    let dir = Path::new(cwd);
+    store::discover_anywhere(dir).ok_or_else(|| tool_err(no_targets_file_message(dir)))
 }
 
 pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
@@ -152,27 +157,6 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
     text_result(format!("🎯{} {}\n\n{yaml}", t.id, target.name))
 }
 
-fn parse_status(s: &str) -> Result<Status, CallToolError> {
-    match s {
-        "identified" => Ok(Status::Identified),
-        "converging" => Ok(Status::Converging),
-        "achieved" => Ok(Status::Achieved),
-        other => Err(tool_err(format!(
-            "unknown status: {other} (use identified, converging, achieved)"
-        ))),
-    }
-}
-
-fn parse_kind(s: &str) -> Result<crate::schema::Kind, CallToolError> {
-    match s {
-        "work" => Ok(crate::schema::Kind::Work),
-        "verify" => Ok(crate::schema::Kind::Verify),
-        other => Err(tool_err(format!(
-            "unknown kind: {other} (use work or verify)"
-        ))),
-    }
-}
-
 /// Auto-assign the next `TN` ID (ignoring sub-targets like `T1.2`).
 fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
     let max_num = file
@@ -192,194 +176,235 @@ fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
 }
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
-    let (path, mut file) = load_file(&t.cwd)?;
+    let path = discover_path(&t.cwd)?;
 
-    // Resolve target ID. None → auto-assign a new top-level ID.
-    let (id, is_create) = match t.id.clone() {
-        Some(explicit) => {
-            let exists = file.targets.contains_key(&explicit);
-            (explicit, !exists)
+    struct Outcome {
+        id: String,
+        is_create: bool,
+        target_name: String,
+        injected_into: Vec<String>,
+    }
+
+    let parse_status_s = |s: &str| -> Result<Status, String> {
+        match s {
+            "identified" => Ok(Status::Identified),
+            "converging" => Ok(Status::Converging),
+            "achieved" => Ok(Status::Achieved),
+            other => Err(format!(
+                "unknown status: {other} (use identified, converging, achieved)"
+            )),
         }
-        None => (next_top_level_id(&file), true),
+    };
+    let parse_kind_s = |s: &str| -> Result<crate::schema::Kind, String> {
+        match s {
+            "work" => Ok(crate::schema::Kind::Work),
+            "verify" => Ok(crate::schema::Kind::Verify),
+            other => Err(format!("unknown kind: {other} (use work or verify)")),
+        }
     };
 
-    if is_create {
-        // Creation path — name and acceptance are required.
-        // value and cost are optional at repo scope (they are portfolio-scope
-        // metadata consumed by cross-repo WSJF ranking, not by the repo-level
-        // frontier ordering which uses distance-to-observable instead).
-        // Omitting them defaults to 0.0, which signals "not set at repo scope"
-        // and is skipped by portfolio WSJF scoring.
-        let name = t
-            .name
-            .clone()
-            .ok_or_else(|| tool_err("name is required when creating a target"))?;
-        let value = t.value.unwrap_or(0.0);
-        let cost = t.cost.unwrap_or(0.0);
-        let acceptance = t
-            .acceptance
-            .clone()
-            .filter(|a| !a.is_empty())
-            .ok_or_else(|| tool_err("acceptance is required when creating a target"))?;
-
-        let kind = match t.kind.as_deref() {
-            Some(k) => parse_kind(k)?,
-            None => crate::schema::Kind::Work,
-        };
-        let status = match t.status.as_deref() {
-            Some(s) => parse_status(s)?,
-            None => Status::Identified,
-        };
-
-        let target = Target {
-            name,
-            kind,
-            status,
-            value,
-            cost,
-            observable: t.observable.unwrap_or(false),
-            actual_cost: None,
-            acceptance,
-            checks: Vec::new(),
-            context: t.context.clone().unwrap_or_default(),
-            gates: Vec::new(),
-            depends_on: t.depends_on.clone().unwrap_or_default(),
-            cross_depends: Vec::new(),
-            cross_enables: Vec::new(),
-            verifies: t.verifies.clone().unwrap_or_default(),
-            rework: None,
-            retry_budget: None,
-            retries: 0,
-            tags: t.tags.clone().unwrap_or_default(),
-            origin: t.origin.clone().unwrap_or_else(|| "manual".to_string()),
-            discovered: Local::now().date_naive(),
-            achieved: if status == Status::Achieved {
-                Some(Local::now().date_naive())
-            } else {
-                None
-            },
-        };
-        file.targets.insert(id.clone(), target);
-    } else {
-        // Patch path — only provided fields change.
-
-        // Kind is creation-only; reject early so the error surfaces
-        // regardless of any other field state.
-        if t.kind.is_some() {
-            return err("kind can only be set when creating a target");
-        }
-
-        // Parse the optional new status upfront so the
-        // achieved-immutability check below and the field application
-        // below share a single parse.
-        let new_status: Option<Status> = match t.status.as_deref() {
-            Some(s) => Some(parse_status(s)?),
-            None => None,
-        };
-
-        // Safety — reject content edits on achieved targets unless
-        // the same call is simultaneously re-opening them. Achieved
-        // targets are historical artifacts; their content is
-        // immutable until the human explicitly re-opens them by
-        // patching `status: identified`. See 🎯T8.
-        let target = file.targets.get_mut(&id).expect("existence checked above");
-        let target_currently_achieved = target.status == Status::Achieved;
-        let would_remain_achieved = match new_status {
-            Some(s) => s == Status::Achieved,
-            None => target_currently_achieved,
-        };
-        let content_edits_present = t.name.is_some()
-            || t.value.is_some()
-            || t.cost.is_some()
-            || t.acceptance.is_some()
-            || t.context.is_some()
-            || t.tags.is_some()
-            || t.origin.is_some()
-            || t.depends_on.is_some()
-            || t.verifies.is_some()
-            || t.observable.is_some();
-        if target_currently_achieved && would_remain_achieved && content_edits_present {
-            return err(format!(
-                "🎯{id} is achieved — its content is immutable. Re-open it first by \
-                 calling bullseye_put with `status: identified`, then apply content \
-                 changes in a separate call. (Achieved targets are historical artifacts.)"
-            ));
-        }
-
-        if let Some(ref name) = t.name {
-            target.name = name.clone();
-        }
-        if let Some(value) = t.value {
-            target.value = value;
-        }
-        if let Some(cost) = t.cost {
-            target.cost = cost;
-        }
-        if let Some(ref acceptance) = t.acceptance {
-            target.acceptance = acceptance.clone();
-        }
-        if let Some(ref context) = t.context {
-            target.context = context.clone();
-        }
-        if let Some(ref tags) = t.tags {
-            target.tags = tags.clone();
-        }
-        if let Some(ref origin) = t.origin {
-            target.origin = origin.clone();
-        }
-        if let Some(ref deps) = t.depends_on {
-            target.depends_on = deps.clone();
-        }
-        if let Some(observable) = t.observable {
-            target.observable = observable;
-        }
-        if let Some(ref verifies) = t.verifies {
-            target.verifies = verifies.clone();
-        }
-        if let Some(status) = new_status {
-            target.status = status;
-            if status == Status::Achieved && target.achieved.is_none() {
-                target.achieved = Some(Local::now().date_naive());
+    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
+        // Resolve target ID. None → auto-assign a new top-level ID.
+        let (id, is_create) = match t.id.clone() {
+            Some(explicit) => {
+                let exists = file.targets.contains_key(&explicit);
+                (explicit, !exists)
             }
-        }
-    }
+            None => (next_top_level_id(file), true),
+        };
 
-    // Apply `blocks` sugar: inject `id` into each listed target's depends_on.
-    let mut injected_into: Vec<String> = Vec::new();
-    if let Some(ref blocks) = t.blocks {
-        for other_id in blocks {
-            if other_id == &id {
-                return err(format!("target {id} cannot block itself"));
+        if is_create {
+            // Creation path — name and acceptance are required.
+            // value and cost are optional at repo scope (they are portfolio-scope
+            // metadata consumed by cross-repo WSJF ranking, not by the repo-level
+            // frontier ordering which uses distance-to-observable instead).
+            // Omitting them defaults to 0.0, which signals "not set at repo scope"
+            // and is skipped by portfolio WSJF scoring.
+            let name = t
+                .name
+                .clone()
+                .ok_or_else(|| "name is required when creating a target".to_string())?;
+            let value = t.value.unwrap_or(0.0);
+            let cost = t.cost.unwrap_or(0.0);
+            let acceptance = t
+                .acceptance
+                .clone()
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| "acceptance is required when creating a target".to_string())?;
+
+            let kind = match t.kind.as_deref() {
+                Some(k) => parse_kind_s(k)?,
+                None => crate::schema::Kind::Work,
+            };
+            let status = match t.status.as_deref() {
+                Some(s) => parse_status_s(s)?,
+                None => Status::Identified,
+            };
+
+            let target = Target {
+                name,
+                kind,
+                status,
+                value,
+                cost,
+                observable: t.observable.unwrap_or(false),
+                actual_cost: None,
+                acceptance,
+                checks: Vec::new(),
+                context: t.context.clone().unwrap_or_default(),
+                gates: Vec::new(),
+                depends_on: t.depends_on.clone().unwrap_or_default(),
+                cross_depends: Vec::new(),
+                cross_enables: Vec::new(),
+                verifies: t.verifies.clone().unwrap_or_default(),
+                rework: None,
+                retry_budget: None,
+                retries: 0,
+                tags: t.tags.clone().unwrap_or_default(),
+                origin: t.origin.clone().unwrap_or_else(|| "manual".to_string()),
+                discovered: Local::now().date_naive(),
+                achieved: if status == Status::Achieved {
+                    Some(Local::now().date_naive())
+                } else {
+                    None
+                },
+            };
+            file.targets.insert(id.clone(), target);
+        } else {
+            // Patch path — only provided fields change.
+
+            // Kind is creation-only; reject early so the error surfaces
+            // regardless of any other field state.
+            if t.kind.is_some() {
+                return Err("kind can only be set when creating a target".to_string());
             }
-            let other = file.targets.get_mut(other_id).ok_or_else(|| {
-                tool_err(format!(
-                    "blocks target {other_id} does not exist (cannot add dependency)"
-                ))
-            })?;
-            if other.status == Status::Achieved {
-                return err(format!(
-                    "cannot inject dependency into 🎯{other_id} — it is achieved. \
-                     Re-open it first by patching `status: identified`. See 🎯T8."
+
+            // Parse the optional new status upfront so the
+            // achieved-immutability check below and the field application
+            // below share a single parse.
+            let new_status: Option<Status> = match t.status.as_deref() {
+                Some(s) => Some(parse_status_s(s)?),
+                None => None,
+            };
+
+            // Safety — reject content edits on achieved targets unless
+            // the same call is simultaneously re-opening them. Achieved
+            // targets are historical artifacts; their content is
+            // immutable until the human explicitly re-opens them by
+            // patching `status: identified`. See 🎯T8.
+            let target = file.targets.get_mut(&id).expect("existence checked above");
+            let target_currently_achieved = target.status == Status::Achieved;
+            let would_remain_achieved = match new_status {
+                Some(s) => s == Status::Achieved,
+                None => target_currently_achieved,
+            };
+            let content_edits_present = t.name.is_some()
+                || t.value.is_some()
+                || t.cost.is_some()
+                || t.acceptance.is_some()
+                || t.context.is_some()
+                || t.tags.is_some()
+                || t.origin.is_some()
+                || t.depends_on.is_some()
+                || t.verifies.is_some()
+                || t.observable.is_some();
+            if target_currently_achieved && would_remain_achieved && content_edits_present {
+                return Err(format!(
+                    "🎯{id} is achieved — its content is immutable. Re-open it first by \
+                     calling bullseye_put with `status: identified`, then apply content \
+                     changes in a separate call. (Achieved targets are historical artifacts.)"
                 ));
             }
-            if !other.depends_on.contains(&id) {
-                other.depends_on.push(id.clone());
-                injected_into.push(other_id.clone());
+
+            if let Some(ref name) = t.name {
+                target.name = name.clone();
+            }
+            if let Some(value) = t.value {
+                target.value = value;
+            }
+            if let Some(cost) = t.cost {
+                target.cost = cost;
+            }
+            if let Some(ref acceptance) = t.acceptance {
+                target.acceptance = acceptance.clone();
+            }
+            if let Some(ref context) = t.context {
+                target.context = context.clone();
+            }
+            if let Some(ref tags) = t.tags {
+                target.tags = tags.clone();
+            }
+            if let Some(ref origin) = t.origin {
+                target.origin = origin.clone();
+            }
+            if let Some(ref deps) = t.depends_on {
+                target.depends_on = deps.clone();
+            }
+            if let Some(observable) = t.observable {
+                target.observable = observable;
+            }
+            if let Some(ref verifies) = t.verifies {
+                target.verifies = verifies.clone();
+            }
+            if let Some(status) = new_status {
+                target.status = status;
+                if status == Status::Achieved && target.achieved.is_none() {
+                    target.achieved = Some(Local::now().date_naive());
+                }
             }
         }
-    }
 
-    save_file(&path, &file)?;
+        // Apply `blocks` sugar: inject `id` into each listed target's depends_on.
+        let mut injected_into: Vec<String> = Vec::new();
+        if let Some(ref blocks) = t.blocks {
+            for other_id in blocks {
+                if other_id == &id {
+                    return Err(format!("target {id} cannot block itself"));
+                }
+                let other = file.targets.get_mut(other_id).ok_or_else(|| {
+                    format!("blocks target {other_id} does not exist (cannot add dependency)")
+                })?;
+                if other.status == Status::Achieved {
+                    return Err(format!(
+                        "cannot inject dependency into 🎯{other_id} — it is achieved. \
+                         Re-open it first by patching `status: identified`. See 🎯T8."
+                    ));
+                }
+                if !other.depends_on.contains(&id) {
+                    other.depends_on.push(id.clone());
+                    injected_into.push(other_id.clone());
+                }
+            }
+        }
 
-    let verb = if is_create { "Created" } else { "Updated" };
-    let mut out = format!("{verb} 🎯{id}");
-    if let Some(target) = file.targets.get(&id) {
-        out.push_str(&format!(" \"{}\"", target.name));
+        let target_name = file
+            .targets
+            .get(&id)
+            .map(|t| t.name.clone())
+            .unwrap_or_default();
+        Ok(Outcome {
+            id,
+            is_create,
+            target_name,
+            injected_into,
+        })
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
+
+    let verb = if outcome.is_create {
+        "Created"
+    } else {
+        "Updated"
+    };
+    let mut out = format!("{verb} 🎯{}", outcome.id);
+    if !outcome.target_name.is_empty() {
+        out.push_str(&format!(" \"{}\"", outcome.target_name));
     }
-    if !injected_into.is_empty() {
+    if !outcome.injected_into.is_empty() {
         out.push_str(&format!(
             "\nInjected as dependency into: {}",
-            injected_into
+            outcome
+                .injected_into
                 .iter()
                 .map(|s| format!("🎯{s}"))
                 .collect::<Vec<_>>()
@@ -391,34 +416,43 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
 }
 
 fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
-    let (path, mut file) = load_file(&t.cwd)?;
+    let path = discover_path(&t.cwd)?;
 
-    let target = file
-        .targets
-        .get_mut(&t.id)
-        .ok_or_else(|| tool_err(format!("target {} not found", t.id)))?;
-
-    if target.status == Status::Achieved {
-        return text_result(format!("🎯{} is already achieved", t.id));
+    enum Outcome {
+        AlreadyAchieved,
+        Retired { name: String, cost: f64 },
     }
 
-    let target = file.targets.get_mut(&t.id).unwrap();
-    target.status = Status::Achieved;
-    target.achieved = Some(Local::now().date_naive());
-    if let Some(actual) = t.actual_cost {
-        target.actual_cost = Some(actual);
+    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
+        let target = file
+            .targets
+            .get_mut(&t.id)
+            .ok_or_else(|| format!("target {} not found", t.id))?;
+        if target.status == Status::Achieved {
+            return Ok(Outcome::AlreadyAchieved);
+        }
+        target.status = Status::Achieved;
+        target.achieved = Some(Local::now().date_naive());
+        if let Some(actual) = t.actual_cost {
+            target.actual_cost = Some(actual);
+        }
+        Ok(Outcome::Retired {
+            name: target.name.clone(),
+            cost: target.cost,
+        })
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
+
+    match outcome {
+        Outcome::AlreadyAchieved => text_result(format!("🎯{} is already achieved", t.id)),
+        Outcome::Retired { name, cost } => {
+            let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
+            if let Some(actual) = t.actual_cost {
+                out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
+            }
+            text_result(out)
+        }
     }
-
-    let name = target.name.clone();
-    let cost = target.cost;
-
-    save_file(&path, &file)?;
-
-    let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
-    if let Some(actual) = t.actual_cost {
-        out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
-    }
-    text_result(out)
 }
 
 fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
@@ -462,12 +496,12 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
 }
 
 fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
-    let (path, mut file) = load_file(&t.cwd)?;
+    let path = discover_path(&t.cwd)?;
 
-    let result =
-        ops::rework(&mut file, &t.id, &t.diagnosis).map_err(|e| tool_err(e.to_string()))?;
-
-    save_file(&path, &file)?;
+    let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
+        ops::rework(file, &t.id, &t.diagnosis).map_err(|e| e.to_string())
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
 
     let mut out = format!(
         "Rework triggered: 🎯{} → 🎯{} \"{}\"\nRetry {}",
@@ -627,7 +661,7 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
         std::fs::create_dir_all(parent)
             .map_err(|e| tool_err(format!("failed to create {}: {e}", parent.display())))?;
     }
-    store::save(&yaml_path, &file).map_err(tool_err)?;
+    store::with_locked_write(&yaml_path, &file).map_err(|e| tool_err(e.to_string()))?;
 
     text_result(format!(
         "Imported {} targets from {}\n\
