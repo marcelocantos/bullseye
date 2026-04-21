@@ -9,9 +9,27 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.17.0. Changes since v0.16.0 affecting the
+Snapshot as of v0.18.0. Changes since v0.17.0 affecting the
 interaction surface:
 
+- **Concurrency protocol for `bullseye.yaml`** (🎯T17). Bullseye now
+  tolerates concurrent writers. Mutating tools (`bullseye_put`,
+  `bullseye_retire`, `bullseye_rework`, `bullseye_import`) acquire an
+  exclusive advisory flock on a sibling `<dir>/bullseye.yaml.lock`
+  sentinel before reading, re-read the yaml fresh from disk (bypassing
+  the parse cache), CAS-check `(mtime, len)` across the
+  read-modify-write window to catch non-flock-honouring writers, and
+  write back atomically via tempfile + rename. Lock wait is bounded
+  (~5s) with a structured timeout error. Third-party tools that want
+  to edit `bullseye.yaml` safely alongside bullseye should acquire
+  the same `flock(2)` / `LockFileEx` on the sibling lockfile — see
+  the README's "Concurrency protocol" section. Visible to callers
+  as: (a) new error variants on mutating tools (timeout, conflict),
+  (b) a persistent `bullseye.yaml.lock` sentinel file next to every
+  yaml, (c) previously-possible lost-update races in multi-session
+  use no longer occur.
+
+Earlier changes still in effect from v0.17.0:
 - **`bullseye_put` value/cost optional at repo scope** (🎯T11).
   `value` and `cost` are no longer required on create. Both default
   to `0.0`, which the validator now accepts as the "not set at repo
@@ -252,8 +270,10 @@ Planned additions:
   required on `bullseye_init`/`bullseye_import`, no auto-create on
   `bullseye_put`). The settling clock restarts from v0.16.0.
   v0.17.0 relaxes the `bullseye_put` input contract (`value`/`cost`
-  optional on create) — this is additive for existing callers and
-  doesn't reset the clock.
+  optional on create) — additive, no reset. v0.18.0 introduces the
+  lockfile protocol (🎯T17) — additive for bullseye's own tools
+  but imposes a new expectation on third-party editors, so note the
+  change here even though it's not a hard reset.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
