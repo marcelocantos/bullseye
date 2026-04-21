@@ -364,6 +364,44 @@ targets:
     - agent-ux
     origin: discovered in sibling-repo session 2026-04-18 — agent reached for WSJF framing at repo scope despite 🎯T11 docstring fix
     discovered: 2026-04-19
+  T17:
+    name: Bullseye tolerates concurrent writers — every mutation reads disk fresh, serialises with flock, and detects lost-update conflicts
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - 'Fresh read per tool call: every mutation (bullseye_put, bullseye_retire, and any other write-bearing tool) re-reads bullseye.yaml from disk before applying its changes. The cross-tool-call in-memory cache is removed, or invalidated via a cheap mtime+size check before every read.'
+    - 'File lock around the read-modify-write cycle: mutations acquire an exclusive advisory lock (flock(2) on POSIX, LockFileEx on Windows) on bullseye.yaml for the entire RMW window. Concurrent bullseye processes serialise cleanly; readers that only list don''t need the lock.'
+    - 'Bounded lock wait: a lock acquisition that can''t complete within a few seconds (configurable, default ~5s) fails with a structured error naming the contending PID where the platform allows it.'
+    - 'Atomic write-back: write-back goes to a sibling tempfile in the same directory, followed by os.Rename (crash-safe). Document this explicitly in whichever module owns the YAML writer.'
+    - 'Lost-update detection (CAS): in addition to the lock, bullseye records the mtime (or a content hash) at read time and compares at write time. If the file changed between read and write — lock dropped and re-acquired, read path didn''t hold the lock, or an editor-without-advisory-lock-honour edited in between — the mutation fails with a structured conflict error rather than clobbering.'
+    - 'Listing reflects disk state: bullseye_list, bullseye_convergence, bullseye_frontier, and every other read-bearing tool re-read the file (or use the mtime fast-path) before returning. Stale cached results are not acceptable.'
+    - 'Concurrency test: a test harness spawns two bullseye processes in parallel, each performing a distinct mutation (e.g. one retires T1, the other adds T99). After both return, the file must contain both mutations. The test loops ≥10 times to catch timing-sensitive races.'
+    - 'Documentation: the README or ARCHITECTURE note explicitly states the file-level locking protocol so other tools that want to edit bullseye.yaml know what they''re sharing with.'
+    context: |-
+      Bullseye is configured as an stdio MCP server (per `~/.claude.json`), so every Claude Code session spawns its own bullseye process. Each process reads bullseye.yaml once (at startup or on first tool call) and mutates that in-memory model across subsequent `bullseye_put` / `bullseye_retire` / etc. calls, writing back to disk after each mutation.
+
+      This produces three failure modes when more than one writer touches the same file:
+
+      1. **Read-stale-and-clobber.** If session A adds T25 via `bullseye_put`, session B's bullseye still holds the pre-T25 model. B's next mutation (even on an unrelated target) serialises its whole in-memory model back to disk and silently deletes T25.
+      2. **Listing lies.** Session B's `bullseye_list` returns the cached model, not disk state — so targets added by session A (or by a human editor) are invisible until session B's bullseye is restarted.
+      3. **Concurrent write race.** Two bullseye processes saving in the same millisecond: whichever `os.Rename` lands second wins; the other's mutation is lost.
+
+      Demonstrated in practice on 2026-04-20 in spyder's `bullseye.yaml`: session A added T25; session B (running concurrently) had just retired T23 and T24 and its `bullseye_list` reported 0 active targets despite T25 being on disk. T25 would have been clobbered if session B had performed any further mutation before being told to re-read.
+
+      The root cause is that bullseye treats `bullseye.yaml` as if it owned it exclusively, but the project's own convention is that the YAML is edited by humans, scripts, AND bullseye itself. The in-memory cache model is simply wrong for that sharing pattern.
+
+      **Rough scope:** 1–2 days. The mutations and lock wrapping are small; the concurrency test is where the time goes. The CAS layer is optional belt-and-braces if flock covers all the realistic cases, but worth including to catch the case where someone edits the YAML with an editor that doesn't honour advisory locks.
+    tags:
+    - correctness
+    - concurrency
+    - stdio
+    - file-io
+    - data-loss
+    - mcp
+    origin: demonstrated 2026-04-20 in spyder/bullseye.yaml — concurrent Claude Code sessions lost-update'd each other's target mutations
+    discovered: 2026-04-21
   T2:
     name: Global portfolio view across all repos
     status: achieved
