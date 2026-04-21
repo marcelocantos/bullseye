@@ -2940,3 +2940,103 @@ fn cache_fallback_to_stale_on_reparse_failure() {
         "expected stale cache fallback on parse failure"
     );
 }
+
+#[test]
+fn concurrent_mutations_do_not_lose_updates() {
+    // 🎯T17 regression test: two concurrent mutators each add a distinct
+    // target to the same bullseye.yaml. Without flock, one mutation's
+    // serialized-back-to-disk write clobbers the other. With flock, the
+    // mutations serialise and both targets must be present at the end.
+    //
+    // We use threads rather than subprocesses because fs2's advisory
+    // locks (flock(2) on POSIX, LockFileEx on Windows) are tied to the
+    // open-file-description — each thread's independent
+    // `OpenOptions::open(...)` gets a distinct OFD, so same-process
+    // threads contend on the lock exactly like cross-process writers
+    // would. This catches the same lost-update race with ~0ms overhead
+    // per iteration (subprocess spawn would cost ~50ms × 2 × N iters).
+    //
+    // Loop count: 10 iterations, fresh tempdir per iteration. Each
+    // iteration runs N concurrent writers and asserts every write
+    // landed.
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    const ITERATIONS: usize = 10;
+    const WRITERS_PER_ITERATION: usize = 4;
+
+    for iter in 0..ITERATIONS {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bullseye.yaml");
+        write_yaml(&path, "Baseline");
+
+        // All threads wait on this barrier before starting their
+        // mutation — maximises contention on the lock.
+        let barrier = Arc::new(Barrier::new(WRITERS_PER_ITERATION));
+
+        let handles: Vec<_> = (0..WRITERS_PER_ITERATION)
+            .map(|i| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let new_id = format!("T{}", 1000 + i);
+                    store::with_locked_mutation(&path, |file| -> Result<(), String> {
+                        file.targets.insert(
+                            new_id.clone(),
+                            bullseye::schema::Target {
+                                name: format!("Concurrent target {i}"),
+                                kind: Kind::Work,
+                                status: Status::Identified,
+                                value: 1.0,
+                                cost: 1.0,
+                                observable: false,
+                                actual_cost: None,
+                                acceptance: vec!["done".to_string()],
+                                checks: Vec::new(),
+                                context: String::new(),
+                                gates: Vec::new(),
+                                depends_on: Vec::new(),
+                                cross_depends: Vec::new(),
+                                cross_enables: Vec::new(),
+                                verifies: Vec::new(),
+                                rework: None,
+                                retry_budget: None,
+                                retries: 0,
+                                tags: Vec::new(),
+                                origin: "concurrent-test".to_string(),
+                                discovered: chrono::Local::now().date_naive(),
+                                achieved: None,
+                            },
+                        );
+                        Ok(())
+                    })
+                    .unwrap_or_else(|e| {
+                        panic!("iter {iter} thread {i}: locked mutation failed: {e}")
+                    });
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("writer thread panicked");
+        }
+
+        // Every writer must have landed. Read fresh from disk —
+        // bypass any cache by stat'ing directly (load() does this
+        // via mtime, but parse_file is private; load() is fine).
+        let final_file = store::load(&path).unwrap();
+        for i in 0..WRITERS_PER_ITERATION {
+            let id = format!("T{}", 1000 + i);
+            assert!(
+                final_file.targets.contains_key(&id),
+                "iter {iter}: target {id} was lost — concurrent write clobbered it"
+            );
+        }
+        // Plus the baseline T1 from write_yaml.
+        assert!(
+            final_file.targets.contains_key("T1"),
+            "iter {iter}: baseline T1 was lost"
+        );
+    }
+}
