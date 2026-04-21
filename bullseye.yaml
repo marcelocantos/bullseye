@@ -366,10 +366,11 @@ targets:
     discovered: 2026-04-19
   T17:
     name: Bullseye tolerates concurrent writers — every mutation reads disk fresh, serialises with flock, and detects lost-update conflicts
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
+    actual_cost: 5.0
     acceptance:
     - 'Fresh read per tool call: every mutation (bullseye_put, bullseye_retire, and any other write-bearing tool) re-reads bullseye.yaml from disk before applying its changes. The cross-tool-call in-memory cache is removed, or invalidated via a cheap mtime+size check before every read.'
     - 'File lock around the read-modify-write cycle: mutations acquire an exclusive advisory lock (flock(2) on POSIX, LockFileEx on Windows) on bullseye.yaml for the entire RMW window. Concurrent bullseye processes serialise cleanly; readers that only list don''t need the lock.'
@@ -402,6 +403,7 @@ targets:
     - mcp
     origin: demonstrated 2026-04-20 in spyder/bullseye.yaml — concurrent Claude Code sessions lost-update'd each other's target mutations
     discovered: 2026-04-21
+    achieved: 2026-04-21
   T2:
     name: Global portfolio view across all repos
     status: achieved
