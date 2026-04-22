@@ -5,6 +5,22 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use crate::schema::{Kind, Status, Target, TargetsFile};
 
+/// Banner + legend describing repo-scope frontier ordering. Rendered
+/// at the top of the frontier section in every repo-scope output
+/// (`bullseye_frontier`, `bullseye_summary`, `bullseye_convergence`)
+/// so agents reading the annotations see the correct framing inline
+/// and don't default to WSJF/SAFe reasoning from training-data habit.
+/// Portfolio-scope ranking lives in [`crate::portfolio`] and *does*
+/// use WSJF — the banner exists to stop that framing leaking into
+/// repo-scope decisions. See 🎯T16.
+pub const REPO_SCOPE_BANNER: &str = "\
+> **Repo-scope ordering**: min distance-to-observable, then max unblocking fanout. \
+WSJF/value/cost/SAFe framing is portfolio-scope only — do not use it at repo scope.
+>
+> **Legend**: `observable` = target is itself a checkpoint · `dist=N` = N hops to nearest checkpoint · `no observable reachable` = tunnel, reshape the graph · `fanout=N` = downstream targets unblocked by this one.
+
+";
+
 /// Default maximum BFS depth for observable-reachability. Tunnel
 /// detection uses [`tunnels`]'s own `max_depth` parameter; this
 /// constant is the upper bound the repo-level frontier ordering
@@ -772,6 +788,7 @@ pub fn summary(
         let ranked = rank_frontier(file, &front);
 
         out.push_str("## Frontier (unblocked, ready for work)\n\n");
+        out.push_str(REPO_SCOPE_BANNER);
         if ranked.is_empty() {
             out.push_str("(no targets ready for work)\n");
         } else {
