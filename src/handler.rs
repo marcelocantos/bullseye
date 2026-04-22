@@ -464,22 +464,38 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
     }
 
     let targets = graph::frontier(&file);
+    let ranked = graph::rank_frontier(&file, &targets);
 
     let mut out = format!("# Frontier\nFile: {}\n\n", path.display());
-    if targets.is_empty() {
+    out.push_str(graph::REPO_SCOPE_BANNER);
+    if ranked.is_empty() {
         out.push_str("(no targets ready for work)\n");
     }
-    for ft in &targets {
+    for rf in &ranked {
+        let ft = rf.target;
         let kind_label = match ft.kind {
-            crate::schema::Kind::Work => "",
+            crate::schema::Kind::Work => {
+                if file.targets.get(&ft.id).is_some_and(|t| t.observable) {
+                    " [observable]"
+                } else {
+                    ""
+                }
+            }
             crate::schema::Kind::Verify => " [verify]",
         };
+        let distance_label = match rf.distance {
+            Some(0) => "observable".to_string(),
+            Some(d) => format!("dist={d}"),
+            None => "no observable reachable".to_string(),
+        };
         out.push_str(&format!(
-            "🎯{id} {name}{kind}\n  status: {status:?}\n",
+            "🎯{id} {name}{kind}  [{status:?}] — {dist}, fanout={fan}\n",
             id = ft.id,
             name = ft.name,
             kind = kind_label,
             status = ft.status,
+            dist = distance_label,
+            fan = rf.fanout,
         ));
         if !ft.verifies.is_empty() {
             let vs: Vec<String> = ft.verifies.iter().map(|v| format!("🎯{v}")).collect();
@@ -490,7 +506,7 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
         }
         out.push('\n');
     }
-    out.push_str(&format!("{} target(s) ready for work", targets.len()));
+    out.push_str(&format!("{} target(s) ready for work", ranked.len()));
 
     text_result(out)
 }

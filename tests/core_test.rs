@@ -1010,12 +1010,16 @@ fn summary_shows_totals_and_sections() {
     assert!(out.contains("4 active"));
     assert!(out.contains("1 achieved"));
 
-    // Has key sections. No WSJF ranking section any more — frontier
-    // itself carries the focus ordering.
+    // Has key sections. No WSJF ranking section or annotations — at
+    // repo scope the frontier itself carries the focus ordering
+    // (distance-to-observable, fanout). The banner introduced by
+    // 🎯T16 names WSJF once to explicitly disavow it, so we check
+    // for the absence of actual WSJF *ranking* signals rather than
+    // the word itself.
     assert!(out.contains("## Active targets by group"));
     assert!(out.contains("## Frontier"));
     assert!(!out.contains("## WSJF ranking"));
-    assert!(!out.contains("WSJF"));
+    assert!(!out.contains("wsjf="));
 }
 
 #[test]
@@ -1032,6 +1036,53 @@ fn summary_shows_frontier_targets() {
     assert!(frontier_text.contains("🎯T1"));
     assert!(frontier_text.contains("🎯T2"));
     assert!(frontier_text.contains("🎯T3"));
+}
+
+#[test]
+fn summary_frontier_section_opens_with_repo_scope_banner() {
+    // 🎯T16: every repo-scope frontier rendering must lead with the
+    // banner + legend so agents see the correct ordering framing
+    // inline and don't default to WSJF/SAFe reasoning from
+    // training-data habit. The banner has to sit inside the
+    // `## Frontier` section (not before it) so it survives
+    // convergence's summary-body splicing.
+    let file = load_fixture();
+    let out = graph::summary(&file, "test", None, false);
+    let frontier_section = out.split("## Frontier").nth(1).unwrap();
+    let frontier_end = frontier_section
+        .find("\n## ")
+        .unwrap_or(frontier_section.len());
+    let frontier_text = &frontier_section[..frontier_end];
+
+    assert!(
+        frontier_text.contains("Repo-scope ordering"),
+        "banner must name the repo-scope ordering function; got:\n{frontier_text}"
+    );
+    assert!(
+        frontier_text.contains("min distance-to-observable"),
+        "banner must describe the primary sort key; got:\n{frontier_text}"
+    );
+    assert!(
+        frontier_text.contains("max unblocking fanout"),
+        "banner must describe the tiebreaker; got:\n{frontier_text}"
+    );
+    assert!(
+        frontier_text.contains("portfolio-scope"),
+        "banner must disavow portfolio-scope framing at repo scope; got:\n{frontier_text}"
+    );
+    // Legend covers the three per-entry annotation shapes.
+    assert!(
+        frontier_text.contains("`observable`"),
+        "legend must define the `observable` annotation; got:\n{frontier_text}"
+    );
+    assert!(
+        frontier_text.contains("`dist=N`"),
+        "legend must define the `dist=N` annotation; got:\n{frontier_text}"
+    );
+    assert!(
+        frontier_text.contains("`fanout=N`"),
+        "legend must define the `fanout=N` annotation; got:\n{frontier_text}"
+    );
 }
 
 #[test]
@@ -1194,8 +1245,17 @@ fn convergence_end_to_end_green_invariants_picks_top_frontier() {
         out.contains("**Execute now**: Work on 🎯T1 Primary deliverable"),
         "expected top-focus target as next action; got:\n{out}"
     );
-    // No WSJF references anywhere in the convergence output.
-    assert!(!out.to_lowercase().contains("wsjf"));
+    // No WSJF ranking annotations anywhere in the convergence output.
+    // (The 🎯T16 banner names WSJF once to explicitly disavow it at
+    // repo scope — absence of `wsjf=` covers the actual anti-pattern
+    // of scored WSJF entries without colliding with the disavowal.)
+    assert!(!out.to_lowercase().contains("wsjf="));
+    // 🎯T16: repo-scope banner must survive the summary-body splice
+    // into convergence output.
+    assert!(
+        out.contains("Repo-scope ordering"),
+        "convergence output must carry the repo-scope banner; got:\n{out}"
+    );
 }
 
 #[test]
@@ -1543,9 +1603,12 @@ fn summary_momentum_does_not_affect_repo_level_ordering() {
         section(&without),
         "momentum map must not change repo-level frontier ordering"
     );
-    // Deliberately absent: any reference to WSJF, focus, or
-    // momentum annotations in the new format.
-    assert!(!with.contains("WSJF"));
+    // Deliberately absent: any WSJF ranking signal, focus label, or
+    // momentum annotation in the repo-scope output. The 🎯T16 banner
+    // legitimately names WSJF once in order to disavow it, so we
+    // check for the ranking-annotation pattern (`wsjf=`) rather than
+    // the word.
+    assert!(!with.contains("wsjf="));
     assert!(!with.contains("focus"));
     assert!(!with.contains("× momentum"));
 }
