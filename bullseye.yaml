@@ -368,7 +368,7 @@ targets:
     achieved: 2026-04-22
   T17:
     name: Bullseye tolerates concurrent writers — every mutation reads disk fresh, serialises with flock, and detects lost-update conflicts
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
@@ -404,6 +404,7 @@ targets:
     - mcp
     origin: demonstrated 2026-04-20 in spyder/bullseye.yaml — concurrent Claude Code sessions lost-update'd each other's target mutations
     discovered: 2026-04-21
+    achieved: 2026-04-22
   T2:
     name: Global portfolio view across all repos
     status: achieved
