@@ -341,10 +341,11 @@ targets:
     discovered: 2026-04-17
   T16:
     name: Bullseye's repo-scope output is self-describing, so agents don't default to WSJF/SAFe framing at repo scope
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
+    actual_cost: 2.0
     acceptance:
     - '`bullseye_frontier`, `bullseye_summary`, and `bullseye_convergence` output include a one-line banner naming the repo-scope ordering function (min distance-to-observable, max fanout) and explicitly disavowing WSJF/value/cost at repo scope'
     - The per-entry annotations (`dist=N`, `fanout=N`, `observable`) are grouped under a brief legend so their meaning is visible without cross-referencing docs
@@ -364,6 +365,7 @@ targets:
     - agent-ux
     origin: discovered in sibling-repo session 2026-04-18 — agent reached for WSJF framing at repo scope despite 🎯T11 docstring fix
     discovered: 2026-04-19
+    achieved: 2026-04-22
   T17:
     name: Bullseye tolerates concurrent writers — every mutation reads disk fresh, serialises with flock, and detects lost-update conflicts
     status: identified
