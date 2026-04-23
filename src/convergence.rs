@@ -435,12 +435,12 @@ fn render_next_action(
 
     // Priority 3 — repo-level frontier ordering (🎯T7).
     //
-    // Distance-to-nearest-observable-checkpoint is the primary sort
-    // signal, with unblocking fanout as tiebreaker and ID as final
-    // tiebreak. See `graph::rank_frontier` for the full rule.
-    // `momentum` is intentionally not consumed here — it's a
-    // portfolio-scope input, not a repo-level signal. See 🎯T7 in
-    // `bullseye.yaml` and §9 of `docs/mcp-triad.md`.
+    // Distance-to-nearest-checkpoint is the primary sort signal,
+    // with unblocking fanout as tiebreaker and ID as final tiebreak.
+    // See `graph::rank_frontier` for the full rule. `momentum` is
+    // intentionally not consumed here — it's a portfolio-scope
+    // input, not a repo-level signal. See 🎯T7 in `bullseye.yaml`
+    // and §9 of `docs/mcp-triad.md`.
     let _ = momentum;
     let errors = graph::validate(file);
     if !errors.is_empty() {
@@ -463,23 +463,23 @@ fn render_next_action(
     let ranked = graph::rank_frontier(file, &front);
 
     // Tunnel reshape guard: if the top-ranked frontier candidate has
-    // no observable checkpoint reachable at all, selecting it would
-    // extend a tunnel — a chain of non-observable targets with no
-    // human-visible checkpoint at the end. Recommend reshaping the
-    // graph (adding an intermediate observable target or promoting
-    // an existing work target to `observable: true`) rather than
-    // blundering forward. Uses the `**Blocked**:` prefix so the `/cv`
-    // skill's existing auto-execute branch correctly pauses instead
-    // of dispatching to an agent. See acceptance #5 on 🎯T7.
+    // no checkpoint reachable at all, selecting it would extend a
+    // tunnel — a chain of non-checkpoint targets with no
+    // human-visible signal at the end. Recommend reshaping the graph
+    // (adding an intermediate verify target or promoting an existing
+    // work target to `showcase: true`) rather than blundering
+    // forward. Uses the `**Blocked**:` prefix so the `/cv` skill's
+    // existing auto-execute branch correctly pauses instead of
+    // dispatching to an agent. See acceptance #5 on 🎯T7.
     let top = &ranked[0];
     if top.distance.is_none() {
         let tun_len = ranked.iter().take_while(|rf| rf.distance.is_none()).count();
         out.push_str(&format!(
             "**Blocked**: top frontier target 🎯{id} \"{name}\" would extend a tunnel with \
-             no observable checkpoint reachable downstream. {tun_len} of {total} frontier \
-             target(s) have no observable reachable at all.\n\n\
+             no checkpoint reachable downstream. {tun_len} of {total} frontier \
+             target(s) have no checkpoint reachable at all.\n\n\
              Reshape the graph before proceeding — either add an intermediate verify target \
-             or mark an existing downstream work target as `observable: true` so the \
+             or mark an existing downstream work target as `showcase: true` so the \
              decision-maker gets a checkpoint within a few hops. See the ## Frontier section \
              above for the full target list and the 🎯T7 rationale in \
              `docs/mcp-triad.md` §9.\n",
@@ -511,7 +511,7 @@ fn render_next_action(
         let t = ties[0];
         out.push_str(&format!(
             "**Execute now**: Work on 🎯{} {}\n\n\
-             Distance to nearest observable checkpoint: {}. Unblocking fanout: {}. \
+             Distance to nearest checkpoint: {}. Unblocking fanout: {}. \
              See the ## Frontier section above for this target's acceptance criteria and \
              context.\n",
             t.target.id,
@@ -524,7 +524,7 @@ fn render_next_action(
         out.push_str(&format!(
             "**Execute now**: Work in parallel on {} frontier targets sharing the top \
              repo-level rank — {}.\n\n\
-             All tied on distance-to-observable = {} and unblocking fanout = {}. Each \
+             All tied on distance-to-checkpoint = {} and unblocking fanout = {}. Each \
              target's acceptance criteria and context are in the ## Frontier section \
              above. Fan out via parallel Agent calls, one per target, per the Teams \
              directive in CLAUDE.md.\n",
@@ -548,11 +548,11 @@ fn render_next_action(
 }
 
 /// Human-readable distance for the next-action text. Collapses the
-/// `Some(0)` case to "observable" so the copy reads naturally when
+/// `Some(0)` case to "checkpoint" so the copy reads naturally when
 /// the top candidate is itself a checkpoint.
 fn describe_distance(distance: Option<usize>) -> String {
     match distance {
-        Some(0) => "observable (0)".to_string(),
+        Some(0) => "checkpoint (0)".to_string(),
         Some(n) => n.to_string(),
         None => "unreachable".to_string(),
     }

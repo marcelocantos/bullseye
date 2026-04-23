@@ -268,8 +268,9 @@ fn tunnel_detects_deep_chain() {
                 status: Status::Identified,
                 value: 1.0,
                 cost: 1.0,
-                observable: false,
+                showcase: false,
                 actual_cost: None,
+                demonstration: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
                 context: String::new(),
@@ -298,8 +299,9 @@ fn tunnel_detects_deep_chain() {
             status: Status::Identified,
             value: 1.0,
             cost: 1.0,
-            observable: false,
+            showcase: false,
             actual_cost: None,
+            demonstration: None,
             acceptance: vec!["verified".to_string()],
             checks: vec![],
             context: String::new(),
@@ -1059,7 +1061,7 @@ fn summary_frontier_section_opens_with_repo_scope_banner() {
         "banner must name the repo-scope ordering function; got:\n{frontier_text}"
     );
     assert!(
-        frontier_text.contains("min distance-to-observable"),
+        frontier_text.contains("min distance-to-checkpoint"),
         "banner must describe the primary sort key; got:\n{frontier_text}"
     );
     assert!(
@@ -1070,10 +1072,15 @@ fn summary_frontier_section_opens_with_repo_scope_banner() {
         frontier_text.contains("portfolio-scope"),
         "banner must disavow portfolio-scope framing at repo scope; got:\n{frontier_text}"
     );
-    // Legend covers the three per-entry annotation shapes.
+    // Legend covers the per-entry annotation shapes used in the
+    // rendered frontier.
     assert!(
-        frontier_text.contains("`observable`"),
-        "legend must define the `observable` annotation; got:\n{frontier_text}"
+        frontier_text.contains("`checkpoint`"),
+        "legend must define the `checkpoint` annotation; got:\n{frontier_text}"
+    );
+    assert!(
+        frontier_text.contains("`showcase: true`"),
+        "legend must reference the `showcase: true` field that promotes a work target to a checkpoint; got:\n{frontier_text}"
     );
     assert!(
         frontier_text.contains("`dist=N`"),
@@ -1142,7 +1149,7 @@ fn summary_frontier_ordered_by_distance_and_fanout() {
     // Annotation format exposes dist/fanout, not value/focus/momentum.
     assert!(frontier_text.contains("dist=1"));
     assert!(frontier_text.contains("fanout=1"));
-    assert!(frontier_text.contains("no observable reachable"));
+    assert!(frontier_text.contains("no checkpoint reachable"));
     assert!(!frontier_text.contains("v=8"));
     assert!(!frontier_text.contains("focus"));
     assert!(!frontier_text.contains("momentum"));
@@ -1182,14 +1189,14 @@ fn text_from_call_result(result: rust_mcp_sdk::schema::CallToolResult) -> String
 }
 
 const SIMPLE_TARGETS_YAML: &str = r#"
-schema_version: 1
+schema_version: 2
 targets:
   T1:
     name: Primary deliverable
     status: identified
     value: 8
     cost: 3
-    observable: true
+    showcase: true
     acceptance:
       - Produces the primary artifact
       - Tests cover the happy path
@@ -1614,22 +1621,22 @@ fn summary_momentum_does_not_affect_repo_level_ordering() {
 }
 
 #[test]
-fn observable_field_yaml_roundtrip() {
+fn showcase_field_yaml_roundtrip() {
     use std::io::Write;
-    // The observable flag must round-trip cleanly: present only
+    // The showcase flag must round-trip cleanly: present only
     // when true, absent when false, survives save + reload.
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("bullseye.yaml");
 
     let yaml = r#"
-schema_version: 1
+schema_version: 2
 targets:
   T1:
-    name: Observable checkpoint work
+    name: Showcase checkpoint work
     status: identified
     value: 5
     cost: 3
-    observable: true
+    showcase: true
     acceptance:
       - done
     discovered: 2026-04-11
@@ -1645,44 +1652,98 @@ targets:
     write!(std::fs::File::create(&path).unwrap(), "{yaml}").unwrap();
 
     let file = store::load(&path).unwrap();
-    assert!(file.targets["T1"].observable);
-    assert!(!file.targets["T2"].observable);
+    assert!(file.targets["T1"].showcase);
+    assert!(!file.targets["T2"].showcase);
 
-    // Save + reload: observable preserved, absent-false field not
+    // Save + reload: showcase preserved, absent-false field not
     // re-emitted on the false target.
     store::save(&path, &file).unwrap();
     let raw = std::fs::read_to_string(&path).unwrap();
-    assert!(raw.contains("observable: true"));
-    // The false target must not have an explicit `observable: false`
+    assert!(raw.contains("showcase: true"));
+    // The false target must not have an explicit `showcase: false`
     // line — serde should skip it via `is_false`.
     let t2_block = raw.split("T2:").nth(1).unwrap_or("");
     assert!(
-        !t2_block.contains("observable"),
-        "T2 should not serialize observable: false; got:\n{t2_block}"
+        !t2_block.contains("showcase"),
+        "T2 should not serialize showcase: false; got:\n{t2_block}"
+    );
+    // The legacy field name must not appear in newly-written output —
+    // it deserialises via alias but serialises only as `showcase`.
+    assert!(
+        !raw.contains("observable:"),
+        "save must emit the new field name only; got:\n{raw}"
     );
 
     let reloaded = store::load(&path).unwrap();
-    assert!(reloaded.targets["T1"].observable);
-    assert!(!reloaded.targets["T2"].observable);
+    assert!(reloaded.targets["T1"].showcase);
+    assert!(!reloaded.targets["T2"].showcase);
 }
 
 #[test]
-fn observable_distance_finds_nearest_checkpoint() {
+fn legacy_observable_field_still_deserialises() {
+    // Schema v2 renamed `observable` to `showcase`. Pre-v2 yaml files
+    // in the wild still use the legacy key; the `#[serde(alias)]` on
+    // the new field must accept them transparently and surface the
+    // value through the new field name. On the next save the file
+    // is rewritten under `showcase`, so this is a one-shot migration.
+    use std::io::Write;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+
+    // schema_version: 1 mimics a file written by an older bullseye
+    // before the rename landed. The loader must still accept it.
+    let yaml = r#"
+schema_version: 1
+targets:
+  T1:
+    name: Legacy showcase work
+    status: identified
+    value: 5
+    cost: 3
+    observable: true
+    acceptance:
+      - done
+    discovered: 2026-03-01
+"#;
+    write!(std::fs::File::create(&path).unwrap(), "{yaml}").unwrap();
+
+    let file = store::load(&path).unwrap();
+    assert!(
+        file.targets["T1"].showcase,
+        "legacy `observable: true` must populate the new `showcase` field"
+    );
+
+    // Round-trip the file through save and confirm the legacy name
+    // is purged in favour of the new one.
+    store::save(&path, &file).unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        raw.contains("showcase: true"),
+        "saved file must emit the new field name; got:\n{raw}"
+    );
+    assert!(
+        !raw.contains("observable:"),
+        "saved file must not retain the legacy field name; got:\n{raw}"
+    );
+}
+
+#[test]
+fn checkpoint_distance_finds_nearest_checkpoint() {
     // Fixture graph:
     //   T1 (work)   ← T5 (verify covers T1, T3) — dist=1
     //   T2 (work)   — no forward path to any observable — dist=None
     //   T3 (work)   ← T5                                   — dist=1
     //   T5 (verify) — itself observable                    — dist=0
     let file = load_fixture();
-    assert_eq!(graph::observable_distance(&file, "T1", 4), Some(1));
-    assert_eq!(graph::observable_distance(&file, "T3", 4), Some(1));
-    assert_eq!(graph::observable_distance(&file, "T5", 4), Some(0));
-    assert_eq!(graph::observable_distance(&file, "T2", 4), None);
+    assert_eq!(graph::checkpoint_distance(&file, "T1", 4), Some(1));
+    assert_eq!(graph::checkpoint_distance(&file, "T3", 4), Some(1));
+    assert_eq!(graph::checkpoint_distance(&file, "T5", 4), Some(0));
+    assert_eq!(graph::checkpoint_distance(&file, "T2", 4), None);
 
     // Marking T2 itself observable flips it to dist=0.
     let mut mutated = load_fixture();
-    mutated.targets.get_mut("T2").unwrap().observable = true;
-    assert_eq!(graph::observable_distance(&mutated, "T2", 4), Some(0));
+    mutated.targets.get_mut("T2").unwrap().showcase = true;
+    assert_eq!(graph::checkpoint_distance(&mutated, "T2", 4), Some(0));
 
     // Promoting a downstream work target to observable also closes
     // the tunnel, without touching the verify-target path.
@@ -1698,14 +1759,14 @@ fn observable_distance_finds_nearest_checkpoint() {
         .depends_on
         .push("T2".to_string());
     assert_eq!(
-        graph::observable_distance(&downstream, "T2", 4),
+        graph::checkpoint_distance(&downstream, "T2", 4),
         Some(1),
         "T2 should see T5 once T5 depends on T2"
     );
 }
 
 #[test]
-fn frontier_ordering_prefers_observable_then_fanout() {
+fn frontier_ordering_prefers_checkpoint_then_fanout() {
     use bullseye::schema::Target;
     use chrono::NaiveDate;
 
@@ -1734,33 +1795,33 @@ fn frontier_ordering_prefers_observable_then_fanout() {
         targets: Default::default(),
     };
 
-    let mk =
-        |name: &str, kind: Kind, observable: bool, deps: &[&str], verifies: &[&str]| -> Target {
-            Target {
-                name: name.to_string(),
-                kind,
-                status: Status::Identified,
-                value: 1.0,
-                cost: 1.0,
-                observable,
-                actual_cost: None,
-                acceptance: vec!["done".to_string()],
-                checks: vec![],
-                context: String::new(),
-                gates: vec![],
-                depends_on: deps.iter().map(|s| s.to_string()).collect(),
-                cross_depends: vec![],
-                cross_enables: vec![],
-                verifies: verifies.iter().map(|s| s.to_string()).collect(),
-                rework: None,
-                retry_budget: None,
-                retries: 0,
-                tags: vec![],
-                origin: "test".to_string(),
-                discovered: date,
-                achieved: None,
-            }
-        };
+    let mk = |name: &str, kind: Kind, showcase: bool, deps: &[&str], verifies: &[&str]| -> Target {
+        Target {
+            name: name.to_string(),
+            kind,
+            status: Status::Identified,
+            value: 1.0,
+            cost: 1.0,
+            showcase,
+            actual_cost: None,
+            demonstration: None,
+            acceptance: vec!["done".to_string()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            cross_depends: vec![],
+            cross_enables: vec![],
+            verifies: verifies.iter().map(|s| s.to_string()).collect(),
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        }
+    };
 
     file.targets
         .insert("T100".into(), mk("Obs work", Kind::Work, true, &[], &[]));
@@ -1854,7 +1915,7 @@ fn put_create_without_value_cost_succeeds() {
         kind: None,
         status: None,
         depends_on: None,
-        observable: None,
+        showcase: None,
         blocks: None,
         verifies: None,
         origin: None,
@@ -1900,15 +1961,16 @@ fn frontier_order_invariant_under_value_cost_mutation() {
 
     let date = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
 
-    let mk_work = |name: &str, observable: bool, deps: &[&str], v: f64, c: f64| -> Target {
+    let mk_work = |name: &str, showcase: bool, deps: &[&str], v: f64, c: f64| -> Target {
         Target {
             name: name.to_string(),
             kind: Kind::Work,
             status: Status::Identified,
             value: v,
             cost: c,
-            observable,
+            showcase,
             actual_cost: None,
+            demonstration: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -1952,8 +2014,9 @@ fn frontier_order_invariant_under_value_cost_mutation() {
             status: Status::Identified,
             value: 1.0,
             cost: 1.0,
-            observable: false,
+            showcase: false,
             actual_cost: None,
+            demonstration: None,
             acceptance: vec!["verified".to_string()],
             checks: vec![],
             context: String::new(),
@@ -2005,21 +2068,22 @@ fn frontier_order_invariant_under_value_cost_mutation() {
 /// frontier ordering: an observable target should rank above a non-observable
 /// peer (distance 0 beats distance >0).
 #[test]
-fn observable_flag_changes_frontier_order() {
+fn showcase_flag_changes_frontier_order() {
     use bullseye::schema::Target;
     use chrono::NaiveDate;
 
     let date = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
 
-    let mk_work = |name: &str, observable: bool| -> Target {
+    let mk_work = |name: &str, showcase: bool| -> Target {
         Target {
             name: name.to_string(),
             kind: Kind::Work,
             status: Status::Identified,
             value: 1.0,
             cost: 1.0,
-            observable,
+            showcase,
             actual_cost: None,
+            demonstration: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -2070,7 +2134,7 @@ fn observable_flag_changes_frontier_order() {
     );
 
     // Now flip T301 to observable.
-    file.targets.get_mut("T301").unwrap().observable = true;
+    file.targets.get_mut("T301").unwrap().showcase = true;
 
     let front2 = graph::frontier(&file);
     let ranked_after: Vec<String> = graph::rank_frontier(&file, &front2)
@@ -2104,7 +2168,7 @@ fn observable_flag_changes_frontier_order() {
 }
 
 #[test]
-fn tunnels_treats_observable_work_as_checkpoint() {
+fn tunnels_treats_showcase_work_as_checkpoint() {
     use bullseye::schema::Target;
     use chrono::NaiveDate;
 
@@ -2123,15 +2187,16 @@ fn tunnels_treats_observable_work_as_checkpoint() {
         last_evaluated: None,
         targets: Default::default(),
     };
-    let mk = |name: &str, observable: bool, deps: &[&str]| -> Target {
+    let mk = |name: &str, showcase: bool, deps: &[&str]| -> Target {
         Target {
             name: name.to_string(),
             kind: Kind::Work,
             status: Status::Identified,
             value: 1.0,
             cost: 1.0,
-            observable,
+            showcase,
             actual_cost: None,
+            demonstration: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -2177,16 +2242,16 @@ fn tunnels_treats_observable_work_as_checkpoint() {
 
 #[test]
 fn convergence_blocks_on_tunnel_when_top_frontier_unreachable() {
-    // A project whose entire frontier is a tunnel (no observable
+    // A project whose entire frontier is a tunnel (no checkpoint
     // reachable anywhere) must trigger the reshape recommendation
     // instead of auto-selecting. Uses the `**Blocked**:` prefix so
     // `/cv`'s auto-execute branch pauses. See 🎯T7 acceptance #5.
     let tmp = tempfile::tempdir().unwrap();
     let makefile = "bullseye:\n\t@true\n";
-    // Same shape as SIMPLE_TARGETS_YAML but WITHOUT the observable
-    // flag on T1 — so neither target has an observable downstream.
+    // Same shape as SIMPLE_TARGETS_YAML but WITHOUT the showcase
+    // flag on T1 — so neither target has a checkpoint downstream.
     let targets = r#"
-schema_version: 1
+schema_version: 2
 targets:
   T1:
     name: Opaque work
@@ -2220,7 +2285,7 @@ targets:
         "expected tunnel language; got:\n{next}"
     );
     assert!(
-        next.contains("observable: true") || next.contains("verify target"),
+        next.contains("showcase: true") || next.contains("verify target"),
         "expected reshape guidance; got:\n{next}"
     );
     // Crucially: no Execute now dispatch — the /cv skill relies on
@@ -2246,8 +2311,9 @@ fn summary_stale_parent_all_children_achieved() {
                 status: Status::Achieved,
                 value: 2.0,
                 cost: 1.0,
-                observable: false,
+                showcase: false,
                 actual_cost: None,
+                demonstration: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
                 context: String::new(),
@@ -2290,8 +2356,9 @@ fn summary_shows_grouped_children() {
             status: Status::Identified,
             value: 2.0,
             cost: 1.0,
-            observable: false,
+            showcase: false,
             actual_cost: None,
+            demonstration: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -3053,8 +3120,9 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 status: Status::Identified,
                                 value: 1.0,
                                 cost: 1.0,
-                                observable: false,
+                                showcase: false,
                                 actual_cost: None,
+                                demonstration: None,
                                 acceptance: vec!["done".to_string()],
                                 checks: Vec::new(),
                                 context: String::new(),
@@ -3102,4 +3170,132 @@ fn concurrent_mutations_do_not_lose_updates() {
             "iter {iter}: baseline T1 was lost"
         );
     }
+}
+
+// --- 🎯T14: showcase retirement enforcement ---
+
+/// Targets that carry `showcase: true` must not retire silently — the
+/// agent has to record what was actually shown to the user. The tool
+/// rejects retirement when `demonstration` is missing or empty.
+#[test]
+fn retire_showcase_target_requires_demonstration() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_retire;
+    use bullseye::tools::RetireTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "showcase-retire").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Promote the seeded T1 to a showcase target so the obligation
+    // fires when we try to retire it.
+    {
+        let mut file = store::load(&path).unwrap();
+        file.targets.get_mut("T1").unwrap().showcase = true;
+        store::save(&path, &file).unwrap();
+    }
+
+    // Missing demonstration → refused.
+    let missing = handle_retire(RetireTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        actual_cost: None,
+        demonstration: None,
+    });
+    let err = missing.expect_err("missing demonstration must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("showcase") && msg.contains("demonstration"),
+        "error must name the showcase obligation; got: {msg}"
+    );
+
+    // Whitespace-only demonstration → also refused (would otherwise
+    // let agents satisfy the obligation with a single space).
+    let whitespace = handle_retire(RetireTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        actual_cost: None,
+        demonstration: Some("   ".to_string()),
+    });
+    assert!(
+        whitespace.is_err(),
+        "whitespace-only demonstration must be rejected"
+    );
+
+    // Target stayed unretired across the rejected calls.
+    let still_active = store::load(&path).unwrap();
+    assert_ne!(
+        still_active.targets["T1"].status,
+        Status::Achieved,
+        "rejected retire calls must not flip the target to achieved"
+    );
+    assert!(
+        still_active.targets["T1"].demonstration.is_none(),
+        "rejected calls must not leave a demonstration string behind"
+    );
+
+    // Real demonstration string → succeeds and records the note.
+    let demo = "ran the binary with the player attached and shared a screen recording";
+    let ok = handle_retire(RetireTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        actual_cost: Some(2.0),
+        demonstration: Some(demo.to_string()),
+    });
+    assert!(
+        ok.is_ok(),
+        "valid demonstration must allow retirement: {ok:?}"
+    );
+
+    let retired = store::load(&path).unwrap();
+    assert_eq!(retired.targets["T1"].status, Status::Achieved);
+    assert_eq!(
+        retired.targets["T1"].demonstration.as_deref(),
+        Some(demo),
+        "demonstration must be persisted on the retired target"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// Non-showcase targets retire normally without a demonstration — the
+/// obligation only attaches when the flag is set.
+#[test]
+fn retire_non_showcase_target_does_not_require_demonstration() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_retire;
+    use bullseye::tools::RetireTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "no-showcase-retire").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Sanity-check the seeded T1 is not a showcase target.
+    {
+        let file = store::load(&path).unwrap();
+        assert!(!file.targets["T1"].showcase);
+    }
+
+    let result = handle_retire(RetireTool {
+        cwd,
+        id: "T1".to_string(),
+        actual_cost: None,
+        demonstration: None,
+    });
+    assert!(
+        result.is_ok(),
+        "plain work targets must retire without a demonstration: {result:?}"
+    );
+
+    let retired = store::load(&path).unwrap();
+    assert_eq!(retired.targets["T1"].status, Status::Achieved);
+    assert!(retired.targets["T1"].demonstration.is_none());
+
+    config::set_external_root_override(None);
 }

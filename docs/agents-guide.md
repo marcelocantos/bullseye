@@ -88,14 +88,13 @@ optional; only the ones provided are changed.
 
 **Achieved targets are immutable.** As of v0.13.0 `bullseye_put`
 rejects content edits (name/acceptance/context/value/cost/tags/
-depends_on/verifies/observable) on a target whose current status
+depends_on/verifies/showcase) on a target whose current status
 is `achieved`. Achieved targets are historical artifacts. To
 modify one, re-open it first by patching `status: identified`
 — either in a prior call, or atomically in the same call
 alongside the content edits (the reopen applies first, then
 the content lands on the now-identified target). Status-only
-transitions on achieved targets remain allowed, and
-`bullseye_retire` is unchanged.
+transitions on achieved targets remain allowed.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -108,7 +107,7 @@ transitions on achieved targets remain allowed, and
 | `context` | string | null | Why this target matters |
 | `kind` | string | `"work"` on create | `"work"` or `"verify"`; settable only on create |
 | `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"` |
-| `observable` | bool | `false` on create, unchanged on patch | Mark a work target as producing a human-observable checkpoint. Verify-kind targets are observable by definition; this flag only matters for work-kind targets. Drives repo-level ordering and `bullseye_tunnels` membership. |
+| `showcase` | bool | `false` on create, unchanged on patch | Mark a work target as a *showcase* — its retirement requires a user-visible demonstration recorded via `bullseye_retire`'s `demonstration` parameter, and the target counts as a checkpoint for distance-to-checkpoint ordering. Verify-kind targets are checkpoints automatically; this flag only matters for work-kind targets. Renamed from `observable` in schema v2; legacy YAML still loads via a serde alias. |
 | `depends_on` | string[] | null | IDs of targets this one depends on (must be achieved first) |
 | `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work. Refuses to inject into achieved targets (same rule as content patches). |
 | `verifies` | string[] | null | For verify targets: IDs of targets this verifies |
@@ -119,11 +118,27 @@ transitions on achieved targets remain allowed, and
 
 Mark a target achieved.
 
+When the target carries `showcase: true`, a non-empty `demonstration`
+parameter is **required** — see the showcase obligation note below.
+Plain work targets and verify targets retire without it.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | required | Target ID |
 | `actual_cost` | number | null | Actual cost for calibration |
+| `demonstration` | string | null | Required when the target has `showcase: true`; ignored otherwise. A short factual note describing what was actually shown to the user (e.g. "ran the binary with the player attached and shared a screen recording"). Stored on the retired target as a permanent record. |
+
+**Showcase obligation (🎯T14).** A showcase target promises a
+user-visible demonstration on completion — running the binary with
+the player attached, opening the dashboard, posting the screenshot.
+`bullseye_retire` enforces the promise: missing or whitespace-only
+`demonstration` returns an explanatory error, the target stays
+unretired, and the agent has to actually perform the demo before
+trying again. Technical verification (\"tests pass\", \"builds
+clean\") is not a demonstration. Reach for `showcase: true` when the
+target's value to the user is something they need to see, not
+something the machine can sign off on.
 
 ### bullseye_verify
 
@@ -154,15 +169,15 @@ Compute unblocked leaf targets ready for work. Validates the target
 graph first and returns errors if invalid.
 
 As of v0.13.0, the frontier is ordered by the **repo-level signal**:
-ascending distance to the nearest observable target, tiebroken by
+ascending distance to the nearest checkpoint, tiebroken by
 descending unblocking fanout (count of active targets that depend
 on this one), then ascending ID. Per-target `value`/`cost` and
 `momentum` are **not consumed** — those are portfolio-scope inputs.
-When every frontier target has no observable reachable at all,
+When every frontier target has no checkpoint reachable at all,
 `bullseye_convergence`'s next-action emits a `**Blocked**: … reshape`
 recommendation instead of auto-selecting, prompting the human to
-add an intermediate observable target or promote an existing
-downstream work target with `observable: true`.
+add an intermediate verify target or promote an existing
+downstream work target with `showcase: true`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -182,11 +197,11 @@ verify target to identified.
 
 ### bullseye_tunnels
 
-Detect work targets that have no **observable checkpoint** reachable
-within N hops along the forward dependency graph. As of v0.13.0 a
-target is observable iff `kind: verify` OR the new `observable: true`
-flag is set; previous releases defined observability strictly as
-verification reachability. Legacy targets files carry no observable
+Detect work targets that have no **checkpoint** reachable within N
+hops along the forward dependency graph. As of v0.13.0 a target is
+a checkpoint iff `kind: verify` OR (as of v0.19.0) `showcase: true`
+is set on a work target. Previous releases defined this strictly as
+verification reachability. Legacy targets files carry no showcase
 work targets until the human opts in, so on a freshly-upgraded repo
 most work targets will be flagged — the reshape signal is the point.
 
@@ -266,7 +281,7 @@ Use this for cross-project prioritisation and global convergence assessment.
 
 Return a consolidated status overview in one call: active targets
 grouped by parent with rollup counts, frontier (unblocked) targets
-ordered by the repo-level signal (distance-to-observable then
+ordered by the repo-level signal (distance-to-checkpoint then
 unblocking fanout), blocked targets with blockers, and stale targets
 with inconsistent graph state. Replaces separate calls to
 `bullseye_list`, `bullseye_frontier`, and `bullseye_validate` when you
@@ -426,9 +441,12 @@ targets:
     value: 8                              # Fibonacci (portfolio-scope input only)
     cost: 3                               # Fibonacci (portfolio-scope input only)
     actual_cost: 5                        # recorded on retirement (optional)
-    observable: true                      # v0.13.0: mark work target as producing
-                                          # a human-visible checkpoint (optional,
-                                          # default false, omitted when false)
+    showcase: true                        # v0.19.0 (was `observable` in v0.13.0):
+                                          # mark a work target as a showcase
+                                          # checkpoint — its retirement requires
+                                          # a `demonstration` recorded via
+                                          # bullseye_retire (optional, default
+                                          # false, omitted when false)
     acceptance:                           # how to verify achievement (required)
       - CI green on all platforms
       - No test skips without documented reason
@@ -465,12 +483,12 @@ Bullseye uses different prioritisation engines at repo and portfolio
 scopes (`docs/mcp-triad.md` §9):
 
 - **Repo-level** (sub-week horizon, human as decision-maker): ordering
-  rewards shortest path to the next **observable checkpoint**,
-  tiebroken by unblocking fanout. Per-target `value`/`cost` and the
-  `momentum` input are **not consumed** at this layer. The point is
-  to drive work toward the next human decision point as quickly as
-  possible, and to flag opaque tunnels where the graph has no
-  checkpoint to head toward.
+  rewards shortest path to the next **checkpoint** (verify-kind, or
+  work-kind with `showcase: true`), tiebroken by unblocking fanout.
+  Per-target `value`/`cost` and the `momentum` input are **not
+  consumed** at this layer. The point is to drive work toward the next
+  human decision point as quickly as possible, and to flag opaque
+  tunnels where the graph has no checkpoint to head toward.
 - **Portfolio-level** (weekly-plus horizon, human as bottleneck
   allocator): WSJF with momentum and cross-repo enabler propagation
   earns its keep. This is where `value`/`cost`/`momentum`/
@@ -560,7 +578,7 @@ bullseye_rework(cwd, id, diagnosis)
 
 ```
 bullseye_validate(cwd)  → schema conformance
-bullseye_tunnels(cwd)   → work chains with no observable checkpoint
+bullseye_tunnels(cwd)   → work chains with no checkpoint reachable
 bullseye_graph(cwd)     → visual dependency map
 ```
 
