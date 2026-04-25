@@ -632,8 +632,15 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
 fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
 
+    let diagnosis = compose_rework_diagnosis(
+        &t.diagnosis,
+        t.sawmill_failure.as_deref(),
+        t.mnemo_history.as_deref(),
+    )
+    .map_err(tool_err)?;
+
     let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
-        ops::rework(file, &t.id, &t.diagnosis).map_err(|e| e.to_string())
+        ops::rework(file, &t.id, &diagnosis).map_err(|e| e.to_string())
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
@@ -649,6 +656,48 @@ fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
     }
 
     text_result(out)
+}
+
+/// Compose the rework diagnosis string from the free-form prose plus
+/// optional structured payloads (sawmill failure, mnemo prior-attempt
+/// history). Each structured payload is validated as JSON, pretty-
+/// printed, and emitted as a fenced ```json block under a labelled
+/// `##` header so the resulting context blob remains readable to a
+/// human and re-parseable by tooling. Returns an error if either
+/// payload fails to parse — better to reject early than persist
+/// garbage into the target file.
+fn compose_rework_diagnosis(
+    prose: &str,
+    sawmill_failure: Option<&str>,
+    mnemo_history: Option<&str>,
+) -> Result<String, String> {
+    let mut sections: Vec<String> = Vec::new();
+    let trimmed_prose = prose.trim();
+    if !trimmed_prose.is_empty() {
+        sections.push(trimmed_prose.to_string());
+    }
+
+    let mut append_json_section = |label: &str, raw: &str| -> Result<(), String> {
+        let parsed: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| format!("{label} is not valid JSON: {e}"))?;
+        let pretty = serde_json::to_string_pretty(&parsed)
+            .map_err(|e| format!("{label}: failed to serialise: {e}"))?;
+        sections.push(format!("## {label}\n```json\n{pretty}\n```"));
+        Ok(())
+    };
+
+    if let Some(raw) = sawmill_failure
+        && !raw.trim().is_empty()
+    {
+        append_json_section("Sawmill failure", raw)?;
+    }
+    if let Some(raw) = mnemo_history
+        && !raw.trim().is_empty()
+    {
+        append_json_section("Prior attempts (mnemo)", raw)?;
+    }
+
+    Ok(sections.join("\n\n"))
 }
 
 fn handle_tunnels(t: crate::tools::TunnelsTool) -> ToolResult {
@@ -1176,5 +1225,177 @@ targets:
         let fallback = Path::new("/tmp/myrepo");
         let repo_root = repo_root_from_targets_path(path, fallback);
         assert_eq!(repo_root, Path::new("/tmp/myrepo"));
+    }
+
+    // --- compose_rework_diagnosis (🎯T1.5) ---------------------------------
+
+    #[test]
+    fn compose_rework_prose_only() {
+        let out = compose_rework_diagnosis("linker error on arm64", None, None).unwrap();
+        assert_eq!(out, "linker error on arm64");
+    }
+
+    #[test]
+    fn compose_rework_trims_prose() {
+        let out = compose_rework_diagnosis("  hello  \n", None, None).unwrap();
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn compose_rework_all_empty_returns_empty() {
+        // ops::rework treats empty diagnosis as "don't append" — preserve that.
+        let out = compose_rework_diagnosis("", None, None).unwrap();
+        assert!(out.is_empty());
+        let out = compose_rework_diagnosis("   ", Some("   "), Some("")).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn compose_rework_with_sawmill() {
+        let sawmill = r#"{"violations":[{"file":"src/lib.rs","line":42,"message":"x"}]}"#;
+        let out = compose_rework_diagnosis("checks failed", Some(sawmill), None).unwrap();
+        assert!(out.starts_with("checks failed\n\n## Sawmill failure\n```json\n"));
+        assert!(out.contains("\"file\": \"src/lib.rs\""));
+        assert!(out.trim_end().ends_with("```"));
+    }
+
+    #[test]
+    fn compose_rework_with_mnemo() {
+        let mnemo = r#"[{"attempt":1,"diagnosis":"timeout"}]"#;
+        let out = compose_rework_diagnosis("retry needed", None, Some(mnemo)).unwrap();
+        assert!(out.contains("## Prior attempts (mnemo)\n```json\n"));
+        assert!(out.contains("\"attempt\": 1"));
+    }
+
+    #[test]
+    fn compose_rework_full_payload_order_is_stable() {
+        // Sawmill section precedes mnemo section so the most actionable
+        // ("what failed") sits closest to the prose.
+        let out = compose_rework_diagnosis("fail", Some("{\"a\":1}"), Some("[{\"b\":2}]")).unwrap();
+        let saw = out.find("## Sawmill failure").expect("sawmill section");
+        let mnemo = out
+            .find("## Prior attempts (mnemo)")
+            .expect("mnemo section");
+        assert!(saw < mnemo, "sawmill should appear before mnemo");
+    }
+
+    #[test]
+    fn compose_rework_rejects_invalid_sawmill_json() {
+        let err = compose_rework_diagnosis("", Some("not-json"), None).unwrap_err();
+        assert!(err.contains("Sawmill failure"), "error: {err}");
+    }
+
+    #[test]
+    fn compose_rework_rejects_invalid_mnemo_json() {
+        let err = compose_rework_diagnosis("", None, Some("[")).unwrap_err();
+        assert!(err.contains("Prior attempts (mnemo)"), "error: {err}");
+    }
+
+    #[test]
+    fn handle_rework_persists_structured_payload() {
+        // End-to-end: drive handle_rework with both structured fields
+        // and confirm the rework destination's context contains the
+        // labelled fenced JSON blocks. Uses a fixture with a verify
+        // target (V1) pointing at a work target (W1) it reworks.
+        const FIXTURE: &str = r#"schema_version: 1
+targets:
+  W1:
+    name: Work target
+    kind: work
+    status: converging
+    value: 5
+    cost: 3
+    acceptance: [does the thing]
+    origin: manual
+    discovered: 2026-01-01
+  V1:
+    name: Verify target
+    kind: verify
+    status: identified
+    value: 1
+    cost: 1
+    acceptance: [W1 passes]
+    verifies: [W1]
+    rework: W1
+    origin: manual
+    discovered: 2026-01-01
+"#;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
+        let cwd = tmp.path().to_string_lossy().to_string();
+
+        let shadow_tmp = tempfile::tempdir().unwrap();
+        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+        let _guard = ShadowScope {
+            _shadow_tmp: shadow_tmp,
+        };
+
+        let tool = crate::tools::ReworkTool {
+            cwd: cwd.clone(),
+            id: "V1".to_string(),
+            diagnosis: "linker error".to_string(),
+            sawmill_failure: Some(r#"{"file":"src/lib.rs","line":12}"#.to_string()),
+            mnemo_history: Some(r#"[{"attempt":1}]"#.to_string()),
+        };
+        handle_rework(tool).expect("rework should succeed");
+
+        let w1 = load_target(&cwd, "W1");
+        assert!(w1.context.contains("Rework #1: linker error"));
+        assert!(w1.context.contains("## Sawmill failure"));
+        assert!(w1.context.contains("\"file\": \"src/lib.rs\""));
+        assert!(w1.context.contains("## Prior attempts (mnemo)"));
+        assert!(w1.context.contains("\"attempt\": 1"));
+    }
+
+    #[test]
+    fn handle_rework_rejects_invalid_json_payload() {
+        const FIXTURE: &str = r#"schema_version: 1
+targets:
+  W1:
+    name: Work target
+    kind: work
+    status: converging
+    value: 5
+    cost: 3
+    acceptance: [does the thing]
+    origin: manual
+    discovered: 2026-01-01
+  V1:
+    name: Verify target
+    kind: verify
+    status: identified
+    value: 1
+    cost: 1
+    acceptance: [W1 passes]
+    verifies: [W1]
+    rework: W1
+    origin: manual
+    discovered: 2026-01-01
+"#;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
+        let cwd = tmp.path().to_string_lossy().to_string();
+
+        let shadow_tmp = tempfile::tempdir().unwrap();
+        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+        let _guard = ShadowScope {
+            _shadow_tmp: shadow_tmp,
+        };
+
+        let tool = crate::tools::ReworkTool {
+            cwd: cwd.clone(),
+            id: "V1".to_string(),
+            diagnosis: String::new(),
+            sawmill_failure: Some("not-json".to_string()),
+            mnemo_history: None,
+        };
+        let err = handle_rework(tool).expect_err("invalid JSON should be rejected");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("Sawmill failure"), "got: {msg}");
+
+        // File should be unchanged: W1 still converging, no context appended.
+        let w1 = load_target(&cwd, "W1");
+        assert_eq!(w1.status, Status::Converging);
+        assert!(!w1.context.contains("Sawmill failure"));
     }
 }

@@ -223,7 +223,16 @@ pub struct FrontierTool {
 /// Trigger a rework cycle from a verify target.
 #[mcp_tool(
     name = "bullseye_rework",
-    description = "Trigger rework from a failed verification. Resets the rework target to converging, increments its retry count, and resets the verify target to identified. Returns an escalation warning if the retry budget is exhausted."
+    description = "Trigger rework from a failed verification. Resets the rework target to converging, \
+        increments its retry count, and resets the verify target to identified. Returns an escalation \
+        warning if the retry budget is exhausted. \
+        \
+        For maximum-context rework (🎯T1.5), pass `sawmill_failure` (JSON-encoded structural failure \
+        payload from sawmill's check_conventions / check_invariants / query) and/or `mnemo_history` \
+        (JSON-encoded prior-attempt summaries from mnemo for this target ID). Bullseye does not call \
+        sawmill or mnemo itself — MCP servers cannot call each other — so the agent gathers those \
+        payloads and passes them in. Both are appended to the rework target's context under labelled \
+        fenced JSON blocks alongside the free-form `diagnosis` prose."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ReworkTool {
@@ -236,6 +245,23 @@ pub struct ReworkTool {
     /// Diagnosis: what went wrong (carried forward as context).
     #[serde(default)]
     pub diagnosis: String,
+
+    /// JSON-encoded structural failure payload from sawmill (output of
+    /// `check_conventions`, `check_invariants`, or `query`). When
+    /// non-empty, appended to the rework target's context as a fenced
+    /// JSON block under a `## Sawmill failure` header. Bullseye does
+    /// not interpret the payload — sawmill's schema can evolve
+    /// independently. Rejected if the string is not valid JSON.
+    #[serde(default)]
+    pub sawmill_failure: Option<String>,
+
+    /// JSON-encoded prior rework attempts from mnemo for this target
+    /// ID. When non-empty, appended as a fenced JSON block under a
+    /// `## Prior attempts (mnemo)` header. Mnemo currently lacks a
+    /// rework-aware query — pass `None` until that upstream tool
+    /// lands. Rejected if the string is not valid JSON.
+    #[serde(default)]
+    pub mnemo_history: Option<String>,
 }
 
 /// Detect tunnels: work targets far from verification.
