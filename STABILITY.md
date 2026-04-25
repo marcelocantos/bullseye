@@ -9,8 +9,29 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.21.0. Changes since v0.20.0 affecting the
+Snapshot as of v0.22.0. Changes since v0.21.0 affecting the
 interaction surface:
+
+- **Tool-call envelope leak guard on every mutating handler**
+  (🎯T20). All mutating tools (`bullseye_put`, `bullseye_retire`,
+  `bullseye_set_aside`, `bullseye_rework`, `bullseye_import`) now
+  reject any caller-controlled string that contains a leaked Claude
+  tool-call XML envelope marker — `<invoke `, `</invoke>`,
+  `<parameter `, or `</parameter>`. On detection, the tool returns
+  an actionable error naming the field and the marker, and the file
+  is not mutated. Validation is at the write boundary only —
+  `store::load` continues to load corrupted files unchanged so an
+  operator can repair them. Generic angle-bracket content (e.g.
+  `<context>` substrings, mathematical comparisons, prose mentioning
+  closing tags) passes; only the four protocol-specific markers are
+  exact-matched. Behavioural addition rather than schema change —
+  callers passing valid content see no difference. Filed after
+  malformed YAML was observed in another repo where an agent
+  serialised a bullseye_put call as XML and the harness's wrapper-
+  stripping was incomplete, leaving `</invoke>` tags inside the
+  persisted `context:` field.
+
+Earlier changes still in effect from v0.21.0:
 
 - **Structured rework payloads** (🎯T1.5). `bullseye_rework` gains
   two optional parameters, `sawmill_failure` and `mnemo_history`,
@@ -30,7 +51,8 @@ interaction surface:
   structured failure payloads); the mnemo half waits on an upstream
   rework-aware query that has not yet been filed.
 
-Earlier changes still in effect from v0.20.0:
+Earlier changes still in effect from v0.20.0 carry through v0.21.0
+unchanged:
 
 - **`set_aside` status with required rationale** (🎯T18). Adds a
   fourth terminal disposition alongside `achieved` for targets the
@@ -368,7 +390,12 @@ Planned additions:
   settling clock to v0.20.0. v0.21.0 adds two optional parameters
   to `bullseye_rework` for structured sawmill/mnemo payloads
   (🎯T1.5) — purely additive on a previously stable tool, no
-  schema bump, no settling-clock reset.
+  schema bump, no settling-clock reset. v0.22.0 adds a uniform
+  envelope-leak guard on every mutating handler (🎯T20) — rejects
+  agent-side serialisation bugs at the write boundary so they don't
+  silently corrupt YAML. Behavioural addition only; no schema
+  change, no surface change visible to well-behaved callers, no
+  settling-clock reset.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0

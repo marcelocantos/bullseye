@@ -101,6 +101,72 @@ fn no_targets_file_message(cwd: &Path) -> String {
     )
 }
 
+/// Substrings that uniquely identify a leaked Claude tool-call XML
+/// envelope. They have no place in any caller-controlled string that
+/// `bullseye` persists, so seeing one in a parameter value means the
+/// agent serialised the tool call as XML and the harness's wrapper-
+/// stripping was incomplete (🎯T20). Detecting them at the write
+/// boundary keeps malformed envelopes from landing in `bullseye.yaml`
+/// and forcing an unrelated future agent to debug a stray tag.
+///
+/// Generic tags like `<context>`/`</tags>` are NOT included — those
+/// appear in legitimate prose. The four below are unambiguous markers
+/// of the `<invoke name="..."><parameter name="...">…</parameter></invoke>`
+/// protocol shape.
+const TOOL_CALL_ENVELOPE_MARKERS: &[&str] =
+    &["<invoke ", "</invoke>", "<parameter ", "</parameter>"];
+
+/// Reject `value` if it contains any tool-call envelope marker. The
+/// error names the field and the marker so the caller (and any human
+/// reading the log) sees exactly what leaked. See 🎯T20.
+fn check_no_envelope_leak(field: &str, value: &str) -> Result<(), String> {
+    for marker in TOOL_CALL_ENVELOPE_MARKERS {
+        if value.contains(marker) {
+            return Err(format!(
+                "{field} contains tool-call envelope marker `{marker}` — looks \
+                 like XML tool-call syntax leaked into the parameter value. \
+                 This usually means the agent serialised the call as XML and \
+                 the closing tags weren't stripped. Re-issue the call with \
+                 well-formed JSON parameters."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Walk every caller-controlled string on a parsed `Target` and run
+/// the envelope-leak check. Used by `handle_import`, where the input
+/// is bulk-parsed from markdown and we don't have a per-field handler
+/// signature to validate against.
+fn check_target_no_envelope_leaks(id: &str, target: &crate::schema::Target) -> Result<(), String> {
+    check_no_envelope_leak(&format!("{id}.name"), &target.name)?;
+    check_no_envelope_leak(&format!("{id}.context"), &target.context)?;
+    check_no_envelope_leak(&format!("{id}.origin"), &target.origin)?;
+    if let Some(d) = &target.demonstration {
+        check_no_envelope_leak(&format!("{id}.demonstration"), d)?;
+    }
+    if let Some(r) = &target.set_aside_reason {
+        check_no_envelope_leak(&format!("{id}.set_aside_reason"), r)?;
+    }
+    for (i, a) in target.acceptance.iter().enumerate() {
+        check_no_envelope_leak(&format!("{id}.acceptance[{i}]"), a)?;
+    }
+    for (i, t) in target.tags.iter().enumerate() {
+        check_no_envelope_leak(&format!("{id}.tags[{i}]"), t)?;
+    }
+    for (i, e) in target.cross_depends.iter().enumerate() {
+        if let Some(n) = &e.note {
+            check_no_envelope_leak(&format!("{id}.cross_depends[{i}].note"), n)?;
+        }
+    }
+    for (i, e) in target.cross_enables.iter().enumerate() {
+        if let Some(n) = &e.note {
+            check_no_envelope_leak(&format!("{id}.cross_enables[{i}].note"), n)?;
+        }
+    }
+    Ok(())
+}
+
 /// Discover the `bullseye.yaml` path for `cwd` without loading its
 /// contents. Mutating handlers call this first so they can enter the
 /// locked read-modify-write block without holding the parse cache's
@@ -178,6 +244,45 @@ fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
+
+    // Envelope-leak guard (🎯T20). Validate every caller-controlled
+    // string before entering the locked mutation block — fail fast if
+    // an XML tool-call envelope leaked into any field, so the file is
+    // never written with the corruption.
+    if let Some(s) = &t.name {
+        check_no_envelope_leak("name", s).map_err(tool_err)?;
+    }
+    if let Some(s) = &t.context {
+        check_no_envelope_leak("context", s).map_err(tool_err)?;
+    }
+    if let Some(s) = &t.origin {
+        check_no_envelope_leak("origin", s).map_err(tool_err)?;
+    }
+    if let Some(items) = &t.acceptance {
+        for (i, s) in items.iter().enumerate() {
+            check_no_envelope_leak(&format!("acceptance[{i}]"), s).map_err(tool_err)?;
+        }
+    }
+    if let Some(items) = &t.tags {
+        for (i, s) in items.iter().enumerate() {
+            check_no_envelope_leak(&format!("tags[{i}]"), s).map_err(tool_err)?;
+        }
+    }
+    if let Some(items) = &t.depends_on {
+        for (i, s) in items.iter().enumerate() {
+            check_no_envelope_leak(&format!("depends_on[{i}]"), s).map_err(tool_err)?;
+        }
+    }
+    if let Some(items) = &t.blocks {
+        for (i, s) in items.iter().enumerate() {
+            check_no_envelope_leak(&format!("blocks[{i}]"), s).map_err(tool_err)?;
+        }
+    }
+    if let Some(items) = &t.verifies {
+        for (i, s) in items.iter().enumerate() {
+            check_no_envelope_leak(&format!("verifies[{i}]"), s).map_err(tool_err)?;
+        }
+    }
 
     struct Outcome {
         id: String,
@@ -427,6 +532,11 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
 pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
 
+    // Envelope-leak guard (🎯T20).
+    if let Some(s) = &t.demonstration {
+        check_no_envelope_leak("demonstration", s).map_err(tool_err)?;
+    }
+
     enum Outcome {
         AlreadyAchieved,
         Retired {
@@ -514,6 +624,11 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
 /// or already set aside with the same reason (no-op).
 pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
+
+    // Envelope-leak guard (🎯T20). Validate before trim/empty check
+    // so a reason that's "just a leaked tag" reports the leak (more
+    // actionable) rather than the empty-after-trim error.
+    check_no_envelope_leak("reason", &t.reason).map_err(tool_err)?;
 
     let reason = t.reason.trim().to_string();
     if reason.is_empty() {
@@ -631,6 +746,17 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
 
 fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
+
+    // Envelope-leak guard (🎯T20). Check each input separately so the
+    // error names the offending field; check before composing so the
+    // pretty-printed JSON doesn't mask whichever payload was malformed.
+    check_no_envelope_leak("diagnosis", &t.diagnosis).map_err(tool_err)?;
+    if let Some(s) = &t.sawmill_failure {
+        check_no_envelope_leak("sawmill_failure", s).map_err(tool_err)?;
+    }
+    if let Some(s) = &t.mnemo_history {
+        check_no_envelope_leak("mnemo_history", s).map_err(tool_err)?;
+    }
 
     let diagnosis = compose_rework_diagnosis(
         &t.diagnosis,
@@ -827,6 +953,13 @@ fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
         .map_err(|e| tool_err(format!("failed to read {}: {e}", md_path.display())))?;
 
     let file = import::parse_markdown(&content).map_err(tool_err)?;
+
+    // Envelope-leak guard (🎯T20). The parsed markdown can carry
+    // arbitrary string content into every target field; refuse to
+    // persist any target whose content shows leaked tool-call syntax.
+    for (id, target) in &file.targets {
+        check_target_no_envelope_leaks(id, target).map_err(tool_err)?;
+    }
 
     // Validate the parsed result.
     let errors = graph::validate(&file);
@@ -1397,5 +1530,228 @@ targets:
         let w1 = load_target(&cwd, "W1");
         assert_eq!(w1.status, Status::Converging);
         assert!(!w1.context.contains("Sawmill failure"));
+    }
+
+    // --- envelope-leak guard (🎯T20) -------------------------------------
+
+    #[test]
+    fn envelope_marker_in_string_is_rejected() {
+        for marker in TOOL_CALL_ENVELOPE_MARKERS {
+            let value = format!("prose with {marker} leaked in");
+            let err = check_no_envelope_leak("ctx", &value).unwrap_err();
+            assert!(
+                err.contains(marker),
+                "error should name marker {marker}: {err}"
+            );
+            assert!(err.contains("ctx"), "error should name field: {err}");
+        }
+    }
+
+    #[test]
+    fn envelope_clean_string_passes() {
+        // Generic angle brackets and `<context>` substrings (without
+        // the protocol-specific tags) are legitimate prose.
+        check_no_envelope_leak("ctx", "see <context> for details").unwrap();
+        check_no_envelope_leak("ctx", "compare a < b vs a > b").unwrap();
+        check_no_envelope_leak("ctx", "</context> mentioned in a doc").unwrap();
+        check_no_envelope_leak("ctx", "").unwrap();
+    }
+
+    #[test]
+    fn envelope_leak_in_put_context_is_rejected() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let mut t = put(&cwd, "T2");
+        t.context = Some("good prose\n</invoke>\nmore".to_string());
+        let err = handle_put(t).expect_err("envelope leak in context must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("context") && msg.contains("</invoke>"),
+            "error should name field and marker: {msg}"
+        );
+        // T2 unchanged.
+        let t2 = load_target(&cwd, "T2");
+        assert!(!t2.context.contains("</invoke>"));
+    }
+
+    #[test]
+    fn envelope_leak_in_put_acceptance_is_rejected() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let mut t = put(&cwd, "T2");
+        t.acceptance = Some(vec![
+            "fine".to_string(),
+            "bad <parameter name=\"x\">".to_string(),
+        ]);
+        let err = handle_put(t).expect_err("envelope leak in acceptance must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("acceptance[1]"),
+            "error should name index: {msg}"
+        );
+        assert!(
+            msg.contains("<parameter "),
+            "error should name marker: {msg}"
+        );
+    }
+
+    #[test]
+    fn envelope_leak_in_set_aside_reason_is_rejected() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let tool = crate::tools::SetAsideTool {
+            cwd: cwd.clone(),
+            id: "T2".to_string(),
+            reason: "won't fix </invoke>".to_string(),
+        };
+        let err = handle_set_aside(tool).expect_err("envelope leak must be rejected");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("reason"), "error should name field: {msg}");
+        assert!(msg.contains("</invoke>"), "error should name marker: {msg}");
+        // T2 unchanged (still identified, no set_aside_reason).
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.status, Status::Identified);
+        assert!(t2.set_aside_reason.is_none());
+    }
+
+    #[test]
+    fn envelope_leak_in_rework_diagnosis_is_rejected() {
+        const FIXTURE: &str = r#"schema_version: 1
+targets:
+  W1:
+    name: Work
+    kind: work
+    status: converging
+    value: 5
+    cost: 3
+    acceptance: [does the thing]
+    origin: manual
+    discovered: 2026-01-01
+  V1:
+    name: Verify
+    kind: verify
+    status: identified
+    value: 1
+    cost: 1
+    acceptance: [W1 passes]
+    verifies: [W1]
+    rework: W1
+    origin: manual
+    discovered: 2026-01-01
+"#;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
+        let cwd = tmp.path().to_string_lossy().to_string();
+        let shadow_tmp = tempfile::tempdir().unwrap();
+        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+        let _guard = ShadowScope {
+            _shadow_tmp: shadow_tmp,
+        };
+
+        let tool = crate::tools::ReworkTool {
+            cwd: cwd.clone(),
+            id: "V1".to_string(),
+            diagnosis: "linker error </invoke>".to_string(),
+            sawmill_failure: None,
+            mnemo_history: None,
+        };
+        let err = handle_rework(tool).expect_err("envelope leak in diagnosis must be rejected");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("diagnosis"), "error should name field: {msg}");
+        assert!(msg.contains("</invoke>"), "error should name marker: {msg}");
+
+        // W1 unchanged.
+        let w1 = load_target(&cwd, "W1");
+        assert_eq!(w1.status, Status::Converging);
+        assert!(!w1.context.contains("</invoke>"));
+    }
+
+    #[test]
+    fn envelope_leak_in_rework_sawmill_payload_is_rejected() {
+        const FIXTURE: &str = r#"schema_version: 1
+targets:
+  W1:
+    name: Work
+    kind: work
+    status: converging
+    value: 5
+    cost: 3
+    acceptance: [does the thing]
+    origin: manual
+    discovered: 2026-01-01
+  V1:
+    name: Verify
+    kind: verify
+    status: identified
+    value: 1
+    cost: 1
+    acceptance: [W1 passes]
+    verifies: [W1]
+    rework: W1
+    origin: manual
+    discovered: 2026-01-01
+"#;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
+        let cwd = tmp.path().to_string_lossy().to_string();
+        let shadow_tmp = tempfile::tempdir().unwrap();
+        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+        let _guard = ShadowScope {
+            _shadow_tmp: shadow_tmp,
+        };
+
+        // Note: the sawmill_failure value here is also invalid JSON,
+        // but the envelope check fires first because it sits ahead of
+        // compose_rework_diagnosis in the handler.
+        let tool = crate::tools::ReworkTool {
+            cwd,
+            id: "V1".to_string(),
+            diagnosis: "fail".to_string(),
+            sawmill_failure: Some("<invoke name=\"x\">stuff</invoke>".to_string()),
+            mnemo_history: None,
+        };
+        let err =
+            handle_rework(tool).expect_err("envelope leak in sawmill payload must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("sawmill_failure"),
+            "error should name field: {msg}"
+        );
+    }
+
+    #[test]
+    fn check_target_walker_finds_leak_in_cross_depends_note() {
+        use crate::schema::{CrossEdge, Kind, Status, Target};
+        let target = Target {
+            name: "ok".into(),
+            kind: Kind::Work,
+            status: Status::Identified,
+            value: 0.0,
+            cost: 0.0,
+            showcase: false,
+            actual_cost: None,
+            demonstration: None,
+            set_aside_reason: None,
+            acceptance: vec!["fine".into()],
+            checks: Vec::new(),
+            context: "fine".into(),
+            gates: Vec::new(),
+            depends_on: Vec::new(),
+            cross_depends: vec![CrossEdge {
+                repo: "marcelocantos/foo".into(),
+                target: None,
+                capability: Some("x".into()),
+                note: Some("</parameter> leaked".into()),
+            }],
+            cross_enables: Vec::new(),
+            verifies: Vec::new(),
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: Vec::new(),
+            origin: "manual".into(),
+            discovered: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            achieved: None,
+        };
+        let err = check_target_no_envelope_leaks("T99", &target).unwrap_err();
+        assert!(err.contains("T99.cross_depends[0].note"), "got: {err}");
+        assert!(err.contains("</parameter>"), "got: {err}");
     }
 }
