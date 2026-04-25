@@ -106,7 +106,7 @@ transitions on achieved targets remain allowed.
 | `acceptance` | string[] | null | How to verify the target is achieved (required on create) |
 | `context` | string | null | Why this target matters |
 | `kind` | string | `"work"` on create | `"work"` or `"verify"`; settable only on create |
-| `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"` |
+| `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"`. The `set_aside` value is **not** settable here — call `bullseye_set_aside(id, reason)` instead so the rationale is always recorded. |
 | `showcase` | bool | `false` on create, unchanged on patch | Mark a work target as a *showcase* — its retirement requires a user-visible demonstration recorded via `bullseye_retire`'s `demonstration` parameter, and the target counts as a checkpoint for distance-to-checkpoint ordering. Verify-kind targets are checkpoints automatically; this flag only matters for work-kind targets. Renamed from `observable` in schema v2; legacy YAML still loads via a serde alias. |
 | `depends_on` | string[] | null | IDs of targets this one depends on (must be achieved first) |
 | `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work. Refuses to inject into achieved targets (same rule as content patches). |
@@ -139,6 +139,29 @@ trying again. Technical verification (\"tests pass\", \"builds
 clean\") is not a demonstration. Reach for `showcase: true` when the
 target's value to the user is something they need to see, not
 something the machine can sign off on.
+
+### bullseye_set_aside
+
+Set a target aside with a documented rationale (🎯T18). Use this
+when the target was **not** delivered — parked indefinitely,
+deferred to a later milestone, or actively rejected as won't-fix —
+but should no longer surface on the frontier. Distinct from
+`bullseye_retire`, which is achievement-only and may require a
+showcase demo.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `id` | string | required | Target ID to set aside |
+| `reason` | string | required | Rationale for the disposition. Free text — carries the parked / deferred / wont_fix nuance. Must be non-empty after trimming. Examples: `"deferred to v2.0 — UX needs more thought"`, `"won't fix — superseded by 🎯T57's redesign"`, `"parked pending design discussion in 🎯T42"`. |
+
+**Behaviour:**
+- Status flips to `set_aside`; `set_aside_reason` is recorded on the target.
+- Set-aside targets unblock their dependents the same way achieved targets do (terminal for graph traversal).
+- They render in a separate `## Set aside` group in `bullseye_summary`, distinct from achievements.
+- Refuses already-achieved targets (would falsify the achievement record).
+- Idempotent on already-set-aside targets — original reason wins, no error.
+- Rejects empty / whitespace-only reasons — the rationale is the load-bearing artefact.
 
 ### bullseye_verify
 
@@ -437,7 +460,9 @@ targets:
   T1:
     name: "All tests pass on CI"          # desired state assertion (required)
     kind: work                            # work (default) or verify
-    status: converging                    # identified, converging, achieved
+    status: converging                    # identified, converging, achieved,
+                                          # set_aside (the latter is set via
+                                          # bullseye_set_aside, not bullseye_put).
     value: 8                              # Fibonacci (portfolio-scope input only)
     cost: 3                               # Fibonacci (portfolio-scope input only)
     actual_cost: 5                        # recorded on retirement (optional)

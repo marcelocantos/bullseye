@@ -9,8 +9,39 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.19.0. Changes since v0.18.0 affecting the
+Snapshot as of v0.20.0. Changes since v0.19.0 affecting the
 interaction surface:
+
+- **`set_aside` status with required rationale** (🎯T18). Adds a
+  fourth terminal disposition alongside `achieved` for targets the
+  user decides not to pursue (parked / deferred / wont_fix). The new
+  `set_aside_reason: String` field on `Target` is required and
+  non-empty whenever `status == set_aside`; `bullseye_validate`
+  flags missing reasons and stale leftover reasons on non-set-aside
+  statuses. New tool `bullseye_set_aside(cwd, id, reason)` is the
+  canonical transition path; `bullseye_put` rejects
+  `status: set_aside` and routes the caller to the dedicated tool.
+  Set-aside targets unblock their dependents the same way achieved
+  targets do (terminal for graph traversal) but render in a
+  separate `## Set aside` group in `bullseye_summary` so they don't
+  inflate the achievements count. Schema bumps to
+  `schema_version: 3`. Old binaries reading a v3 file fail loudly
+  via the existing version check.
+- **Lockfile relocated outside the project directory** (🎯T19).
+  Bullseye no longer writes `bullseye.yaml.lock` next to
+  `bullseye.yaml`; lockfiles now live under
+  `std::env::temp_dir()/bullseye/locks/`, named by the parent
+  directory's hex `(dev_t, ino_t)`. The keying is robust against
+  atomic-rename writes, repo directory renames, and symlinked
+  access paths (canonicalised before stat). Auto-clears on reboot
+  via temp-dir semantics. Operational change rather than a tool
+  surface change, but documented here because third-party writers
+  that previously coordinated with bullseye via the sibling
+  lockfile need to either replicate the new keying or rely on
+  bullseye's CAS-on-`(mtime, len)` conflict detection to catch
+  their edit and retry.
+
+Changes from v0.18.0 → v0.19.0 (kept for catalogue continuity):
 
 - **`observable` renamed to `showcase`; retirement of a showcase
   target requires a recorded demonstration** (🎯T14). The work-target
@@ -176,8 +207,9 @@ from `targets.yaml` to `bullseye.yaml` is a file-format break).
 |------|--------|-------|
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, showcase?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 added an `observable` parameter (now `showcase` as of v0.19.0) and refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. v0.19.0 renames the parameter to `showcase` to match the schema rename — see 🎯T14. |
+| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, showcase?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 added an `observable` parameter (now `showcase` as of v0.19.0) and refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. v0.19.0 renames the parameter to `showcase` to match the schema rename — see 🎯T14. v0.20.0 rejects `status: set_aside` and routes callers to `bullseye_set_aside` so the rationale is always recorded — see 🎯T18. |
 | `bullseye_retire(cwd, id, actual_cost, demonstration?)` | Needs review | v0.19.0 adds a `demonstration` parameter, **required** when the target carries `showcase: true` and ignored otherwise. Refuses retirement of a showcase target without a non-empty demonstration string — see 🎯T14. |
+| `bullseye_set_aside(cwd, id, reason)` | Needs review | New in v0.20.0. Sets the target's status to `set_aside` and records the rationale (parked / deferred / wont_fix — the schema deliberately doesn't taxonomise; the free-text reason carries the nuance). Refuses already-achieved targets and is idempotent on already-set-aside targets (original reason wins). Empty / whitespace-only reasons are rejected — the rationale is the load-bearing artefact of the disposition. See 🎯T18. |
 | `bullseye_frontier(cwd)` | Stable | v0.13.0 ordering: ascending distance-to-nearest-checkpoint, tiebroken by unblocking fanout, then ID. Per-target value/cost are NOT consumed. |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
 | `bullseye_tunnels(cwd, max_depth)` | Needs review | v0.13.0 generalised from "no verify within N hops" to "no checkpoint within N hops" (verify-kind targets, plus work-kind targets with `showcase: true` as of v0.19.0). Membership predicate widened; output format unchanged. Will need another review pass once the `showcase: true` flag sees real-world use. |
@@ -222,12 +254,13 @@ Planned additions (not yet implemented):
 
 | Field | Status | Notes |
 |-------|--------|-------|
-| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `2` (v0.19.0). Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. |
+| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `3` (v0.20.0). Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. v0.19.0 bumped 1→2 for the `observable` → `showcase` rename + retire-demo obligation; v0.20.0 bumps 2→3 for the new `set_aside` status enum value (🎯T18). |
 | `targets` (map) | Stable | |
 | `last_evaluated` | Stable | |
 | `name` | Stable | |
 | `kind` (work/verify) | Stable | |
-| `status` (identified/converging/achieved) | Stable | |
+| `status` (identified/converging/achieved/set_aside) | Stable | v0.20.0 adds `set_aside` as a fourth terminal disposition for parked / deferred / wont-fix targets. The set-aside transition is performed via `bullseye_set_aside(cwd, id, reason)` rather than `bullseye_put` so the rationale is always recorded. Set-aside targets unblock dependents like achieved targets (terminal for graph traversal) but render in a separate group in summary output. See 🎯T18. |
+| `set_aside_reason` | Needs review | New in v0.20.0. Optional string at the schema level; **required and non-empty** at validation time when `status == set_aside`. Validation flags missing or whitespace-only reasons, and flags stale `set_aside_reason` values left on non-set-aside statuses. See 🎯T18. |
 | `value`, `cost` | Stable | Fibonacci scale |
 | `actual_cost` | Stable | |
 | `acceptance` | Stable | |
@@ -304,7 +337,15 @@ Planned additions:
   `bullseye_put` parameter renames in lockstep, and `bullseye_retire`
   gains the new required-when-showcase `demonstration` parameter.
   Field rename + new required parameter on a mutating tool — hard
-  reset of the settling clock to v0.19.0.
+  reset of the settling clock to v0.19.0. v0.20.0 adds the
+  `set_aside` status enum value, the `set_aside_reason` schema
+  field, and the new `bullseye_set_aside` mutating tool (🎯T18) —
+  schema bumps to v3, the new tool joins the surface, the
+  `bullseye_put` status parser rejects `set_aside` (a new constraint
+  on an existing tool), and the third-party-writer story changes
+  with the lockfile relocation (🎯T19). New mutating tool + schema
+  bump + new constraint on existing tool — hard reset of the
+  settling clock to v0.20.0.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
