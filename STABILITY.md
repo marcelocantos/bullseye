@@ -9,8 +9,28 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.20.0. Changes since v0.19.0 affecting the
+Snapshot as of v0.21.0. Changes since v0.20.0 affecting the
 interaction surface:
+
+- **Structured rework payloads** (🎯T1.5). `bullseye_rework` gains
+  two optional parameters, `sawmill_failure` and `mnemo_history`,
+  each a JSON-encoded string. When provided, both are validated as
+  JSON, pretty-printed, and persisted into the rework target's
+  `context` as fenced ```json blocks under labelled `##` headers
+  (`## Sawmill failure` and `## Prior attempts (mnemo)`) alongside
+  the existing free-form `diagnosis` prose. The composition keeps
+  bullseye decoupled from sawmill's and mnemo's internal payload
+  shapes — both are persisted opaquely. The parameters use
+  `Option<String>` rather than `Option<serde_json::Value>` because
+  the JsonSchema derive in rust-mcp-sdk falls back to
+  `type: "unknown"` for arbitrary JSON, which the Anthropic API
+  rejects on tool-list submission. Additive change — existing
+  callers passing only `diagnosis` see no behavioural difference.
+  Sawmill side is end-to-end usable today (sawmill T24 ships
+  structured failure payloads); the mnemo half waits on an upstream
+  rework-aware query that has not yet been filed.
+
+Earlier changes still in effect from v0.20.0:
 
 - **`set_aside` status with required rationale** (🎯T18). Adds a
   fourth terminal disposition alongside `achieved` for targets the
@@ -41,7 +61,7 @@ interaction surface:
   bullseye's CAS-on-`(mtime, len)` conflict detection to catch
   their edit and retry.
 
-Changes from v0.18.0 → v0.19.0 (kept for catalogue continuity):
+Earlier changes still in effect from v0.19.0:
 
 - **`observable` renamed to `showcase`; retirement of a showcase
   target requires a recorded demonstration** (🎯T14). The work-target
@@ -211,7 +231,7 @@ from `targets.yaml` to `bullseye.yaml` is a file-format break).
 | `bullseye_retire(cwd, id, actual_cost, demonstration?)` | Needs review | v0.19.0 adds a `demonstration` parameter, **required** when the target carries `showcase: true` and ignored otherwise. Refuses retirement of a showcase target without a non-empty demonstration string — see 🎯T14. |
 | `bullseye_set_aside(cwd, id, reason)` | Needs review | New in v0.20.0. Sets the target's status to `set_aside` and records the rationale (parked / deferred / wont_fix — the schema deliberately doesn't taxonomise; the free-text reason carries the nuance). Refuses already-achieved targets and is idempotent on already-set-aside targets (original reason wins). Empty / whitespace-only reasons are rejected — the rationale is the load-bearing artefact of the disposition. See 🎯T18. |
 | `bullseye_frontier(cwd)` | Stable | v0.13.0 ordering: ascending distance-to-nearest-checkpoint, tiebroken by unblocking fanout, then ID. Per-target value/cost are NOT consumed. |
-| `bullseye_rework(cwd, id, diagnosis)` | Stable | |
+| `bullseye_rework(cwd, id, diagnosis, sawmill_failure?, mnemo_history?)` | Needs review | v0.21.0 adds two optional JSON-encoded payload parameters that are validated and persisted into the rework target's context as labelled fenced JSON blocks. The string-encoded shape is a workaround for the rust-mcp-sdk JsonSchema derive emitting `type: "unknown"` for `serde_json::Value` (which the Anthropic API rejects); a typed wrapper may emerge once sawmill's and mnemo's payload schemas settle. The mnemo half waits on an upstream rework-aware query — see 🎯T1.5. |
 | `bullseye_tunnels(cwd, max_depth)` | Needs review | v0.13.0 generalised from "no verify within N hops" to "no checkpoint within N hops" (verify-kind targets, plus work-kind targets with `showcase: true` as of v0.19.0). Membership predicate widened; output format unchanged. Will need another review pass once the `showcase: true` flag sees real-world use. |
 | `bullseye_verify(cwd, id)` | Fluid | New in v0.13.0. Emits a structured plan (markdown + JSON) mapping each check on the target to a sawmill tool invocation. Bullseye does not execute the plan — the calling agent runs it against sawmill and folds results back into a report. The plan-only (no result-feedback) shape may evolve once we see how `/cv` or similar wrappers consume it. |
 | `bullseye_validate(cwd)` | Stable | Validation rules will grow but existing ones won't change |
@@ -345,7 +365,10 @@ Planned additions:
   on an existing tool), and the third-party-writer story changes
   with the lockfile relocation (🎯T19). New mutating tool + schema
   bump + new constraint on existing tool — hard reset of the
-  settling clock to v0.20.0.
+  settling clock to v0.20.0. v0.21.0 adds two optional parameters
+  to `bullseye_rework` for structured sawmill/mnemo payloads
+  (🎯T1.5) — purely additive on a previously stable tool, no
+  schema bump, no settling-clock reset.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
