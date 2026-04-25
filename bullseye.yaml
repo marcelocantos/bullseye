@@ -90,11 +90,23 @@ targets:
     - mnemo_restore returns structured target context
     context: |
       mnemo T10 (live context compaction) is achieved as of 2026-04-15 — the summarizer ships and `mnemo_restore` returns compacted context. The bullseye-side work is now actionable: teach the mnemo summarizer to call `bullseye_list` so the compaction it produces is anchored in the target graph, and surface `targets_active` / `targets_progressed` / `targets_next` fields in the restore payload. The summarizer speaks the language of the target graph instead of free-text. See docs/mcp-triad.md section 3.
+
+      Code-level wiring confirmed 2026-04-25: `mnemo/internal/compact/watcher.go:loadTargetContext` reads `bullseye.yaml` via `targets.LoadFromCWD(cwd)` and passes the resulting `TargetContext` into `Compactor.Compact()`. `compact.go:buildUserPrompt` injects the Active/Achieved/Frontier sections into the LLM prompt. `mnemo_restore` parses payload_json and surfaces the targets fields. The cross-server constraint (MCP servers can't call each other) is handled by mnemo reading the YAML directly — semantically equivalent to the original "summarizer calls targets_list" framing.
+
+      Showcase demo blocked 2026-04-25: `~/.mnemo/mnemo.db` `compactions` table has zero rows on this laptop and the watcher has produced no `compact: tick` log lines since startup. Root cause is unrelated to this target — `claude` is a zsh function not on launchd's sanitized PATH, and the watcher's silent early-returns hide the failure. Filed as mnemo 🎯T37 (launchd PATH) and mnemo 🎯T38 (tick observability). Once those land, retire T1.4 with a captured `mnemo_restore` payload showing populated targets fields as the demonstration.
     cross_depends:
     - repo: marcelocantos/mnemo
       target: T10
       capability: live context compaction (summarizer + mnemo_restore)
       note: upstream achieved 2026-04-15; bullseye-side integration now unblocked
+    - repo: marcelocantos/mnemo
+      target: T37
+      capability: claudia.Task subprocess can find and exec the Claude CLI under launchd
+      note: filed 2026-04-25 — blocks the showcase demo because compactions never fire
+    - repo: marcelocantos/mnemo
+      target: T38
+      capability: watcher tick outcomes are observable in mnemo.log
+      note: filed 2026-04-25 — diagnostic prerequisite; without it, T37's regression is invisible
     tags:
     - mnemo
     origin: manual
