@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 targets:
   T1:
     name: MCP triad integration (targets + sawmill + mnemo)
@@ -564,6 +564,54 @@ targets:
     origin: manual
     discovered: 2026-04-07
     achieved: 2026-04-13
+  T20:
+    name: Mutating tools reject string inputs containing leaked Claude tool-call envelope markers (`&lt;invoke `, `&lt;/invoke&gt;`, `&lt;parameter `, `&lt;/parameter&gt;`) before persistence
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'A `check_no_envelope_leak(field, value)` validator (or equivalent) is called from every mutating handler that accepts caller-controlled string input: handle_put (name, context, acceptance items, tags, depends_on/blocks/verifies/cross_depends notes, origin), handle_retire (demonstration), handle_set_aside (reason), handle_rework (diagnosis, sawmill_failure, mnemo_history), handle_import (parsed-content strings)'
+    - On detection, the handler returns an actionable error naming the offending field and the marker found, AND no file mutation occurs
+    - Validation is applied at the write boundary only — `store::load` continues to load corrupted files unchanged so an operator can repair them
+    - 'The four marker substrings are exact-matched: `<invoke ` (trailing space), `</invoke>`, `<parameter ` (trailing space), `</parameter>` — generic tags like `<context>` or `</tags>` are NOT included to avoid false positives on legitimate prose'
+    - 'Tests cover: (a) each marker rejected per field, (b) legitimate content with angle brackets but not the markers passes, (c) the file is unchanged when validation fails, (d) the error message names the field and the marker'
+    context: |-
+      Discovered 2026-04-26 after a separate session in another repo (stock car racing) ended up with a malformed bullseye.yaml: closing tags `</context>`, `<tags>`, and `</invoke>` had leaked into a target's `context:` field as literal YAML content. Bullseye accepted the string verbatim and persisted it.
+
+      Root cause is upstream of bullseye — the agent in that session emitted an XML-shaped tool call (training-data residue from the older Claude `<invoke name="..."><parameter name="...">...</parameter></invoke>` protocol), and the harness's wrapper-stripping was incomplete, leaving closing tags inside the JSON string parameter that hit `bullseye_put`. The same failure mode hit me earlier in this session when I formatted `acceptance` as `<acceptance>...</acceptance>` instead of a JSON array — bullseye correctly rejected it because acceptance is typed as a sequence, but the corruption lands silently when the leakage hits a free-text string field.
+
+      Bullseye should not be a faithful storer of agent serialisation bugs. A small write-side validator catches the leakage at the point it would hit disk and returns a clear "your tool call was malformed" error instead of producing a YAML file with a stray `</invoke>` line that an unrelated future agent then has to debug.
+
+      Concrete shape:
+
+      ```rust
+      const ENVELOPE_MARKERS: &[&str] = &["<invoke ", "</invoke>", "<parameter ", "</parameter>"];
+
+      fn check_no_envelope_leak(field: &str, value: &str) -> Result<(), String> {
+          for m in ENVELOPE_MARKERS {
+              if value.contains(m) {
+                  return Err(format!(
+                      "{field} contains tool-call envelope marker `{m}` — looks like \
+                       XML tool-call syntax leaked into the parameter value. This \
+                       usually means the agent serialised the call as XML and the \
+                       closing tags weren't stripped. Re-issue the call with \
+                       well-formed JSON parameters."
+                  ));
+              }
+          }
+          Ok(())
+      }
+      ```
+
+      Trade-off: a target legitimately quoting MCP envelope syntax in its acceptance prose would be rejected. Acceptable — they can rephrase or HTML-escape (`&lt;invoke ...&gt;`). False-positive cost is much lower than the cost of the silent corruption it prevents.
+
+      Validation must NOT fire on `store::load` — corrupted files must remain loadable so an operator can repair them. Write-side only.
+    tags:
+    - validation
+    - robustness
+    - schema
+    origin: forked-from cross-repo corruption observed 2026-04-26
+    discovered: 2026-04-26
   T3:
     name: Protocol app priority sync
     status: identified
