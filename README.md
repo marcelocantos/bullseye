@@ -132,9 +132,9 @@ Bullseye exposes 17 MCP tools. All target-operating tools accept a
 | `bullseye_put` | Upsert a target — create (auto- or explicit ID) or patch in one call. Rejects content patches on achieved targets unless re-opened in the same call. |
 | `bullseye_retire` | Mark a target achieved |
 | `bullseye_verify` | Emit a structured plan that maps each of a target's `checks` to a sawmill tool invocation. Plan-only — the calling agent runs the checks and folds results back. |
-| `bullseye_frontier` | Unblocked leaf targets ready for work, ordered by distance-to-nearest-observable-checkpoint then unblocking fanout |
+| `bullseye_frontier` | Unblocked leaf targets ready for work, ordered by distance-to-nearest-checkpoint then unblocking fanout |
 | `bullseye_rework` | Trigger rework from a failed verification |
-| `bullseye_tunnels` | Detect work targets with no observable checkpoint reachable within N hops |
+| `bullseye_tunnels` | Detect work targets with no checkpoint reachable within N hops |
 | `bullseye_validate` | Check schema conformance |
 | `bullseye_graph` | Generate Mermaid dependency graph |
 | `bullseye_import` | Import targets from markdown into YAML |
@@ -153,23 +153,34 @@ for wiring Bullseye into your project's agent instructions.
 
 - **Frontier**: The set of unblocked leaf targets that can be worked
   on right now, in parallel.
-- **Observable targets**: Work targets that produce something the
-  human decision-maker can look at and react to — a checkpoint.
-  Marked with `observable: true`. Verify-kind targets are
-  observable by definition. Repo-level frontier ordering rewards
-  shortest-path-to-nearest-observable-target, so chains of opaque
-  work targets get flagged rather than ordered.
-- **Tunnels**: Work targets with no observable checkpoint reachable
-  within N hops — a signal to reshape the graph by adding an
-  intermediate observable target or promoting an existing work
-  target with the `observable` flag.
-- **Verification**: Verify-kind targets validate work targets. When
-  verification fails, a rework edge re-enters the upstream target
-  with a diagnosis and retry budget.
+- **Checkpoint**: A target whose completion produces a signal the
+  human decision-maker can react to. Two flavours:
+  - **Verify-kind targets** are checkpoints by definition — their
+    whole purpose is to emit a pass/fail signal (a technical
+    verification).
+  - **Showcase work targets** — work targets explicitly marked
+    `showcase: true` because their retirement requires a literal
+    user-visible demonstration (running the binary with the player
+    attached, opening the dashboard, posting a screenshot).
+    `bullseye_retire` enforces the obligation by requiring a
+    `demonstration` string when the flag is set, so showcase targets
+    can't sneak into "achieved" on the strength of "tests pass".
+  Repo-level frontier ordering rewards shortest-path-to-nearest-
+  checkpoint, so chains of opaque work targets get flagged rather
+  than ordered.
+- **Tunnels**: Work targets with no checkpoint reachable within N
+  hops — a signal to reshape the graph by adding an intermediate
+  verify target or promoting an existing work target with the
+  `showcase` flag.
+- **Verification vs. showcase**: A verify target says "this is
+  technically correct" (the machine signs off). A showcase target
+  says "this is visibly working for the user" (the human signs off,
+  in person). Reach for `showcase: true` when "tests pass" leaves
+  the user with nothing to look at.
 - **Phase boundary**: Bullseye uses different prioritisation engines
   at repo and portfolio scopes. Inside a repo (sub-week horizon,
   human as decision-maker), ordering is driven by distance-to-
-  observable-checkpoint — `value`/`cost` are not consumed. Across
+  nearest-checkpoint — `value`/`cost` are not consumed. Across
   repos (weekly-plus horizon, human as bottleneck allocator), WSJF
   with momentum and cross-repo enabler propagation earns its keep.
   See `docs/mcp-triad.md` §9.

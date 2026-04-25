@@ -14,21 +14,21 @@ use crate::schema::{Kind, Status, Target, TargetsFile};
 /// use WSJF — the banner exists to stop that framing leaking into
 /// repo-scope decisions. See 🎯T16.
 pub const REPO_SCOPE_BANNER: &str = "\
-> **Repo-scope ordering**: min distance-to-observable, then max unblocking fanout. \
+> **Repo-scope ordering**: min distance-to-checkpoint, then max unblocking fanout. \
 WSJF/value/cost/SAFe framing is portfolio-scope only — do not use it at repo scope.
 >
-> **Legend**: `observable` = target is itself a checkpoint · `dist=N` = N hops to nearest checkpoint · `no observable reachable` = tunnel, reshape the graph · `fanout=N` = downstream targets unblocked by this one.
+> **Legend**: `checkpoint` = target is itself a checkpoint (verify-kind, or work-kind with `showcase: true`) · `dist=N` = N hops to nearest checkpoint · `no checkpoint reachable` = tunnel, reshape the graph · `fanout=N` = downstream targets unblocked by this one · `[showcase]` = work target whose retirement requires a user-visible demonstration.
 
 ";
 
-/// Default maximum BFS depth for observable-reachability. Tunnel
+/// Default maximum BFS depth for checkpoint reachability. Tunnel
 /// detection uses [`tunnels`]'s own `max_depth` parameter; this
 /// constant is the upper bound the repo-level frontier ordering
-/// uses when computing distance-to-nearest-observable as a sort
+/// uses when computing distance-to-nearest-checkpoint as a sort
 /// key. Chosen generously so virtually any realistic repo-level
 /// graph is fully explored; anything beyond is reported as "no
-/// observable reachable" (i.e. `None`) and steered away from.
-pub const OBSERVABLE_REACH_LIMIT: usize = 16;
+/// checkpoint reachable" (i.e. `None`) and steered away from.
+pub const CHECKPOINT_REACH_LIMIT: usize = 16;
 
 /// A target in the frontier: unblocked and ready for work.
 #[derive(Debug, Clone)]
@@ -70,33 +70,33 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
         .collect()
 }
 
-/// Is this target an *observable checkpoint*?
+/// Is this target a **checkpoint** — a moment of progress where the
+/// human decision-maker gets a signal they can react to?
 ///
-/// Observable targets are those whose completion produces something
-/// the human decision-maker can look at and react to. Verify-kind
-/// targets are observable by definition — their whole purpose is to
-/// emit a pass/fail signal. Work-kind targets are observable only
-/// when explicitly flagged via [`crate::schema::Target::observable`].
+/// Verify-kind targets are checkpoints by definition: their whole
+/// purpose is to emit a pass/fail signal. Work-kind targets become
+/// checkpoints when [`crate::schema::Target::showcase`] is set,
+/// which obliges the agent to discharge the demonstration on
+/// retirement (see [`crate::schema::Target::demonstration`]).
 ///
-/// Repo-level prioritisation (🎯T7) uses observable reachability as
+/// Repo-level prioritisation (🎯T7) uses checkpoint reachability as
 /// its primary sort signal: the frontier is ordered to move the
-/// project toward the *next* observable checkpoint as quickly as
-/// possible, and chains of non-observable targets (tunnels) are
-/// flagged so the user can reshape the graph rather than blunder
-/// through them.
-pub fn is_observable(target: &Target) -> bool {
-    target.kind == Kind::Verify || target.observable
+/// project toward the *next* checkpoint as quickly as possible, and
+/// chains of non-checkpoint targets (tunnels) are flagged so the
+/// user can reshape the graph rather than blunder through them.
+pub fn is_checkpoint(target: &Target) -> bool {
+    target.kind == Kind::Verify || target.showcase
 }
 
 /// Build the forward adjacency map used by both tunnel detection
-/// and observable-distance computation. An edge `a → b` means "b
+/// and checkpoint-distance computation. An edge `a → b` means "b
 /// sits downstream of a in the convergence graph": either b depends
 /// on a (standard structural edge), or b is a verify target whose
 /// `verifies` list includes a (the verification-covers-me relation).
 ///
 /// Both tunnel detection and repo-level frontier ordering need this
 /// traversal direction, so factoring it out keeps the two callers in
-/// lockstep: generalising the observability predicate automatically
+/// lockstep: generalising the checkpoint predicate automatically
 /// generalises tunnel detection the same way.
 fn forward_adjacency<'a>(
     active: &BTreeMap<&'a str, &'a Target>,
@@ -124,20 +124,20 @@ fn forward_adjacency<'a>(
     forward
 }
 
-/// Shortest hop count from `start_id` to the nearest observable
-/// target along the forward-reachability graph, or `None` when no
-/// observable target is reachable within `max_depth` hops.
+/// Shortest hop count from `start_id` to the nearest checkpoint
+/// along the forward-reachability graph, or `None` when no
+/// checkpoint is reachable within `max_depth` hops.
 ///
-/// Returns `Some(0)` when `start_id` is itself observable (a verify
-/// target or a work target with `observable: true`). That's the
-/// base case and the thing repo-level ordering wants to reward:
-/// working on an observable target directly produces a checkpoint
-/// with zero intermediate hops.
+/// Returns `Some(0)` when `start_id` is itself a checkpoint (a
+/// verify target or a work target with `showcase: true`). That's
+/// the base case and the thing repo-level ordering wants to reward:
+/// working on a checkpoint directly produces a signal with zero
+/// intermediate hops.
 ///
 /// Walks the same forward graph [`tunnels`] uses. The two functions
-/// share this traversal so a change in observability rules lands in
-/// both paths at once.
-pub fn observable_distance(file: &TargetsFile, start_id: &str, max_depth: usize) -> Option<usize> {
+/// share this traversal so a change in the checkpoint predicate
+/// lands in both paths at once.
+pub fn checkpoint_distance(file: &TargetsFile, start_id: &str, max_depth: usize) -> Option<usize> {
     let active = file.active();
     // If the caller asks about a target that isn't active, treat as
     // unreachable — we don't BFS through achieved nodes because the
@@ -155,7 +155,7 @@ pub fn observable_distance(file: &TargetsFile, start_id: &str, max_depth: usize)
 
     while let Some((current, depth)) = queue.pop_front() {
         if let Some(target) = active.get(current)
-            && is_observable(target)
+            && is_checkpoint(target)
         {
             return Some(depth);
         }
@@ -185,31 +185,31 @@ pub fn unblocking_fanout(file: &TargetsFile, id: &str) -> usize {
         .count()
 }
 
-/// A tunnel warning: a work target that is too far from an
-/// observable checkpoint.
+/// A tunnel warning: a work target that is too far from any
+/// checkpoint.
 #[derive(Debug, Clone)]
 pub struct TunnelWarning {
-    /// The work target at the start of the unobserved chain.
+    /// The work target at the start of the unchecked chain.
     pub target_id: String,
     pub target_name: String,
-    /// Minimum hops to the nearest observable target (None = no
-    /// observable reachable at all within the BFS horizon).
+    /// Minimum hops to the nearest checkpoint (None = no checkpoint
+    /// reachable at all within the BFS horizon).
     pub depth: Option<usize>,
-    /// The nearest observable target, if one was reachable beyond
+    /// The nearest checkpoint, if one was reachable beyond
     /// `max_depth` but within the BFS horizon. When `depth` is
-    /// `None`, no observable was reachable at all.
+    /// `None`, no checkpoint was reachable at all.
     pub nearest_verify: Option<String>,
 }
 
-/// Detect tunnels: active *non-observable* work targets that are
-/// far from any observable checkpoint.
+/// Detect tunnels: active non-checkpoint work targets that are
+/// far from any checkpoint.
 ///
-/// A tunnel exists when a work target is not itself observable AND
-/// has no observable target reachable within `max_depth` hops along
+/// A tunnel exists when a work target is not itself a checkpoint
+/// AND has no checkpoint reachable within `max_depth` hops along
 /// the forward dependency graph (targets that depend on it, or
-/// verify targets whose `verifies` list includes it). "Observable"
+/// verify targets whose `verifies` list includes it). "Checkpoint"
 /// means either a verify-kind target or a work target marked
-/// `observable: true` — see [`is_observable`] for the full rule.
+/// `showcase: true` — see [`is_checkpoint`] for the full rule.
 ///
 /// Default max_depth is 2.
 pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
@@ -219,17 +219,17 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
     let mut warnings = Vec::new();
 
     for (id, t) in &active {
-        // Only flag work targets that aren't themselves observable.
-        // Verify targets (always observable) and observable work
+        // Only flag work targets that aren't themselves checkpoints.
+        // Verify targets (always checkpoints) and showcase work
         // targets are not themselves tunnels.
-        if t.kind != Kind::Work || is_observable(t) {
+        if t.kind != Kind::Work || is_checkpoint(t) {
             continue;
         }
 
         // BFS from this work target through forward edges, looking
-        // for an observable target beyond the start node. The start
-        // node is already known non-observable (checked above), so
-        // any hit has depth >= 1.
+        // for a checkpoint beyond the start node. The start node is
+        // already known non-checkpoint (checked above), so any hit
+        // has depth >= 1.
         let mut visited: HashSet<&str> = HashSet::new();
         let mut queue: VecDeque<(&str, usize)> = VecDeque::new();
         queue.push_back((id, 0));
@@ -240,7 +240,7 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
         while let Some((current, depth)) = queue.pop_front() {
             if depth > 0
                 && let Some(ct) = active.get(current)
-                && is_observable(ct)
+                && is_checkpoint(ct)
             {
                 nearest = Some((depth, current.to_string()));
                 break;
@@ -263,12 +263,12 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
         }
 
         match nearest {
-            Some((depth, observable_id)) if depth > max_depth => {
+            Some((depth, checkpoint_id)) if depth > max_depth => {
                 warnings.push(TunnelWarning {
                     target_id: id.to_string(),
                     target_name: t.name.clone(),
                     depth: Some(depth),
-                    nearest_verify: Some(observable_id),
+                    nearest_verify: Some(checkpoint_id),
                 });
             }
             None => {
@@ -593,14 +593,14 @@ pub fn startup_context_broken_file(file_path: &str, error: &str) -> String {
 }
 
 /// An annotated frontier entry in repo-level ordering. Carries the
-/// two sort signals (distance-to-observable, unblocking fanout) so
+/// two sort signals (distance-to-checkpoint, unblocking fanout) so
 /// renderers can display them without recomputing.
 pub struct RankedFrontier<'a> {
     pub target: &'a FrontierTarget,
-    /// Hop count to the nearest observable checkpoint (0 when the
-    /// target itself is observable). `None` means no observable
-    /// reachable within [`OBSERVABLE_REACH_LIMIT`] — in other words,
-    /// picking this target would extend a tunnel.
+    /// Hop count to the nearest checkpoint (0 when the target itself
+    /// is a checkpoint). `None` means no checkpoint reachable within
+    /// [`CHECKPOINT_REACH_LIMIT`] — in other words, picking this
+    /// target would extend a tunnel.
     pub distance: Option<usize>,
     /// Count of active targets that have this one in their
     /// `depends_on` list — the "unblocking fanout" score.
@@ -610,14 +610,14 @@ pub struct RankedFrontier<'a> {
 /// Order a frontier by repo-level prioritisation (🎯T7).
 ///
 /// Sort keys, in order:
-///   1. Ascending distance to the nearest observable target — get
-///      the human to a checkpoint as fast as possible.
+///   1. Ascending distance to the nearest checkpoint — get the
+///      human to a signal as fast as possible.
 ///   2. Descending unblocking fanout — finishing a high-fanout
 ///      target frees more downstream work.
 ///   3. Ascending target ID — pure determinism for reproducible
 ///      output.
 ///
-/// Targets with no reachable observable (distance `None`) sort
+/// Targets with no reachable checkpoint (distance `None`) sort
 /// **after** all finite-distance targets — they extend a tunnel
 /// and should only be considered when nothing better exists.
 ///
@@ -633,7 +633,7 @@ pub fn rank_frontier<'a>(
         .iter()
         .map(|ft| RankedFrontier {
             target: ft,
-            distance: observable_distance(file, &ft.id, OBSERVABLE_REACH_LIMIT),
+            distance: checkpoint_distance(file, &ft.id, CHECKPOINT_REACH_LIMIT),
             fanout: unblocking_fanout(file, &ft.id),
         })
         .collect();
@@ -655,7 +655,7 @@ pub fn rank_frontier<'a>(
 /// Produce a consolidated status overview for agent consumption.
 ///
 /// The frontier section is ordered by repo-level prioritisation
-/// (🎯T7): ascending distance to the nearest observable checkpoint,
+/// (🎯T7): ascending distance to the nearest checkpoint,
 /// tiebroken by descending unblocking fanout, then by target ID.
 ///
 /// The `momentum` parameter is retained for wire compatibility with
@@ -779,7 +779,7 @@ pub fn summary(
 
     // --- 2. Frontier (ordered by repo-level prioritisation) ---
     //
-    // Ascending distance-to-observable, tiebroken by descending
+    // Ascending distance-to-checkpoint, tiebroken by descending
     // unblocking fanout, then by ID. See [`rank_frontier`] for the
     // full rule and rationale. Value/cost/momentum intentionally
     // not consumed here — those are portfolio-scope signals.
@@ -796,8 +796,8 @@ pub fn summary(
                 let ft = rf.target;
                 let kind_label = match ft.kind {
                     Kind::Work => {
-                        if all_targets.get(&ft.id).is_some_and(|t| t.observable) {
-                            " [observable]"
+                        if all_targets.get(&ft.id).is_some_and(|t| t.showcase) {
+                            " [showcase]"
                         } else {
                             ""
                         }
@@ -805,9 +805,9 @@ pub fn summary(
                     Kind::Verify => " [verify]",
                 };
                 let distance_label = match rf.distance {
-                    Some(0) => "observable".to_string(),
+                    Some(0) => "checkpoint".to_string(),
                     Some(d) => format!("dist={d}"),
-                    None => "no observable reachable".to_string(),
+                    None => "no checkpoint reachable".to_string(),
                 };
                 out.push_str(&format!(
                     "🎯{id} {name}{kind}  [{status:?}] — {dist}, fanout={fan}\n",

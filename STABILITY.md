@@ -9,9 +9,31 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.18.0. Changes since v0.17.0 affecting the
+Snapshot as of v0.19.0. Changes since v0.18.0 affecting the
 interaction surface:
 
+- **`observable` renamed to `showcase`; retirement of a showcase
+  target requires a recorded demonstration** (🎯T14). The work-target
+  flag that promotes an opaque target to a checkpoint is now spelled
+  `showcase: true` in `bullseye.yaml` and on `bullseye_put`'s
+  parameter; the schema bumps to `schema_version: 2`. The legacy
+  field name still deserialises via `#[serde(alias = "observable")]`
+  on the new field, so older files load cleanly and are rewritten
+  under the new name on next save (one-shot migration). On the
+  retirement path, `bullseye_retire` now refuses to retire any
+  target that carries `showcase: true` unless the caller passes a
+  non-empty `demonstration` string describing what was actually
+  shown to the user; the string is stored on the retired target as
+  permanent evidence. Internal predicate / helper renames (`is_observable`
+  → `is_checkpoint`, `observable_distance` → `checkpoint_distance`,
+  `OBSERVABLE_REACH_LIMIT` → `CHECKPOINT_REACH_LIMIT`) and
+  output-string renames (`[observable]` → `[showcase]`,
+  `no observable reachable` → `no checkpoint reachable`,
+  `min distance-to-observable` → `min distance-to-checkpoint`) follow
+  the same theme — the field is the obligation half (`showcase`),
+  the predicate is the ranking concept (`checkpoint`).
+
+Earlier changes still in effect from v0.18.0:
 - **Concurrency protocol for `bullseye.yaml`** (🎯T17). Bullseye now
   tolerates concurrent writers. Mutating tools (`bullseye_put`,
   `bullseye_retire`, `bullseye_rework`, `bullseye_import`) acquire an
@@ -136,9 +158,9 @@ Earlier structural changes still in effect:
 **Phase-boundary hypothesis** (new in v0.13.0, `docs/mcp-triad.md`
 §9): Bullseye now has two prioritisation scopes with different
 objective functions. Repo-level (sub-week, human as decision-maker)
-uses shortest-path-to-next-observable-checkpoint, tiebroken by
-unblocking fanout; per-target `value`/`cost` are **not consumed**
-by repo-level ordering. Portfolio-level (weekly-plus, human as
+uses shortest-path-to-next-checkpoint, tiebroken by unblocking
+fanout; per-target `value`/`cost` are **not consumed** by repo-level
+ordering. Portfolio-level (weekly-plus, human as
 bottleneck allocator) will use WSJF + momentum + cross-repo value
 propagation (🎯T2.3, pending). The repo/portfolio split means per-
 target `value`/`cost` are now documented as portfolio-scope inputs
@@ -154,11 +176,11 @@ from `targets.yaml` to `bullseye.yaml` is a file-format break).
 |------|--------|-------|
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, observable?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 adds an `observable` parameter (for the new schema field) and refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. |
-| `bullseye_retire(cwd, id, actual_cost)` | Stable | |
-| `bullseye_frontier(cwd)` | Stable | v0.13.0 ordering: ascending distance-to-nearest-observable-target, tiebroken by unblocking fanout, then ID. Per-target value/cost are NOT consumed. |
+| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, showcase?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 added an `observable` parameter (now `showcase` as of v0.19.0) and refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. v0.19.0 renames the parameter to `showcase` to match the schema rename — see 🎯T14. |
+| `bullseye_retire(cwd, id, actual_cost, demonstration?)` | Needs review | v0.19.0 adds a `demonstration` parameter, **required** when the target carries `showcase: true` and ignored otherwise. Refuses retirement of a showcase target without a non-empty demonstration string — see 🎯T14. |
+| `bullseye_frontier(cwd)` | Stable | v0.13.0 ordering: ascending distance-to-nearest-checkpoint, tiebroken by unblocking fanout, then ID. Per-target value/cost are NOT consumed. |
 | `bullseye_rework(cwd, id, diagnosis)` | Stable | |
-| `bullseye_tunnels(cwd, max_depth)` | Needs review | v0.13.0 generalised from "no verify within N hops" to "no observable within N hops". Membership predicate widened; output format unchanged. Will need another review pass once the `observable: true` flag sees real-world use. |
+| `bullseye_tunnels(cwd, max_depth)` | Needs review | v0.13.0 generalised from "no verify within N hops" to "no checkpoint within N hops" (verify-kind targets, plus work-kind targets with `showcase: true` as of v0.19.0). Membership predicate widened; output format unchanged. Will need another review pass once the `showcase: true` flag sees real-world use. |
 | `bullseye_verify(cwd, id)` | Fluid | New in v0.13.0. Emits a structured plan (markdown + JSON) mapping each check on the target to a sawmill tool invocation. Bullseye does not execute the plan — the calling agent runs it against sawmill and folds results back into a report. The plan-only (no result-feedback) shape may evolve once we see how `/cv` or similar wrappers consume it. |
 | `bullseye_validate(cwd)` | Stable | Validation rules will grow but existing ones won't change |
 | `bullseye_graph(cwd)` | Stable | |
@@ -200,7 +222,7 @@ Planned additions (not yet implemented):
 
 | Field | Status | Notes |
 |-------|--------|-------|
-| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `1`. Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. |
+| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `2` (v0.19.0). Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. |
 | `targets` (map) | Stable | |
 | `last_evaluated` | Stable | |
 | `name` | Stable | |
@@ -213,7 +235,8 @@ Planned additions (not yet implemented):
 | `context` | Stable | |
 | `depends_on` | Stable | Single edge type (v0.8.0); legacy `gates` edges are migrated into `depends_on` on load |
 | `cross_depends`, `cross_enables` | Fluid | New in v0.13.0. Advisory edges (don't block frontier computation) pointing at targets or capabilities in other repos. `CrossEdge { repo, target?, capability?, note? }` — each edge must have a non-empty `repo` and at least one of `target`/`capability`; dangling refs to unscanned repos are silently allowed. Surfaced in `bullseye_portfolio` output today; value propagation is 🎯T2.3. |
-| `observable` | Fluid | New in v0.13.0 boolean flag (default false, omitted from YAML when false). Marks a work target whose completion produces reviewable output. Verify-kind targets are observable by definition; this flag only matters for work-kind targets. Drives the distance-to-nearest-observable signal that orders the repo-level frontier and the `bullseye_tunnels` membership predicate. Expected to see churn as the convention for marking observable work targets settles in practice. |
+| `showcase` | Fluid | Renamed from `observable` in v0.19.0; legacy YAML still loads via a serde alias on the new field. Boolean flag (default false, omitted from YAML when false). Marks a work target whose retirement requires a user-visible demonstration recorded via `bullseye_retire`'s `demonstration` parameter. Verify-kind targets are checkpoints by definition; this flag promotes a work target to checkpoint status (driving distance-to-checkpoint frontier ordering and `bullseye_tunnels` membership) AND obliges the demo on retire. Expected to see churn as the convention for marking showcase work targets settles in practice. |
+| `demonstration` | Fluid | New in v0.19.0. Optional string, populated by `bullseye_retire` when the retired target carries `showcase: true`; never serialised when absent. The recorded note is the permanent evidence that the showcase obligation was discharged with a real user-visible step rather than a "tests pass" stand-in. |
 | `verifies` | Stable | |
 | `rework` | Stable | |
 | `retry_budget`, `retries` | Stable | |
@@ -251,8 +274,9 @@ Planned additions:
   structured pass/fail report on the target. Before 1.0 this should
   either be added (so verification can auto-trigger `bullseye_rework`)
   or the decision to stay plan-only should be documented as deliberate.
-- **`observable` flag convention**: Newly introduced; the convention
-  for when to mark a work target `observable: true` will settle with
+- **`showcase` flag convention**: Renamed from `observable` in
+  v0.19.0 and given an explicit retirement obligation; the convention
+  for when to mark a work target `showcase: true` will settle with
   practice. Gotchas and anti-patterns should be documented as they
   emerge.
 - **`bullseye_startup_context`, `bullseye_portfolio`, `bullseye_summary`
@@ -273,7 +297,14 @@ Planned additions:
   optional on create) — additive, no reset. v0.18.0 introduces the
   lockfile protocol (🎯T17) — additive for bullseye's own tools
   but imposes a new expectation on third-party editors, so note the
-  change here even though it's not a hard reset.
+  change here even though it's not a hard reset. v0.19.0 renames
+  the `observable` field to `showcase` and adds the
+  `demonstration`-on-retire obligation (🎯T14) — schema bumps to v2,
+  the legacy field name still loads via a serde alias, the
+  `bullseye_put` parameter renames in lockstep, and `bullseye_retire`
+  gains the new required-when-showcase `demonstration` parameter.
+  Field rename + new required parameter on a mutating tool — hard
+  reset of the settling clock to v0.19.0.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0

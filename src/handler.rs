@@ -217,7 +217,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             // Creation path — name and acceptance are required.
             // value and cost are optional at repo scope (they are portfolio-scope
             // metadata consumed by cross-repo WSJF ranking, not by the repo-level
-            // frontier ordering which uses distance-to-observable instead).
+            // frontier ordering which uses distance-to-checkpoint instead).
             // Omitting them defaults to 0.0, which signals "not set at repo scope"
             // and is skipped by portfolio WSJF scoring.
             let name = t
@@ -247,8 +247,9 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 status,
                 value,
                 cost,
-                observable: t.observable.unwrap_or(false),
+                showcase: t.showcase.unwrap_or(false),
                 actual_cost: None,
+                demonstration: None,
                 acceptance,
                 checks: Vec::new(),
                 context: t.context.clone().unwrap_or_default(),
@@ -307,7 +308,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 || t.origin.is_some()
                 || t.depends_on.is_some()
                 || t.verifies.is_some()
-                || t.observable.is_some();
+                || t.showcase.is_some();
             if target_currently_achieved && would_remain_achieved && content_edits_present {
                 return Err(format!(
                     "🎯{id} is achieved — its content is immutable. Re-open it first by \
@@ -340,8 +341,8 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             if let Some(ref deps) = t.depends_on {
                 target.depends_on = deps.clone();
             }
-            if let Some(observable) = t.observable {
-                target.observable = observable;
+            if let Some(showcase) = t.showcase {
+                target.showcase = showcase;
             }
             if let Some(ref verifies) = t.verifies {
                 target.verifies = verifies.clone();
@@ -415,13 +416,27 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     text_result(out)
 }
 
-fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
+pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
 
     enum Outcome {
         AlreadyAchieved,
-        Retired { name: String, cost: f64 },
+        Retired {
+            name: String,
+            cost: f64,
+            demonstration: Option<String>,
+        },
     }
+
+    // Normalise the optional demonstration to its trimmed form once
+    // — empty/whitespace-only strings are treated as "not provided"
+    // so callers can't sidestep the showcase obligation by passing
+    // a single space.
+    let demonstration: Option<String> = t
+        .demonstration
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
         let target = file
@@ -431,24 +446,52 @@ fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
         if target.status == Status::Achieved {
             return Ok(Outcome::AlreadyAchieved);
         }
+        // Showcase obligation (🎯T14): a target with `showcase: true`
+        // must be demonstrated before it retires. A non-empty
+        // `demonstration` argument is the recorded evidence; refuse
+        // retirement otherwise so the agent can't shortcut a real
+        // demo with a "tests pass" report.
+        if target.showcase && demonstration.is_none() {
+            return Err(format!(
+                "🎯{id} is a showcase target — `bullseye_retire` requires a non-empty \
+                 `demonstration` argument describing what was actually shown to the user \
+                 (e.g. \"ran the binary with the player attached and shared a screen \
+                 recording\"). Technical verification (\"tests pass\", \"builds clean\") \
+                 is not a demonstration. Retire this target only after performing the \
+                 user-visible step the showcase flag promised, and pass that step's \
+                 description as `demonstration`.",
+                id = t.id,
+            ));
+        }
         target.status = Status::Achieved;
         target.achieved = Some(Local::now().date_naive());
         if let Some(actual) = t.actual_cost {
             target.actual_cost = Some(actual);
         }
+        if let Some(ref demo) = demonstration {
+            target.demonstration = Some(demo.clone());
+        }
         Ok(Outcome::Retired {
             name: target.name.clone(),
             cost: target.cost,
+            demonstration: demonstration.clone(),
         })
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
     match outcome {
         Outcome::AlreadyAchieved => text_result(format!("🎯{} is already achieved", t.id)),
-        Outcome::Retired { name, cost } => {
+        Outcome::Retired {
+            name,
+            cost,
+            demonstration,
+        } => {
             let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
             if let Some(actual) = t.actual_cost {
                 out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
+            }
+            if let Some(demo) = demonstration {
+                out.push_str(&format!("\nDemonstration: {demo}"));
             }
             text_result(out)
         }
@@ -475,8 +518,8 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
         let ft = rf.target;
         let kind_label = match ft.kind {
             crate::schema::Kind::Work => {
-                if file.targets.get(&ft.id).is_some_and(|t| t.observable) {
-                    " [observable]"
+                if file.targets.get(&ft.id).is_some_and(|t| t.showcase) {
+                    " [showcase]"
                 } else {
                     ""
                 }
@@ -484,9 +527,9 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
             crate::schema::Kind::Verify => " [verify]",
         };
         let distance_label = match rf.distance {
-            Some(0) => "observable".to_string(),
+            Some(0) => "checkpoint".to_string(),
             Some(d) => format!("dist={d}"),
-            None => "no observable reachable".to_string(),
+            None => "no checkpoint reachable".to_string(),
         };
         out.push_str(&format!(
             "🎯{id} {name}{kind}  [{status:?}] — {dist}, fanout={fan}\n",
@@ -945,7 +988,7 @@ targets:
             kind: None,
             status: None,
             depends_on: None,
-            observable: None,
+            showcase: None,
             blocks: None,
             verifies: None,
             origin: None,

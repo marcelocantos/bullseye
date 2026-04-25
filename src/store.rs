@@ -205,8 +205,9 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
             status: crate::schema::Status::Identified,
             value: 5.0,
             cost: 3.0,
-            observable: false,
+            showcase: false,
             actual_cost: None,
+            demonstration: None,
             acceptance: vec![
                 "First milestone is defined with measurable success criteria".to_string(),
                 "At least one sub-target breaks the milestone into actionable work".to_string(),

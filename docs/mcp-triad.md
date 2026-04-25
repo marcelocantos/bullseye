@@ -499,11 +499,11 @@ this scale — agents can work every frontier target in parallel, so
 there's no throughput to optimise in the first place.
 
 What actually matters is how quickly the work moves the human
-decision-maker to the next *observable checkpoint*: the next moment
-where they can look at something and react. The human's role inside
-a repo is to steer, not to execute. They need fast feedback loops
-on which branches of the target graph are paying off, which
-assumptions were wrong, and where intervention is needed.
+decision-maker to the next *checkpoint*: the next moment where they
+can look at something and react. The human's role inside a repo is
+to steer, not to execute. They need fast feedback loops on which
+branches of the target graph are paying off, which assumptions were
+wrong, and where intervention is needed.
 
 This decomposes into two sub-objectives:
 
@@ -516,16 +516,17 @@ This decomposes into two sub-objectives:
    prunes the wrong predictions before they cost more work.
 
 The signal for both is the same: **distance to the nearest
-observable target**. An observable target is one whose completion
-produces something the human can look at — a verify-kind target
-by definition, or a work-kind target explicitly marked
-`observable: true`. Long chains of non-observable targets are
-**tunnels**, and repo-level ordering actively steers away from
-them.
+checkpoint**. A checkpoint is a target whose completion produces a
+signal the human can react to — a verify-kind target by definition
+(machine signs off), or a work-kind target explicitly marked
+`showcase: true` (the agent owes a recorded user-visible
+demonstration on retirement, see 🎯T14). Long chains of
+non-checkpoint targets are **tunnels**, and repo-level ordering
+actively steers away from them.
 
 The repo-level frontier is therefore sorted by:
 
-1. **Ascending distance-to-observable.** Get to a checkpoint fast.
+1. **Ascending distance-to-checkpoint.** Get to a checkpoint fast.
 2. **Descending unblocking fanout.** All else equal, prefer
    targets that free more downstream work.
 3. **Ascending target ID.** Pure determinism.
@@ -554,17 +555,17 @@ no momentum parameter.
 
 ### Tunnel warnings and the reshape recommendation
 
-When the top-ranked frontier candidate has *no* observable target
+When the top-ranked frontier candidate has *no* checkpoint
 reachable at all, `bullseye_convergence` refuses to auto-select it.
 Instead it emits a `**Blocked**:` next-action line recommending the
 user reshape the graph — either add an intermediate verify target
-or promote an existing downstream work target to `observable:
+or promote an existing downstream work target to `showcase:
 true`. The `**Blocked**:` prefix triggers the `/cv` skill's
 existing pause-for-human branch, so the agent doesn't blunder
 forward into a tunnel it can't see the end of. See
 [`graph::tunnels`] for the flag-on-detection side and
 `convergence::render_next_action` for the block-on-selection side;
-they share the same `is_observable` predicate.
+they share the same `is_checkpoint` predicate.
 
 ### Why value/cost still exist
 
