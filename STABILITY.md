@@ -297,7 +297,14 @@ Planned additions:
   optional on create) — additive, no reset. v0.18.0 introduces the
   lockfile protocol (🎯T17) — additive for bullseye's own tools
   but imposes a new expectation on third-party editors, so note the
-  change here even though it's not a hard reset.
+  change here even though it's not a hard reset. v0.19.0 renames
+  the `observable` field to `showcase` and adds the
+  `demonstration`-on-retire obligation (🎯T14) — schema bumps to v2,
+  the legacy field name still loads via a serde alias, the
+  `bullseye_put` parameter renames in lockstep, and `bullseye_retire`
+  gains the new required-when-showcase `demonstration` parameter.
+  Field rename + new required parameter on a mutating tool — hard
+  reset of the settling clock to v0.19.0.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
