@@ -78,11 +78,17 @@ scripts, and other tools. Every mutating bullseye tool follows this
 protocol so concurrent writers serialise cleanly and lost-update races
 don't silently clobber each other:
 
-1. **Sibling lockfile.** Bullseye acquires an exclusive advisory lock
-   on `<dir>/bullseye.yaml.lock` — a 0-byte sentinel file next to the
-   yaml. POSIX uses `flock(2) LOCK_EX`; Windows uses `LockFileEx`.
-   The lock is on the separate lockfile (not the yaml itself) so the
-   anchor stays stable across atomic renames of the yaml.
+1. **Out-of-tree lockfile.** Bullseye acquires an exclusive advisory
+   lock (POSIX `flock(2) LOCK_EX`; Windows `LockFileEx`) on a 0-byte
+   sentinel file under `std::env::temp_dir()/bullseye/locks/`, named
+   by the hex `(dev_t, ino_t)` of the yaml's parent directory. Keying
+   on the parent dir's inode pair means the lock follows the project
+   across atomic-rename writes (which change the yaml's inode but not
+   the parent's), repo directory renames (which keep the directory's
+   inode), and symlinked access paths (canonicalised before stat). On
+   macOS this resolves to the per-user `$TMPDIR`; on Linux to `/tmp`.
+   The project directory itself stays clean — no lockfile artefact
+   next to the yaml.
 2. **Bounded wait.** Lock acquisition times out after ~5 s with a
    structured error naming the contended lockfile. Another tool
    hanging on the lock does not hang bullseye indefinitely.
@@ -101,12 +107,15 @@ don't silently clobber each other:
    file handle drops at the end of the operation.
 
 **If your tool wants to edit `bullseye.yaml` safely alongside bullseye:**
-acquire an exclusive `flock(2)` / `LockFileEx` on
-`<dir>/bullseye.yaml.lock` before your read-modify-write window and
-release it after. The lockfile will be auto-created if it doesn't yet
-exist. If you don't honour advisory locks (e.g. a plain `vi` or a
-shell one-liner), bullseye's CAS check will detect your edit and
-report a conflict rather than clobbering it — on conflict, retry.
+the simplest path is to rely on bullseye's CAS-on-`(mtime, len)`
+detection — do your read-modify-write quickly; if bullseye's flock
+window overlaps yours, its CAS check will detect your edit and
+report a conflict rather than clobbering it. On conflict, retry. To
+participate in bullseye's flock directly, replicate the lock-path
+computation: `canonicalize` the yaml's parent directory, take its
+`(dev_t, ino_t)`, and `flock` the file
+`<temp_dir>/bullseye/locks/<dev>-<ino>.lock` (`mkdir -p` the parent
+first; the lockfile auto-creates as a 0-byte sentinel).
 
 **First time in a new repo:**
 
@@ -131,6 +140,7 @@ Bullseye exposes 17 MCP tools. All target-operating tools accept a
 | `bullseye_get` | Get a single target by ID with full detail |
 | `bullseye_put` | Upsert a target — create (auto- or explicit ID) or patch in one call. Rejects content patches on achieved targets unless re-opened in the same call. |
 | `bullseye_retire` | Mark a target achieved |
+| `bullseye_set_aside` | Set a target aside (parked / deferred / wont-fix) with a required rationale. Distinct from retirement: the target was not delivered, but it's removed from the active set and unblocks dependents the same way an achieved target does. |
 | `bullseye_verify` | Emit a structured plan that maps each of a target's `checks` to a sawmill tool invocation. Plan-only — the calling agent runs the checks and folds results back. |
 | `bullseye_frontier` | Unblocked leaf targets ready for work, ordered by distance-to-nearest-checkpoint then unblocking fanout |
 | `bullseye_rework` | Trigger rework from a failed verification |
