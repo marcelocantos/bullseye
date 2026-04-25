@@ -44,19 +44,21 @@ pub struct FrontierTarget {
 /// Compute the frontier: active targets with all dependencies satisfied.
 ///
 /// A target is in the frontier if:
-/// - It is active (not achieved).
-/// - It has no unachieved dependencies (depends_on all achieved or absent).
+/// - It is active (not terminal — neither achieved nor set aside).
+/// - It has no in-flight dependencies (every `depends_on` ID resolves
+///   to a terminal target — achieved or set-aside — or is absent).
 pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
     let active = file.active();
 
     active
         .iter()
         .filter(|(_, t)| {
-            // All dependencies must be achieved.
+            // All dependencies must be in a terminal disposition
+            // (achieved or set aside).
             t.depends_on.iter().all(|dep| {
                 file.targets
                     .get(dep.as_str())
-                    .is_some_and(|d| d.status == Status::Achieved)
+                    .is_some_and(|d| d.status.is_terminal())
             })
         })
         .map(|(id, t)| FrontierTarget {
@@ -415,6 +417,34 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
         }
         if t.kind == Kind::Work && !t.verifies.is_empty() {
             errors.push(format!("{id}: work target must not have verifies"));
+        }
+
+        // Set-aside disposition requires a non-empty rationale (🎯T18).
+        // The rationale is the load-bearing artefact: it carries the
+        // parked / deferred / wont_fix nuance that the schema deliberately
+        // doesn't taxonomise. Empty or whitespace-only reasons are
+        // rejected. Conversely, set_aside_reason on a non-set-aside
+        // status is meaningless — flag it rather than silently
+        // preserving a stale reason from a prior disposition.
+        match t.status {
+            Status::SetAside => {
+                if t.set_aside_reason
+                    .as_deref()
+                    .is_none_or(|r| r.trim().is_empty())
+                {
+                    errors.push(format!(
+                        "{id}: status set_aside requires a non-empty set_aside_reason",
+                    ));
+                }
+            }
+            _ => {
+                if t.set_aside_reason.is_some() {
+                    errors.push(format!(
+                        "{id}: set_aside_reason is only valid on status set_aside (status is {:?})",
+                        t.status,
+                    ));
+                }
+            }
         }
 
         // Rework validation.
@@ -842,7 +872,7 @@ pub fn summary(
                     .filter(|dep| {
                         all_targets
                             .get(dep.as_str())
-                            .is_none_or(|d| d.status != Status::Achieved)
+                            .is_none_or(|d| !d.status.is_terminal())
                     })
                     .map(|dep| format!("🎯{dep}"))
                     .collect();
@@ -913,6 +943,26 @@ pub fn summary(
                 ));
             }
         }
+    }
+
+    // --- 5. Set aside targets ---
+    //
+    // Terminal but not achieved. Surfaced in their own group so a
+    // reviewer can see what was decided not to do and why, without
+    // those decisions inflating the achievement record. The reason
+    // line is the load-bearing artefact: its absence would leave the
+    // disposition unmotivated. See 🎯T18.
+    let set_aside = file.set_aside();
+    if !set_aside.is_empty() {
+        out.push_str("## Set aside\n\n");
+        for (id, t) in &set_aside {
+            let reason = t
+                .set_aside_reason
+                .as_deref()
+                .unwrap_or("(no reason recorded)");
+            out.push_str(&format!("🎯{id} {} — {reason}\n", t.name));
+        }
+        out.push('\n');
     }
 
     if !stale.is_empty() {

@@ -271,6 +271,7 @@ fn tunnel_detects_deep_chain() {
                 showcase: false,
                 actual_cost: None,
                 demonstration: None,
+                set_aside_reason: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
                 context: String::new(),
@@ -302,6 +303,7 @@ fn tunnel_detects_deep_chain() {
             showcase: false,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec!["verified".to_string()],
             checks: vec![],
             context: String::new(),
@@ -1805,6 +1807,7 @@ fn frontier_ordering_prefers_checkpoint_then_fanout() {
             showcase,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -1971,6 +1974,7 @@ fn frontier_order_invariant_under_value_cost_mutation() {
             showcase,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -2017,6 +2021,7 @@ fn frontier_order_invariant_under_value_cost_mutation() {
             showcase: false,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec!["verified".to_string()],
             checks: vec![],
             context: String::new(),
@@ -2084,6 +2089,7 @@ fn showcase_flag_changes_frontier_order() {
             showcase,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -2197,6 +2203,7 @@ fn tunnels_treats_showcase_work_as_checkpoint() {
             showcase,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -2314,6 +2321,7 @@ fn summary_stale_parent_all_children_achieved() {
                 showcase: false,
                 actual_cost: None,
                 demonstration: None,
+                set_aside_reason: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
                 context: String::new(),
@@ -2359,6 +2367,7 @@ fn summary_shows_grouped_children() {
             showcase: false,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
             context: String::new(),
@@ -3123,6 +3132,7 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 showcase: false,
                                 actual_cost: None,
                                 demonstration: None,
+                                set_aside_reason: None,
                                 acceptance: vec!["done".to_string()],
                                 checks: Vec::new(),
                                 context: String::new(),
@@ -3298,4 +3308,269 @@ fn retire_non_showcase_target_does_not_require_demonstration() {
     assert!(retired.targets["T1"].demonstration.is_none());
 
     config::set_external_root_override(None);
+}
+
+// --- 🎯T18: set-aside disposition ---
+
+/// `bullseye_set_aside` flips a target's status to `set_aside` and
+/// records the rationale; the target is then excluded from `active()`,
+/// included in `set_aside()`, and unblocks its dependents the same
+/// way an achieved target would.
+#[test]
+fn set_aside_marks_target_terminal_with_reason() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_set_aside;
+    use bullseye::tools::SetAsideTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "set-aside").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let reason = "deferred to v2.0 — UX needs more thought";
+    let result = handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        reason: reason.to_string(),
+    });
+    assert!(result.is_ok(), "set_aside should succeed: {result:?}");
+
+    let file = store::load(&path).unwrap();
+    let t1 = &file.targets["T1"];
+    assert_eq!(t1.status, Status::SetAside);
+    assert_eq!(t1.set_aside_reason.as_deref(), Some(reason));
+
+    // Excluded from active(), included in set_aside().
+    assert!(!file.active().contains_key("T1"));
+    assert!(file.set_aside().contains_key("T1"));
+    // And NOT counted as achieved — that's the whole point.
+    assert!(!file.achieved().contains_key("T1"));
+
+    config::set_external_root_override(None);
+}
+
+/// Empty / whitespace-only reasons are rejected — the rationale is
+/// the load-bearing artefact of the disposition.
+#[test]
+fn set_aside_rejects_empty_reason() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_set_aside;
+    use bullseye::tools::SetAsideTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "set-aside-empty").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    for bad in ["", "   ", "\n\t  "] {
+        let result = handle_set_aside(SetAsideTool {
+            cwd: cwd.clone(),
+            id: "T1".to_string(),
+            reason: bad.to_string(),
+        });
+        assert!(
+            result.is_err(),
+            "empty/whitespace reason must be rejected: input={bad:?}"
+        );
+    }
+
+    // Target must remain untouched after rejected calls.
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T1"].status, Status::Identified);
+    assert!(file.targets["T1"].set_aside_reason.is_none());
+
+    config::set_external_root_override(None);
+}
+
+/// Already-achieved targets cannot be set aside — that would be
+/// rewriting the achievement record. Already-set-aside targets are a
+/// no-op (idempotent reporting, original reason preserved).
+#[test]
+fn set_aside_refuses_achieved_and_is_idempotent() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_set_aside;
+    use bullseye::tools::SetAsideTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "set-aside-achieved").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Mark T1 achieved out-of-band, then try to set it aside.
+    {
+        let mut file = store::load(&path).unwrap();
+        file.targets.get_mut("T1").unwrap().status = Status::Achieved;
+        store::save(&path, &file).unwrap();
+    }
+
+    let after_achieved = handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        reason: "doesn't matter — should be refused".to_string(),
+    });
+    assert!(
+        after_achieved.is_err(),
+        "set_aside on an achieved target must be refused"
+    );
+    let still_achieved = store::load(&path).unwrap();
+    assert_eq!(still_achieved.targets["T1"].status, Status::Achieved);
+
+    // Seed a T2 we can exercise idempotency on.
+    {
+        let mut file = store::load(&path).unwrap();
+        let mut t2 = file.targets["T1"].clone();
+        t2.name = "Idempotency probe".to_string();
+        t2.status = Status::Identified;
+        t2.set_aside_reason = None;
+        t2.depends_on = vec![];
+        file.targets.insert("T2".to_string(), t2);
+        store::save(&path, &file).unwrap();
+    }
+
+    // Idempotency: set T2 aside with reason A, then try to set it
+    // aside again with reason B — original reason wins, no error.
+    let original = "parked pending design discussion";
+    handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T2".to_string(),
+        reason: original.to_string(),
+    })
+    .unwrap();
+    let second = handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T2".to_string(),
+        reason: "different reason".to_string(),
+    });
+    assert!(
+        second.is_ok(),
+        "second set_aside on already-set-aside target should not error: {second:?}"
+    );
+    let file = store::load(&path).unwrap();
+    assert_eq!(
+        file.targets["T2"].set_aside_reason.as_deref(),
+        Some(original)
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// Set-aside targets unblock their dependents the same way achieved
+/// targets do — the frontier surfaces the dependent once the upstream
+/// is in a terminal disposition, regardless of which kind.
+#[test]
+fn set_aside_dependency_unblocks_frontier() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_set_aside;
+    use bullseye::tools::SetAsideTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "set-aside-frontier").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Seed T2 depending on T1, then set T1 aside. T2 should appear
+    // in the frontier afterwards.
+    {
+        let mut file = store::load(&path).unwrap();
+        let mut t2 = file.targets["T1"].clone();
+        t2.name = "Dependent of T1".to_string();
+        t2.status = Status::Identified;
+        t2.set_aside_reason = None;
+        t2.depends_on = vec!["T1".to_string()];
+        file.targets.insert("T2".to_string(), t2);
+        store::save(&path, &file).unwrap();
+    }
+
+    // Pre-condition: T2 is blocked.
+    let pre = bullseye::graph::frontier(&store::load(&path).unwrap());
+    let pre_ids: Vec<_> = pre.iter().map(|f| f.id.as_str()).collect();
+    assert!(
+        !pre_ids.contains(&"T2"),
+        "T2 should be blocked while T1 is identified; frontier was {pre_ids:?}"
+    );
+
+    handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        reason: "won't fix — superseded by 🎯T57".to_string(),
+    })
+    .unwrap();
+
+    let post = bullseye::graph::frontier(&store::load(&path).unwrap());
+    let post_ids: Vec<_> = post.iter().map(|f| f.id.as_str()).collect();
+    assert!(
+        post_ids.contains(&"T2"),
+        "T2 should unblock once T1 is set aside; frontier was {post_ids:?}"
+    );
+    assert!(
+        !post_ids.contains(&"T1"),
+        "T1 should not appear in the frontier once it's set aside"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// `bullseye_validate` flags `status: set_aside` without a reason as
+/// a structural error, and a `set_aside_reason` set on a non-set-aside
+/// status as a stale leftover.
+#[test]
+fn validate_flags_set_aside_reason_mismatch() {
+    use bullseye::graph::validate;
+    use bullseye::schema::{Status, TargetsFile};
+
+    // Start from a real file so the surrounding fields are valid; then
+    // mutate just the status / reason to exercise validation.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = bullseye::store::create_at(
+        tmp.path(),
+        bullseye::config::Location::InRepo,
+        "validate-set-aside",
+    )
+    .unwrap();
+    let mut file: TargetsFile = bullseye::store::load(&path).unwrap();
+
+    // Case 1: set_aside without reason → error.
+    file.targets.get_mut("T1").unwrap().status = Status::SetAside;
+    file.targets.get_mut("T1").unwrap().set_aside_reason = None;
+    let errs = validate(&file);
+    assert!(
+        errs.iter().any(|e| e.contains("set_aside_reason")),
+        "missing reason must be flagged; errors: {errs:?}"
+    );
+
+    // Case 2: set_aside with whitespace-only reason → still error.
+    file.targets.get_mut("T1").unwrap().set_aside_reason = Some("   ".to_string());
+    let errs = validate(&file);
+    assert!(
+        errs.iter().any(|e| e.contains("set_aside_reason")),
+        "whitespace-only reason must be flagged; errors: {errs:?}"
+    );
+
+    // Case 3: reason set on a non-set-aside status → error.
+    file.targets.get_mut("T1").unwrap().status = Status::Identified;
+    file.targets.get_mut("T1").unwrap().set_aside_reason = Some("stale".to_string());
+    let errs = validate(&file);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("set_aside_reason") && e.contains("only valid")),
+        "stale reason on non-set-aside status must be flagged; errors: {errs:?}"
+    );
+
+    // Case 4: clean — set_aside with a real reason. No error from us.
+    file.targets.get_mut("T1").unwrap().status = Status::SetAside;
+    file.targets.get_mut("T1").unwrap().set_aside_reason =
+        Some("parked pending review".to_string());
+    let errs = validate(&file);
+    assert!(
+        !errs.iter().any(|e| e.contains("set_aside")),
+        "valid set-aside should not produce set-aside-related errors; errors: {errs:?}"
+    );
 }

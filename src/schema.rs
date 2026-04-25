@@ -26,7 +26,13 @@ use serde::{Deserialize, Serialize};
 ///   so older files load cleanly and are rewritten under the new name
 ///   on next save. The gates-field and parent-field migrations from
 ///   v0.4.0 and v0.8.0 continue to run transparently on load.
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+/// - `Some(3)` → 🎯T18: introduces the `set_aside` status (parked /
+///   deferred / wont_fix) with a required `set_aside_reason` field.
+///   Set-aside targets are terminal for graph traversal (they unblock
+///   dependents) but distinct from achieved in summary output. Older
+///   binaries reading a v3 file fail at load with a "schema_version
+///   too new" error rather than silently dropping the new variant.
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 /// Top-level targets file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +132,18 @@ pub struct Target {
     /// considered done is auditable after the fact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demonstration: Option<String>,
+
+    /// Rationale recorded when the target's status is set to
+    /// [`Status::SetAside`] — the free-text "why we decided not to
+    /// pursue this" note. Required (non-empty) whenever
+    /// `status == set_aside`; omitted for all other statuses.
+    /// Validation flags missing or empty reasons.
+    ///
+    /// Free text by design: the prose carries the parked / deferred
+    /// / wont_fix nuance without requiring the schema to commit to a
+    /// fixed taxonomy. See 🎯T18.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_aside_reason: Option<String>,
 
     /// How to verify the desired state is achieved.
     pub acceptance: Vec<String>,
@@ -299,11 +317,29 @@ pub fn migrate_gates_to_depends_on(file: &mut TargetsFile) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum Status {
     Identified,
     Converging,
     Achieved,
+    /// Terminal disposition for a target the user has decided not to
+    /// pursue (parked indefinitely, deferred, or actively rejected).
+    /// Distinct from `Achieved`: the target was not delivered, but it
+    /// is no longer a candidate for work and unblocks its dependents
+    /// just like an achieved target. The motivation lives in
+    /// [`Target::set_aside_reason`], which is required (non-empty)
+    /// whenever this status is set. See 🎯T18.
+    SetAside,
+}
+
+impl Status {
+    /// Has this target reached a terminal disposition (achieved or
+    /// set aside)? Terminal targets unblock their dependents and are
+    /// excluded from the active set / frontier. Distinct from
+    /// "achieved" — a set-aside target is terminal but not achieved.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Status::Achieved | Status::SetAside)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,9 +368,11 @@ fn default_origin() -> String {
 }
 
 impl Target {
-    /// Whether this target is active (not achieved).
+    /// Whether this target is active — neither achieved nor set
+    /// aside. Active targets are the ones the frontier can surface
+    /// and that count toward "still in flight" reporting.
     pub fn is_active(&self) -> bool {
-        self.status != Status::Achieved
+        !self.status.is_terminal()
     }
 }
 
@@ -408,11 +446,23 @@ impl TargetsFile {
             .collect()
     }
 
-    /// Achieved targets only.
+    /// Achieved targets only — strictly `Status::Achieved`. Set-aside
+    /// targets are terminal but not achieved and are excluded here.
     pub fn achieved(&self) -> BTreeMap<&str, &Target> {
         self.targets
             .iter()
-            .filter(|(_, t)| !t.is_active())
+            .filter(|(_, t)| t.status == Status::Achieved)
+            .map(|(id, t)| (id.as_str(), t))
+            .collect()
+    }
+
+    /// Set-aside targets only — `Status::SetAside`. Rendered in their
+    /// own group so reviewers can see what was decided not to do and
+    /// why, separate from the achievements record.
+    pub fn set_aside(&self) -> BTreeMap<&str, &Target> {
+        self.targets
+            .iter()
+            .filter(|(_, t)| t.status == Status::SetAside)
             .map(|(id, t)| (id.as_str(), t))
             .collect()
     }
