@@ -208,6 +208,7 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
             showcase: false,
             actual_cost: None,
             demonstration: None,
+            set_aside_reason: None,
             acceptance: vec![
                 "First milestone is defined with measurable success criteria".to_string(),
                 "At least one sub-target breaks the milestone into actionable work".to_string(),

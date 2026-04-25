@@ -406,6 +406,57 @@ targets:
     origin: demonstrated 2026-04-20 in spyder/bullseye.yaml — concurrent Claude Code sessions lost-update'd each other's target mutations
     discovered: 2026-04-21
     achieved: 2026-04-22
+  T18:
+    name: Targets can be set aside (parked / deferred / wont_fix) with a documented rationale, without polluting context or status fields
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'Status enum gains a `set_aside` value (or three discriminated values: parked / deferred / wont_fix — final decision deferred to design)'
+    - Schema requires a non-empty `set_aside_reason` (or analogous) field whenever the status takes a set-aside value; bullseye_validate flags missing reason
+    - Frontier and repo-scope ordering treat set-aside targets as terminal — they don't surface as ready-for-work, the same way achieved targets don't
+    - Set-aside targets are NOT counted toward the achieved-count in summary output; rendered in their own group (e.g. `## Set aside`) so reviewers can see what was decided not to do and why
+    - bullseye_retire is not the path for set-aside transitions — a separate flow records the disposition and reason without requiring a showcase
+    - 'Existing files unaffected: status values absent from older files load unchanged; bumping schema_version is at the implementer''s discretion based on enum-strictness behaviour'
+    context: |-
+      Today the only terminal status is `achieved`. Targets that the user decides not to pursue (parked indefinitely, deferred to a later milestone, or actively rejected as won't-fix) have no clean place to live: leaving them at `identified` makes them keep surfacing on the frontier, retiring them as `achieved` lies, and stuffing the rationale into the `context:` field mixes ongoing background with terminal decisions.
+
+      A set-aside disposition with a required rationale captures the **why** of a decision-not-to-do explicitly and removes the target from active consideration without falsifying the status. The rendered output should distinguish set-aside targets visually (e.g. a `## Set aside` group in `bullseye_list` and `/cv`) so reviewing past decisions remains cheap.
+
+      Open design question: one collapsed value (`set_aside` + free-text reason carries the nuance) vs. three distinct values (`parked` / `deferred` / `wont_fix`). Collapsed is smaller and the reason text is what matters in practice; distinct names read better in reports and let `/cv` filter ("show me all the wont_fix targets in this repo"). Lean collapsed unless reporting wants demand otherwise — pick during implementation.
+
+      Discovered 2026-04-25 during a /cv session where stale `cross_depends` notes were polluting context: the same problem applies to terminal-but-unachieved decisions across the wider target catalogue.
+    tags:
+    - schema
+    - ux
+    origin: discovered while refreshing 🎯T1.4 / 🎯T1.5 cross_depends; identified as a missing primitive in the status model
+    discovered: 2026-04-25
+  T19:
+    name: bullseye.yaml.lock lives outside the project directory, keyed by parent-directory inode rather than path
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Lock target is no longer written into the project directory — every repo using bullseye stays free of `bullseye.yaml.lock` on disk
+    - Lock path is keyed by the parent directory's `(dev_t, ino_t)` (e.g. `<temp-dir>/bullseye/locks/<dev>-<ino>.lock`), so atomic-rename YAML writes, repo directory renames, and symlinked access paths all coordinate against the same lock
+    - Lock root directory is `std::env::temp_dir()` (resolves to per-user `$TMPDIR` on macOS, `/tmp` on Linux) — gives per-user isolation on macOS without code branching, and auto-clears on reboot so stale lock files never accumulate
+    - Two concurrent bullseye processes accessing the same directory via different paths (e.g. one via the realpath, one via a symlink) acquire the same lock and serialise correctly — demonstrated in a test that exercises the path equivalence
+    - The new lock dir is created lazily on first use; missing-dir startup does not panic
+    - 'Existing repos with a stray `bullseye.yaml.lock` left behind by older builds: documented as safe to delete; no automated migration required since the file is zero-byte and ignored'
+    - Documentation (CLAUDE.md / agents-guide / .gitignore template) updated to drop the `/bullseye.yaml.lock` ignore line and explain the new location
+    context: |-
+      Today bullseye writes `bullseye.yaml.lock` next to `bullseye.yaml` as the flock target. It's gitignored, but it visually clutters every repo that uses bullseye — it shows up in file browsers, IDE sidebars, and `ls`. The cross-cutting fix is to move the lock outside the project directory entirely.
+
+      **Keying decision: parent-dir inode, not path hash.** Bullseye's save pattern is write-temp-then-rename, which changes the YAML file's inode on every save but leaves the parent directory's inode untouched. Keying on the parent dir's `(dev_t, ino_t)` is robust against atomic renames, repo-dir renames (which don't change the dir's inode), and symlink aliases (multiple paths to the same dir resolve to the same inode pair). Two distinct projects can never collide because they have distinct dir inodes; deleted-then-recreated dirs that happen to land on the same inode slot are harmless because that's a new project that legitimately wants a fresh lock.
+
+      **Location decision: `std::env::temp_dir()`, not `~/.local/state`.** Locks are process-coordination primitives that have no meaning across reboots; using a temp dir gets reboot-clearing for free and avoids building cleanup machinery for accumulating zero-byte files. `std::env::temp_dir()` resolves to per-user `$TMPDIR` (`/var/folders/.../T/`) on macOS and `/tmp` on Linux — cross-platform with one expression and per-user isolation on macOS without conditional code. XDG state-dir is more "correct" by spec but forces pruning logic; the tradeoff isn't worth it for ephemeral coordination state.
+
+      **Concrete shape:** lock at `std::env::temp_dir().join("bullseye/locks/<dev>-<ino>.lock")`. Created lazily on first use.
+
+      Discovered 2026-04-25 while working on 🎯T18 — user flagged that the lock file pollutes every project directory, not just this one.</context>
+      </invoke>
+    origin: manual
+    discovered: 2026-04-25
   T2:
     name: Global portfolio view across all repos
     status: achieved

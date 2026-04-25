@@ -176,6 +176,39 @@ pub struct RetireTool {
     pub demonstration: Option<String>,
 }
 
+/// Set a target aside (parked / deferred / wont_fix) with a documented
+/// rationale. Distinct from retirement — the target is not delivered,
+/// but it is removed from the active set and unblocks its dependents
+/// just like an achieved target. The free-text reason carries the
+/// nuance (parked indefinitely, deferred to a later milestone,
+/// rejected outright); the schema deliberately doesn't fix a taxonomy.
+/// See 🎯T18.
+#[mcp_tool(
+    name = "bullseye_set_aside",
+    description = "Set a target aside (parked / deferred / wont_fix) with a required rationale. \
+        The status moves to `set_aside`, the reason is recorded on the target, and the target is \
+        removed from the active set / frontier — its dependents are unblocked the same way an \
+        achieved target unblocks them. Use this instead of `bullseye_retire` when the target was \
+        not delivered: parked indefinitely, deferred to a later milestone, or actively rejected \
+        as won't-fix. The reason is free text — it should explain the disposition (e.g. \"parked \
+        pending design discussion in 🎯T42\", \"deferred to v2.0\", \"won't fix — superseded by \
+        🎯T57's redesign\"). Distinct from `bullseye_retire`, which is achievement-only and may \
+        require a showcase demonstration."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct SetAsideTool {
+    /// Working directory to discover bullseye.yaml from.
+    pub cwd: String,
+
+    /// Target ID to set aside.
+    pub id: String,
+
+    /// Rationale for the disposition. Required and must be non-empty
+    /// after trimming. Carries the parked / deferred / wont_fix
+    /// nuance the schema doesn't taxonomise.
+    pub reason: String,
+}
+
 /// Compute the frontier: unblocked targets ready for work.
 #[mcp_tool(
     name = "bullseye_frontier",
@@ -459,6 +492,7 @@ tool_box!(
         GetTool,
         PutTool,
         RetireTool,
+        SetAsideTool,
         FrontierTool,
         ReworkTool,
         TunnelsTool,

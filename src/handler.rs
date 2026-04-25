@@ -51,6 +51,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::GetTool(t) => handle_get(t),
             TargetTools::PutTool(t) => handle_put(t),
             TargetTools::RetireTool(t) => handle_retire(t),
+            TargetTools::SetAsideTool(t) => handle_set_aside(t),
             TargetTools::FrontierTool(t) => handle_frontier(t),
             TargetTools::ReworkTool(t) => handle_rework(t),
             TargetTools::TunnelsTool(t) => handle_tunnels(t),
@@ -190,6 +191,12 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             "identified" => Ok(Status::Identified),
             "converging" => Ok(Status::Converging),
             "achieved" => Ok(Status::Achieved),
+            "set_aside" => Err(
+                "status `set_aside` is not settable via bullseye_put — call \
+                 `bullseye_set_aside(id, reason)` instead so the rationale is recorded \
+                 alongside the status change"
+                    .to_string(),
+            ),
             other => Err(format!(
                 "unknown status: {other} (use identified, converging, achieved)"
             )),
@@ -250,6 +257,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 showcase: t.showcase.unwrap_or(false),
                 actual_cost: None,
                 demonstration: None,
+                set_aside_reason: None,
                 acceptance,
                 checks: Vec::new(),
                 context: t.context.clone().unwrap_or_default(),
@@ -495,6 +503,73 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             }
             text_result(out)
         }
+    }
+}
+
+/// Set a target aside (🎯T18). Distinct from retirement: the target
+/// is not delivered, but it is removed from the active set / frontier
+/// and unblocks its dependents the same way an achieved target would.
+/// Requires a non-empty trimmed `reason`. Refuses to set aside a
+/// target that is already achieved (would be lying about delivery)
+/// or already set aside with the same reason (no-op).
+pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
+    let path = discover_path(&t.cwd)?;
+
+    let reason = t.reason.trim().to_string();
+    if reason.is_empty() {
+        return Err(tool_err(
+            "bullseye_set_aside requires a non-empty `reason` describing why the target is being \
+             parked / deferred / wont-fixed (e.g. \"deferred to v2.0\", \"won't fix — superseded \
+             by 🎯T57\")."
+                .to_string(),
+        ));
+    }
+
+    enum Outcome {
+        AlreadyAchieved,
+        AlreadySetAside { existing_reason: String },
+        SetAside { name: String, prior: Status },
+    }
+
+    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
+        let target = file
+            .targets
+            .get_mut(&t.id)
+            .ok_or_else(|| format!("target {} not found", t.id))?;
+        if target.status == Status::Achieved {
+            return Ok(Outcome::AlreadyAchieved);
+        }
+        if target.status == Status::SetAside {
+            return Ok(Outcome::AlreadySetAside {
+                existing_reason: target.set_aside_reason.clone().unwrap_or_default(),
+            });
+        }
+        let prior = target.status;
+        target.status = Status::SetAside;
+        target.set_aside_reason = Some(reason.clone());
+        Ok(Outcome::SetAside {
+            name: target.name.clone(),
+            prior,
+        })
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
+
+    match outcome {
+        Outcome::AlreadyAchieved => Err(tool_err(format!(
+            "🎯{id} is already achieved — `bullseye_set_aside` is for targets that were not \
+             delivered. If you need to revise the achievement record, edit bullseye.yaml \
+             directly.",
+            id = t.id,
+        ))),
+        Outcome::AlreadySetAside { existing_reason } => text_result(format!(
+            "🎯{id} is already set aside.\nExisting reason: {existing_reason}\nNew reason \
+             (not applied): {reason}",
+            id = t.id,
+        )),
+        Outcome::SetAside { name, prior } => text_result(format!(
+            "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
+            id = t.id,
+        )),
     }
 }
 
