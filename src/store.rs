@@ -394,14 +394,61 @@ pub fn save(path: &Path, file: &TargetsFile) -> Result<(), String> {
     Ok(())
 }
 
-/// Sibling lockfile path for a given `bullseye.yaml`. The lockfile
-/// name is stable across atomic renames of the yaml (since only the
-/// yaml's inode is replaced on write, not the lockfile's), which is
-/// why we lock here instead of on the yaml itself.
-fn lock_path_for(yaml: &Path) -> PathBuf {
-    let mut s = yaml.as_os_str().to_os_string();
-    s.push(".lock");
-    PathBuf::from(s)
+/// Lockfile path for the project directory containing `yaml`.
+///
+/// Keyed on the **parent directory's** `(dev_t, ino_t)` rather than on
+/// any path string, so the lock follows the project regardless of:
+///
+/// - The path used to reach it — symlinks, alternative mount points,
+///   or `..` traversals all canonicalise to the same inode pair.
+/// - Atomic-rename writes of `bullseye.yaml` itself — those replace
+///   the yaml's inode but leave the parent directory's inode intact.
+/// - Renames of the project directory — moving a directory rewrites
+///   the dir entry in its parent but keeps the directory's own inode.
+///
+/// The lock root lives under [`std::env::temp_dir`] (on macOS:
+/// per-user `$TMPDIR` like `/var/folders/.../T/`; on Linux: `/tmp`) so
+/// stale locks self-clear on reboot, no cleanup machinery is required,
+/// and no project directory ever accumulates a `.yaml.lock` artefact.
+/// See 🎯T18 / 🎯T19.
+fn lock_path_for(yaml: &Path) -> Result<PathBuf, MutationError> {
+    let parent = yaml.parent().unwrap_or(Path::new("."));
+    let canonical = parent
+        .canonicalize()
+        .map_err(|e| MutationError::LockIo(format!("canonicalize {}: {e}", parent.display())))?;
+    let key = directory_lock_key(&canonical)?;
+    Ok(lock_root().join(format!("{key}.lock")))
+}
+
+/// Root directory holding bullseye lockfiles. Created lazily on first
+/// use; missing-dir startup is not an error since `acquire_lock`
+/// `mkdir -p`s the parent before opening.
+fn lock_root() -> PathBuf {
+    std::env::temp_dir().join("bullseye").join("locks")
+}
+
+/// Stable key identifying the project directory at `dir`. On Unix,
+/// the canonical answer is `(dev_t, ino_t)` from `stat(2)` — formatted
+/// here as hex so the lock filename is filesystem-safe across all
+/// platforms. On Windows (no inodes), we fall back to a hash of the
+/// already-canonicalised directory path; Windows is a secondary target
+/// and the canonicalised-path hash is robust enough that two distinct
+/// directories cannot collide via `canonicalize` semantics.
+#[cfg(unix)]
+fn directory_lock_key(dir: &Path) -> Result<String, MutationError> {
+    use std::os::unix::fs::MetadataExt;
+    let md = std::fs::metadata(dir)
+        .map_err(|e| MutationError::LockIo(format!("stat {}: {e}", dir.display())))?;
+    Ok(format!("{:x}-{:x}", md.dev(), md.ino()))
+}
+
+#[cfg(windows)]
+fn directory_lock_key(dir: &Path) -> Result<String, MutationError> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    dir.hash(&mut h);
+    Ok(format!("{:x}", h.finish()))
 }
 
 /// Snapshot `(mtime, len)` of `path`, or `None` if stat fails. Used
@@ -492,12 +539,14 @@ impl From<MutationError> for String {
 /// 8. Drop the lockfile handle, releasing the flock.
 ///
 /// The lockfile is never removed — it's a 0-byte sentinel whose
-/// entire purpose is to be a stable flock anchor.
-/// Open the sibling lockfile for `yaml_path` and acquire an exclusive
-/// advisory lock, waiting up to [`LOCK_WAIT`] for contention to clear.
-/// Returns the held file handle — drop it to release the lock.
+/// entire purpose is to be a stable flock anchor. Lockfiles live under
+/// [`std::env::temp_dir`] keyed by the project directory's inode (see
+/// [`lock_path_for`]), so the project directory itself stays clean.
+/// Open the lockfile for `yaml_path` and acquire an exclusive advisory
+/// lock, waiting up to [`LOCK_WAIT`] for contention to clear. Returns
+/// the held file handle — drop it to release the lock.
 fn acquire_lock(yaml_path: &Path) -> Result<std::fs::File, MutationError> {
-    let lock_path = lock_path_for(yaml_path);
+    let lock_path = lock_path_for(yaml_path)?;
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| MutationError::LockIo(format!("create {}: {e}", parent.display())))?;
@@ -568,4 +617,122 @@ where
     save(path, &file).map_err(MutationError::Save)?;
     // Lock released on drop of lock_file at end of scope.
     Ok(output)
+}
+
+#[cfg(test)]
+mod lock_keying_tests {
+    //! Tests for 🎯T19: lockfile lives outside the project directory,
+    //! keyed on the parent dir's inode pair so the lock follows the
+    //! project across atomic-rename writes, symlink aliases, and
+    //! repo-directory renames — and so no `bullseye.yaml.lock` ever
+    //! appears next to the YAML.
+    use super::*;
+
+    /// Helper: write a tiny placeholder YAML so `parent.canonicalize()`
+    /// has a real directory to resolve against. The YAML's contents
+    /// don't matter — the lock keying ignores them entirely.
+    fn touch_yaml(dir: &Path) -> PathBuf {
+        let path = dir.join("bullseye.yaml");
+        std::fs::write(&path, "schema_version: 3\ntargets: {}\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn lock_path_lives_under_env_temp_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml = touch_yaml(tmp.path());
+
+        let lock = lock_path_for(&yaml).unwrap();
+        let temp_root = std::env::temp_dir();
+        assert!(
+            lock.starts_with(&temp_root),
+            "lock path {} must live under env::temp_dir() ({})",
+            lock.display(),
+            temp_root.display(),
+        );
+        assert!(
+            !lock.starts_with(tmp.path()),
+            "lock path {} must NOT be inside the project directory {}",
+            lock.display(),
+            tmp.path().display(),
+        );
+    }
+
+    #[test]
+    fn lock_path_keyed_by_parent_dir_not_yaml_inode() {
+        // Atomic-rename writes change the YAML's inode but leave the
+        // parent directory's inode intact. The lock path must remain
+        // stable across that boundary, otherwise concurrent mutators
+        // could lock different files for the same project.
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml = touch_yaml(tmp.path());
+        let before = lock_path_for(&yaml).unwrap();
+
+        // Replace the YAML with a fresh inode (rm + write again).
+        std::fs::remove_file(&yaml).unwrap();
+        std::fs::write(&yaml, "schema_version: 3\ntargets: {}\n# changed\n").unwrap();
+
+        let after = lock_path_for(&yaml).unwrap();
+        assert_eq!(
+            before, after,
+            "lock path must be stable across YAML inode change"
+        );
+    }
+
+    #[test]
+    fn distinct_project_dirs_get_distinct_locks() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let yaml_a = touch_yaml(a.path());
+        let yaml_b = touch_yaml(b.path());
+
+        let lock_a = lock_path_for(&yaml_a).unwrap();
+        let lock_b = lock_path_for(&yaml_b).unwrap();
+        assert_ne!(
+            lock_a, lock_b,
+            "two distinct project directories must produce distinct lock paths",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_access_paths_share_the_same_lock() {
+        // Two paths to the same project dir — one direct, one via a
+        // symlink — must canonicalise to the same parent inode and so
+        // produce the same lock path. Without this, a process that
+        // mutates the YAML via the symlink would not coordinate with
+        // a process that mutates it via the realpath.
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let yaml_real = touch_yaml(&real);
+
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let yaml_via_link = link.join("bullseye.yaml");
+        // Sanity: the symlinked path is structurally distinct.
+        assert_ne!(yaml_real, yaml_via_link);
+
+        let lock_real = lock_path_for(&yaml_real).unwrap();
+        let lock_via_link = lock_path_for(&yaml_via_link).unwrap();
+        assert_eq!(
+            lock_real, lock_via_link,
+            "symlinked access path must coordinate against the same lock as the realpath",
+        );
+    }
+
+    #[test]
+    fn lock_root_creates_directories_lazily() {
+        // Acquiring a lock for a project whose dir has never been
+        // touched before must succeed — the temp/bullseye/locks/...
+        // ancestry is mkdir-p'd on first use.
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml = touch_yaml(tmp.path());
+
+        // Lock dir should not exist yet for THIS particular key — but
+        // it might exist from prior tests. The contract is just "no
+        // panic, lock acquires successfully".
+        let lock = acquire_lock(&yaml).expect("lock acquisition must succeed");
+        drop(lock);
+    }
 }

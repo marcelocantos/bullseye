@@ -7,7 +7,3 @@
 
 # Claude Code per-project local state (settings, scheduled tasks, worktrees, etc.)
 .claude/
-
-# Advisory-lock artifact left behind by the bullseye MCP server during
-# mutations. Zero-byte flock target; safe to ignore.
-/bullseye.yaml.lock
