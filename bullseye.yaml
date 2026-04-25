@@ -111,15 +111,17 @@ targets:
     - Combined diagnosis is passed as targets_rework payload
     context: |
       The rework agent gets maximum context: what failed (sawmill), what was tried before (mnemo), and retry budget status (targets). Sawmill T24 is achieved — `check_conventions` / `check_invariants` / `query` now emit structured failure payloads that bullseye can consume as the "what failed" half. The remaining external gap is on mnemo: no rework-aware query exists yet that returns prior attempts for a given target ID; this still needs filing upstream before the "what was tried before" half can land. See docs/mcp-triad.md section 4.
+
+      Bullseye-side surface landed 2026-04-25: `bullseye_rework` accepts optional `sawmill_failure` and `mnemo_history` parameters (JSON-encoded strings — `serde_json::Value` would emit `type: unknown` which the Anthropic API rejects). Both are validated on the way in and persisted into the rework target's context as labelled fenced JSON blocks alongside the free-form `diagnosis` prose. Sawmill half is end-to-end usable now; the mnemo half is forward-compatible and waits on the upstream rework-aware query being filed against `marcelocantos/mnemo`.
     depends_on:
     - T1.1
     cross_depends:
     - repo: marcelocantos/sawmill
       target: T24
-      note: upstream achieved — structured failure payloads from check_conventions/check_invariants/query are available; consumed here as the "what failed" half of the rework diagnosis payload
+      note: upstream achieved — structured failure payloads from check_conventions/check_invariants/query are available; consumed here via the `bullseye_rework.sawmill_failure` parameter (landed 2026-04-25)
     - repo: marcelocantos/mnemo
       capability: prior-attempt history retrieval per target
-      note: still not filed upstream as of 2026-04-25; mnemo indexes sessions but has no rework-aware query returning prior attempts for a given target ID — this is the remaining external blocker for T1.5
+      note: still not filed upstream as of 2026-04-25; mnemo indexes sessions but has no rework-aware query returning prior attempts for a given target ID — this is the remaining external blocker for T1.5. The bullseye-side `mnemo_history` parameter is in place and waiting
     tags:
     - sawmill
     - mnemo
