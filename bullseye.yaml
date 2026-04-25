@@ -89,12 +89,12 @@ targets:
     - Compaction includes targets_active, targets_progressed, targets_next fields
     - mnemo_restore returns structured target context
     context: |
-      Depends on mnemo T10 (live context compaction), which is still identified — mnemo is currently an indexer with no summarizer or mnemo_restore tool. This bullseye-side target can't progress until mnemo ships the primitives. The summarizer speaks the language of the target graph instead of free-text. See docs/mcp-triad.md section 3.
+      mnemo T10 (live context compaction) is achieved as of 2026-04-15 — the summarizer ships and `mnemo_restore` returns compacted context. The bullseye-side work is now actionable: teach the mnemo summarizer to call `bullseye_list` so the compaction it produces is anchored in the target graph, and surface `targets_active` / `targets_progressed` / `targets_next` fields in the restore payload. The summarizer speaks the language of the target graph instead of free-text. See docs/mcp-triad.md section 3.
     cross_depends:
     - repo: marcelocantos/mnemo
       target: T10
       capability: live context compaction (summarizer + mnemo_restore)
-      note: T1.4 is blocked on mnemo shipping the summarizer and restore primitives
+      note: upstream achieved 2026-04-15; bullseye-side integration now unblocked
     tags:
     - mnemo
     origin: manual
@@ -110,16 +110,16 @@ targets:
     - Rework diagnosis includes mnemo prior-attempt history
     - Combined diagnosis is passed as targets_rework payload
     context: |
-      The rework agent gets maximum context: what failed (sawmill), what was tried before (mnemo), and retry budget status (targets). Externally blocked: sawmill returns violations as plain strings (no structured file/line failure reports); mnemo has no rework-aware prior-attempt retrieval. Both upstream capabilities must land before this target can progress. See docs/mcp-triad.md section 4.
+      The rework agent gets maximum context: what failed (sawmill), what was tried before (mnemo), and retry budget status (targets). Sawmill T24 is achieved — `check_conventions` / `check_invariants` / `query` now emit structured failure payloads that bullseye can consume as the "what failed" half. The remaining external gap is on mnemo: no rework-aware query exists yet that returns prior attempts for a given target ID; this still needs filing upstream before the "what was tried before" half can land. See docs/mcp-triad.md section 4.
     depends_on:
     - T1.1
     cross_depends:
     - repo: marcelocantos/sawmill
       target: T24
-      note: sawmill T24 (filed 2026-04-18) — structured failure payloads from check_conventions/check_invariants/query, consumed here as the "what failed" half of the rework diagnosis payload
+      note: upstream achieved — structured failure payloads from check_conventions/check_invariants/query are available; consumed here as the "what failed" half of the rework diagnosis payload
     - repo: marcelocantos/mnemo
       capability: prior-attempt history retrieval per target
-      note: mnemo currently indexes sessions but has no rework-aware query that returns prior attempts for a given target ID; target not yet filed upstream
+      note: still not filed upstream as of 2026-04-25; mnemo indexes sessions but has no rework-aware query returning prior attempts for a given target ID — this is the remaining external blocker for T1.5
     tags:
     - sawmill
     - mnemo
