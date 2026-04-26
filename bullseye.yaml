@@ -257,10 +257,12 @@ targets:
     achieved: 2026-04-15
   T14:
     name: '"observable" is renamed to "showcase" and forces visible demonstration before retirement'
-    status: identified
+    status: achieved
     value: 5.0
     cost: 3.0
     showcase: true
+    actual_cost: 3.0
+    demonstration: 'All observable references renamed to showcase throughout schema (serde alias preserves backward compat), handler, graph, tools, and docs. bullseye_retire enforces non-empty demonstration on showcase targets (whitespace-only rejected). Two regression tests added: legacy_observable_field_still_deserialises and retire_showcase_target_requires_demonstration. Audit log records v0.19.0 release. All 117 tests pass, clippy clean.'
     acceptance:
     - The `observable` field is renamed to `showcase` (or equivalent) throughout schema, docs, and tooling
     - Target retirement requires a showcase step when the flag is set — documented in the convention and enforced in the bullseye_retire flow
@@ -274,6 +276,7 @@ targets:
       Discovered while working on 🎯T10 (ge sample app): the tiltbuggy server connected to ged successfully but the user couldn't see anything until the player was actually launched, which required a follow-up prompt. The "observable" intent was there but the obligation wasn't codified.
     origin: discovered while working on 🎯T10 in squz/ge — tiltbuggy sample did not self-demo on completion
     discovered: 2026-04-16
+    achieved: 2026-04-26
   T15:
     name: A bullseye-native executor converges declared-strategy targets without human intervention
     status: identified
@@ -437,7 +440,7 @@ targets:
     discovered: 2026-04-25
   T19:
     name: bullseye.yaml.lock lives outside the project directory, keyed by parent-directory inode rather than path
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -461,6 +464,7 @@ targets:
       </invoke>
     origin: manual
     discovered: 2026-04-25
+    achieved: 2026-04-26
   T2:
     name: Global portfolio view across all repos
     status: achieved
