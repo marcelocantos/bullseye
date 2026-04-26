@@ -412,9 +412,10 @@ targets:
     achieved: 2026-04-22
   T18:
     name: Targets can be set aside (parked / deferred / wont_fix) with a documented rationale, without polluting context or status fields
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    demonstration: 'Set-aside disposition landed in PR #59 (commit 7311b40). Verified live: `Status::SetAside` enum variant, required `set_aside_reason` field with validation, new `bullseye_set_aside(id, reason)` MCP tool, frontier exclusion, achieved-count exclusion, and a dedicated `## Set aside` group in `bullseye_list`/convergence output. Five integration tests in `tests/core_test.rs` exercise: frontier exclusion, validate flagging missing/empty reason, YAML roundtrip preservation, achieved-count separation, and the `bullseye_retire`-vs-`bullseye_set_aside` path split. `make bullseye` green (108 tests, 0 failures).'
     acceptance:
     - 'Status enum gains a `set_aside` value (or three discriminated values: parked / deferred / wont_fix — final decision deferred to design)'
     - Schema requires a non-empty `set_aside_reason` (or analogous) field whenever the status takes a set-aside value; bullseye_validate flags missing reason
@@ -435,6 +436,7 @@ targets:
     - ux
     origin: discovered while refreshing 🎯T1.4 / 🎯T1.5 cross_depends; identified as a missing primitive in the status model
     discovered: 2026-04-25
+    achieved: 2026-04-26
   T19:
     name: bullseye.yaml.lock lives outside the project directory, keyed by parent-directory inode rather than path
     status: identified
@@ -568,9 +570,10 @@ targets:
     achieved: 2026-04-13
   T20:
     name: Mutating tools reject string inputs containing leaked Claude tool-call envelope markers (`&lt;invoke `, `&lt;/invoke&gt;`, `&lt;parameter `, `&lt;/parameter&gt;`) before persistence
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    demonstration: 'Envelope-leak guard landed across two PRs: PR #67 (commit 6375d7c) shipped the validator (`check_no_envelope_leak` + `check_target_no_envelope_leaks`) wired into every mutating handler — `handle_put` (name, context, origin, acceptance[i], tags[i], depends_on[i], blocks[i], verifies[i]), `handle_retire` (demonstration), `handle_set_aside` (reason), `handle_rework` (diagnosis, sawmill_failure, mnemo_history), and `handle_import` (full Target struct via the bulk helper). PR #69 (commit 9bb9b80) added 6 integration tests in `tests/core_test.rs` proving each acceptance bullet end-to-end: each marker rejected per field, legitimate `<context>`/`<tags>`/`<expected>` prose passing, file byte-identical after a rejected `handle_put`, and error messages naming both field and marker. `make bullseye` green (114 tests, 0 failures). Validation correctly fires only at the write boundary — `store::load` continues to accept legacy corrupted files.'
     acceptance:
     - 'A `check_no_envelope_leak(field, value)` validator (or equivalent) is called from every mutating handler that accepts caller-controlled string input: handle_put (name, context, acceptance items, tags, depends_on/blocks/verifies/cross_depends notes, origin), handle_retire (demonstration), handle_set_aside (reason), handle_rework (diagnosis, sawmill_failure, mnemo_history), handle_import (parsed-content strings)'
     - On detection, the handler returns an actionable error naming the offending field and the marker found, AND no file mutation occurs
@@ -614,6 +617,7 @@ targets:
     - schema
     origin: forked-from cross-repo corruption observed 2026-04-26
     discovered: 2026-04-26
+    achieved: 2026-04-26
   T3:
     name: Protocol app priority sync
     status: identified
