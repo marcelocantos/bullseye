@@ -933,7 +933,7 @@ pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
     ))
 }
 
-fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
+pub fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
     let dir = Path::new(&t.cwd);
 
     let location =
