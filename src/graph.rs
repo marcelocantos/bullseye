@@ -342,19 +342,57 @@ pub fn mermaid(file: &TargetsFile) -> String {
     lines.join("\n")
 }
 
-/// Validate the targets file. Returns a list of errors (empty = valid).
+/// Validate the targets file. Returns the union of structural errors
+/// and stylistic warnings — used by `bullseye_validate` so the report
+/// surfaces every issue. Downstream tools that need a hard gate
+/// (frontier, convergence, portfolio) should call
+/// [`validate_blocking`] instead, which excludes warnings so a
+/// cosmetic violation (e.g. a non-conforming ID format from a typo or
+/// from tool-call experimentation) doesn't strand the rest of the
+/// graph and lock the user out of retiring or closing the offending
+/// target.
 pub fn validate(file: &TargetsFile) -> Vec<String> {
+    let mut all = validate_blocking(file);
+    all.extend(validate_warnings(file));
+    all
+}
+
+/// Stylistic warnings — issues worth flagging in a report but not
+/// severe enough to block frontier/convergence operations. Today this
+/// is just the ID-format check; new entries belong here when the
+/// invariant is "advisory" (cosmetic, not load-bearing for graph
+/// logic).
+pub fn validate_warnings(file: &TargetsFile) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for id in file.targets.keys() {
+        // ID format. Bullseye keys the entire graph by the ID string
+        // itself; non-conforming IDs render fine and participate in
+        // depends_on / verifies / cross-edge resolution like any other
+        // string. The only thing the format buys is consistency in
+        // displays. Treat as advisory so a user who ended up with a
+        // non-conforming ID (bad tool call, hand edit, import quirk)
+        // can still retire or set-aside it via the normal tools.
+        if !id.starts_with('T') || id[1..].split('.').any(|p| p.parse::<u32>().is_err()) {
+            warnings.push(format!(
+                "{id}: invalid target ID format (expected T<N> or T<N>.<M>) — \
+                 advisory; the target is fully operable, retire or rename it via direct \
+                 YAML edit if you want the warning gone"
+            ));
+        }
+    }
+    warnings
+}
+
+/// Structural errors that block downstream graph operations. Frontier,
+/// convergence, portfolio, and startup-context all gate on this — if
+/// it returns non-empty, the graph is broken in ways that would make
+/// the next-action recommendation meaningless. Stylistic warnings are
+/// reported separately by [`validate_warnings`].
+pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
     let mut errors = Vec::new();
     let mut seen_ids: HashSet<&str> = HashSet::new();
 
     for (id, t) in &file.targets {
-        // Check ID format.
-        if !id.starts_with('T') || id[1..].split('.').any(|p| p.parse::<u32>().is_err()) {
-            errors.push(format!(
-                "{id}: invalid target ID format (expected T<N> or T<N>.<M>)"
-            ));
-        }
-
         // Duplicate check.
         if !seen_ids.insert(id.as_str()) {
             errors.push(format!("{id}: duplicate target ID"));
@@ -512,7 +550,7 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
     let active = file.active();
     let active_count = active.len();
 
-    let errors = validate(file);
+    let errors = validate_blocking(file);
     let front = if errors.is_empty() {
         frontier(file)
     } else {

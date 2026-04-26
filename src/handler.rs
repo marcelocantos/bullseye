@@ -691,7 +691,7 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
 fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
 
-    let errors = graph::validate(&file);
+    let errors = graph::validate_blocking(&file);
     if !errors.is_empty() {
         return text_result(format!("# Validation errors\n\n{}", errors.join("\n")));
     }
@@ -868,20 +868,29 @@ fn handle_tunnels(t: crate::tools::TunnelsTool) -> ToolResult {
 fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
 
-    let errors = graph::validate(&file);
-    if errors.is_empty() {
-        text_result(format!(
+    let errors = graph::validate_blocking(&file);
+    let warnings = graph::validate_warnings(&file);
+    if errors.is_empty() && warnings.is_empty() {
+        return text_result(format!(
             "Valid: {} ({} targets)",
             path.display(),
             file.targets.len()
-        ))
-    } else {
-        text_result(format!(
-            "# Validation errors in {}\n\n{}",
-            path.display(),
-            errors.join("\n")
-        ))
+        ));
     }
+    let mut out = format!("# Validation report for {}\n", path.display());
+    if !errors.is_empty() {
+        out.push_str(&format!(
+            "\n## Errors (block frontier/convergence)\n\n{}\n",
+            errors.join("\n")
+        ));
+    }
+    if !warnings.is_empty() {
+        out.push_str(&format!(
+            "\n## Warnings (advisory; non-blocking)\n\n{}\n",
+            warnings.join("\n")
+        ));
+    }
+    text_result(out)
 }
 
 fn handle_graph(t: crate::tools::GraphTool) -> ToolResult {
