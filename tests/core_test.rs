@@ -3890,6 +3890,86 @@ fn retire_rejects_envelope_marker_in_demonstration() {
     config::set_external_root_override(None);
 }
 
+/// handle_import rejects markdown whose parsed targets carry envelope
+/// markers in any free-text field, AND no YAML file is written.
+#[test]
+fn import_rejects_envelope_markers_in_parsed_markdown() {
+    use bullseye::config;
+    use bullseye::handler::handle_import;
+    use bullseye::tools::ImportTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Markdown with a leaked closing-tag in the free-text description —
+    // exactly the failure mode 🎯T20 was raised against.
+    let md_path = tmp.path().join("targets.md");
+    std::fs::write(
+        &md_path,
+        "# Targets\n\n## Active\n\n\
+         ### 🎯T1 Some target\n\n\
+         Description with </invoke> leaked from a malformed tool call.\n\n\
+         - **Value**: 1\n\
+         - **Cost**: 1\n\
+         - **Acceptance**: ok\n\
+         - **Status**: Identified\n\
+         - **Discovered**: 2026-04-26\n",
+    )
+    .unwrap();
+
+    let result = handle_import(ImportTool {
+        cwd: cwd.clone(),
+        path: Some(md_path.to_string_lossy().to_string()),
+        location: "in_repo".to_string(),
+        force: false,
+    });
+    let err = result.expect_err("import must reject envelope-marker leakage");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("</invoke>"),
+        "error must name the marker; got: {msg}"
+    );
+
+    // No bullseye.yaml should have been written into the cwd.
+    assert!(
+        store::discover_anywhere(tmp.path()).is_none(),
+        "import must not write a YAML file when validation rejects the input"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// `store::load` must continue to load pre-existing YAML files that
+/// contain envelope markers — the validator is write-side only, so an
+/// operator can repair a corrupted file in place.
+#[test]
+fn store_load_still_loads_corrupted_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    std::fs::write(
+        &path,
+        "schema_version: 1\n\
+         targets:\n  \
+           T1:\n    \
+             name: Pre-corrupted target\n    \
+             kind: work\n    \
+             status: identified\n    \
+             value: 1\n    \
+             cost: 1\n    \
+             acceptance: [ok]\n    \
+             context: \"leaked </invoke> in context\"\n    \
+             origin: manual\n    \
+             discovered: 2026-04-26\n",
+    )
+    .unwrap();
+
+    let file = store::load(&path).expect("load must succeed on corrupted file");
+    assert!(file.targets["T1"].context.contains("</invoke>"));
+}
+
 /// handle_set_aside rejects an envelope marker in the reason field.
 #[test]
 fn set_aside_rejects_envelope_marker_in_reason() {
