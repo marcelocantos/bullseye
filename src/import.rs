@@ -162,6 +162,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 retry_budget: fields.retry_budget,
                 retries: fields.retries,
                 tags: fields.tags,
+                strategy: None,
                 origin: fields.origin.unwrap_or_else(|| "manual".to_string()),
                 discovered: fields
                     .discovered

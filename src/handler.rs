@@ -379,6 +379,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 retry_budget: None,
                 retries: 0,
                 tags: t.tags.clone().unwrap_or_default(),
+                strategy: None,
                 origin: t.origin.clone().unwrap_or_else(|| "manual".to_string()),
                 discovered: Local::now().date_naive(),
                 achieved: if status == Status::Achieved {
@@ -1759,6 +1760,7 @@ targets:
             retry_budget: None,
             retries: 0,
             tags: Vec::new(),
+            strategy: None,
             origin: "manual".into(),
             discovered: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             achieved: None,

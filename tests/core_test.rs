@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use bullseye::graph;
 use bullseye::ops;
-use bullseye::schema::{Kind, Status, TargetsFile};
+use bullseye::schema::{Kind, RetryPolicy, Status, Strategy, TargetsFile};
 use bullseye::store;
 
 fn fixture_path() -> PathBuf {
@@ -285,6 +285,8 @@ fn tunnel_detects_deep_chain() {
                 retry_budget: None,
                 retries: 0,
                 tags: vec![],
+                strategy: None,
+
                 origin: "test".to_string(),
                 discovered: date,
                 achieved: None,
@@ -316,6 +318,8 @@ fn tunnel_detects_deep_chain() {
             retry_budget: None,
             retries: 0,
             tags: vec![],
+            strategy: None,
+
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
@@ -1820,6 +1824,8 @@ fn frontier_ordering_prefers_checkpoint_then_fanout() {
             retry_budget: None,
             retries: 0,
             tags: vec![],
+            strategy: None,
+
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
@@ -1987,6 +1993,8 @@ fn frontier_order_invariant_under_value_cost_mutation() {
             retry_budget: None,
             retries: 0,
             tags: vec![],
+            strategy: None,
+
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
@@ -2034,6 +2042,8 @@ fn frontier_order_invariant_under_value_cost_mutation() {
             retry_budget: None,
             retries: 0,
             tags: vec![],
+            strategy: None,
+
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
@@ -2102,6 +2112,8 @@ fn showcase_flag_changes_frontier_order() {
             retry_budget: None,
             retries: 0,
             tags: vec![],
+            strategy: None,
+
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
@@ -2216,6 +2228,8 @@ fn tunnels_treats_showcase_work_as_checkpoint() {
             retry_budget: None,
             retries: 0,
             tags: vec![],
+            strategy: None,
+
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
@@ -2334,6 +2348,8 @@ fn summary_stale_parent_all_children_achieved() {
                 retry_budget: None,
                 retries: 0,
                 tags: vec![],
+                strategy: None,
+
                 origin: "test".to_string(),
                 discovered: date,
                 achieved: Some(date),
@@ -2380,6 +2396,8 @@ fn summary_shows_grouped_children() {
             retry_budget: None,
             retries: 0,
             tags: vec![],
+            strategy: None,
+
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
@@ -3145,6 +3163,8 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 retry_budget: None,
                                 retries: 0,
                                 tags: Vec::new(),
+                                strategy: None,
+
                                 origin: "concurrent-test".to_string(),
                                 discovered: chrono::Local::now().date_naive(),
                                 achieved: None,
@@ -3851,6 +3871,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
         showcase: None,
         blocks: None,
         verifies: None,
+
         origin: Some(format!("{marker}bad-origin")),
         tags: None,
     });
@@ -3896,6 +3917,7 @@ fn put_allows_legitimate_angle_bracket_prose() {
         showcase: None,
         blocks: None,
         verifies: None,
+
         origin: Some("<manual> 2026-04-26".to_string()),
         tags: Some(vec!["<visual>".to_string()]),
     });
@@ -4163,5 +4185,145 @@ fn non_conforming_id_is_warning_not_blocking_error() {
             .iter()
             .any(|e| e.contains("invalid target ID format")),
         "combined validate() must include the warning; got: {combined:?}"
+    );
+}
+
+// ── 🎯T15.2: strategy schema tests ──────────────────────────────────────────
+
+/// Parse a YAML target with a full strategy block.
+#[test]
+fn strategy_parsed_from_yaml() {
+    let yaml = r#"
+targets:
+  T1:
+    name: Sync dotfiles
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - yadm status is clean
+    discovered: 2026-01-01
+    strategy:
+      command: "yadm add -u && yadm commit -m sync && yadm push"
+      trigger: "cron:0 * * * *"
+      timeout: "60s"
+      retry:
+        max_attempts: 5
+        backoff: "exponential"
+"#;
+    let file: TargetsFile = serde_yaml_ng::from_str(yaml).unwrap();
+    let strat = file.targets["T1"]
+        .strategy
+        .as_ref()
+        .expect("strategy present");
+    assert_eq!(
+        strat.command,
+        "yadm add -u && yadm commit -m sync && yadm push"
+    );
+    assert_eq!(strat.trigger, "cron:0 * * * *");
+    assert_eq!(strat.timeout.as_deref(), Some("60s"));
+    let retry = strat.retry.as_ref().expect("retry present");
+    assert_eq!(retry.max_attempts, Some(5));
+    assert_eq!(retry.backoff.as_deref(), Some("exponential"));
+}
+
+/// Round-trip a strategy through YAML serialise → parse without data loss.
+#[test]
+fn strategy_yaml_roundtrip() {
+    let yaml = r#"
+targets:
+  T1:
+    name: Sync dotfiles
+    status: identified
+    value: 3
+    cost: 2
+    acceptance:
+      - yadm status is clean
+    discovered: 2026-01-01
+    strategy:
+      command: "yadm push"
+      trigger: "on_wake"
+      timeout: "30m"
+      retry:
+        max_attempts: 3
+        backoff: "linear:30m"
+"#;
+    let file: TargetsFile = serde_yaml_ng::from_str(yaml).unwrap();
+    let serialised = serde_yaml_ng::to_string(&file).unwrap();
+    let reparsed: TargetsFile = serde_yaml_ng::from_str(&serialised).unwrap();
+    let orig = file.targets["T1"].strategy.as_ref().unwrap();
+    let back = reparsed.targets["T1"].strategy.as_ref().unwrap();
+    assert_eq!(orig, back);
+}
+
+/// Targets without a strategy field are unaffected — field is None and
+/// existing YAML is not mutated by the new field.
+#[test]
+fn strategy_absent_is_none() {
+    let file = load_fixture();
+    for (id, target) in &file.targets {
+        assert!(
+            target.strategy.is_none(),
+            "fixture target {id} should have no strategy, got: {:?}",
+            target.strategy,
+        );
+    }
+}
+
+/// validate_blocking rejects a strategy with an empty command.
+#[test]
+fn validate_strategy_empty_command_is_error() {
+    let mut file = load_fixture();
+    file.targets.get_mut("T1").unwrap().strategy = Some(Strategy {
+        command: "   ".to_string(), // whitespace only
+        trigger: "on_wake".to_string(),
+        timeout: None,
+        retry: None,
+    });
+    let errors = graph::validate_blocking(&file);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T1") && e.contains("strategy.command") && e.contains("empty")),
+        "expected empty-command error; got: {errors:?}"
+    );
+}
+
+/// validate_blocking rejects a strategy with an empty trigger.
+#[test]
+fn validate_strategy_empty_trigger_is_error() {
+    let mut file = load_fixture();
+    file.targets.get_mut("T1").unwrap().strategy = Some(Strategy {
+        command: "make converge".to_string(),
+        trigger: "".to_string(), // empty
+        timeout: None,
+        retry: None,
+    });
+    let errors = graph::validate_blocking(&file);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T1") && e.contains("strategy.trigger") && e.contains("empty")),
+        "expected empty-trigger error; got: {errors:?}"
+    );
+}
+
+/// A well-formed strategy passes validate_blocking.
+#[test]
+fn validate_strategy_valid_passes() {
+    let mut file = load_fixture();
+    file.targets.get_mut("T1").unwrap().strategy = Some(Strategy {
+        command: "make converge".to_string(),
+        trigger: "cron:*/15 * * * *".to_string(),
+        timeout: Some("5m".to_string()),
+        retry: Some(RetryPolicy {
+            max_attempts: Some(3),
+            backoff: Some("exponential".to_string()),
+        }),
+    });
+    let errors = graph::validate_blocking(&file);
+    assert!(
+        !errors.iter().any(|e| e.contains("strategy")),
+        "valid strategy should not produce errors; got: {errors:?}"
     );
 }

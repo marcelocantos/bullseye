@@ -224,6 +224,7 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
             retry_budget: None,
             retries: 0,
             tags: Vec::new(),
+            strategy: None,
             origin: "bullseye_init".to_string(),
             discovered: today,
             achieved: None,
