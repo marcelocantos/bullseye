@@ -319,6 +319,8 @@ targets:
       - CLI for adhoc invocation and inspection.
 
       The executor will likely live in its own repo (working name TBD — crosshair? bullseye-agent?) but the strategic design lives in bullseye.yaml because the two are conceptually one system.
+    depends_on:
+    - T15.2
     origin: designed in conversation 2026-04-17 — emerged from yadm-auto-sync resilience problem (SSH push hung 9.5h, blocking subsequent launchd runs); generalised into "state convergence is the right abstraction for many recurring jobs"
     discovered: 2026-04-17
   T15.1:
@@ -347,6 +349,23 @@ targets:
     - T15
     origin: forked-from T15 design conversation 2026-04-17
     discovered: 2026-04-17
+  T15.2:
+    name: bullseye schema accepts a target-level strategy block (parsed, validated, persisted; executor consumes it)
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Target struct in schema.rs has an optional `strategy` field of type `Strategy`, with sub-fields `command` (String), `trigger` (String), `timeout` (Option<String>), and `retry` (Option<RetryPolicy>)
+    - RetryPolicy struct has optional `max_attempts` (Option<u32>) and `backoff` (Option<String>) fields
+    - strategy field round-trips through YAML parse and serialise without data loss or spurious fields
+    - validate_blocking rejects a strategy with an empty command (after trimming)
+    - validate_blocking rejects a strategy with an empty trigger (after trimming)
+    - 'Tests cover: parsing a YAML target with a full strategy block, round-trip YAML serialisation, rejection of empty command, rejection of empty trigger'
+    - 'Targets without a strategy field are unaffected — existing YAML files load and save identically (forward-compat: strategy absent ⟹ field omitted from output)'
+    context: 'Bullseye-side of 🎯T15: schema only, no execution. The executor daemon (crosshair/bullseye-agent, not yet created) will consume the strategy block to drive convergence loops. This target isolates the in-repo schema work so it is independently achievable without waiting for the daemon repo to exist.'
+    origin: forked-from T15 decomposition 2026-04-26 — bullseye-side schema piece separated from daemon work
+    discovered: 2026-04-26
+    achieved: 2026-04-26
   T16:
     name: Bullseye's repo-scope output is self-describing, so agents don't default to WSJF/SAFe framing at repo scope
     status: achieved
