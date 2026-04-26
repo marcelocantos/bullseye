@@ -3575,6 +3575,119 @@ fn validate_flags_set_aside_reason_mismatch() {
     );
 }
 
+/// The summary header reports set-aside targets as a distinct count
+/// (not lumped into achieved), and the `## Set aside` section lists
+/// each target with its reason. See 🎯T18.
+#[test]
+fn summary_shows_set_aside_group_and_count() {
+    use bullseye::config::{self, Location};
+    use bullseye::graph;
+    use bullseye::handler::handle_set_aside;
+    use bullseye::schema::Status;
+    use bullseye::tools::SetAsideTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "summary-set-aside").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Set T1 aside.
+    let reason = "out of scope for this cycle";
+    handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        reason: reason.to_string(),
+    })
+    .unwrap();
+
+    let file = store::load(&path).unwrap();
+    let out = graph::summary(&file, "test/bullseye.yaml", None, false);
+
+    // Header must name the set-aside count explicitly.
+    assert!(
+        out.contains("1 set aside"),
+        "summary header must include set-aside count; output:\n{out}"
+    );
+    // Set-aside must NOT inflate the achieved count.
+    assert!(
+        !out.contains("1 achieved") || file.achieved().is_empty(),
+        "set-aside must not inflate achieved count; output:\n{out}"
+    );
+    // A dedicated ## Set aside section must appear with the reason.
+    assert!(
+        out.contains("## Set aside"),
+        "summary must have ## Set aside section; output:\n{out}"
+    );
+    assert!(
+        out.contains(reason),
+        "summary must include the set-aside reason; output:\n{out}"
+    );
+    // T1 must not appear in active targets.
+    let file2 = store::load(&path).unwrap();
+    assert_eq!(file2.targets["T1"].status, Status::SetAside);
+    assert!(
+        !file2.active().contains_key("T1"),
+        "set-aside target must not appear in active()"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// `bullseye_list` with filter `"set_aside"` returns only set-aside
+/// targets and shows the reason inline. See 🎯T18.
+#[test]
+fn list_set_aside_filter_returns_set_aside_targets() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::{handle_list, handle_set_aside};
+    use bullseye::tools::{ListTool, SetAsideTool};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "list-set-aside").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let reason = "won't fix — design changed";
+    handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        reason: reason.to_string(),
+    })
+    .unwrap();
+
+    let result = handle_list(ListTool {
+        cwd: cwd.clone(),
+        filter: "set_aside".to_string(),
+    });
+    assert!(result.is_ok(), "set_aside filter must succeed: {result:?}");
+
+    let content = text_from_call_result(result.unwrap());
+
+    assert!(
+        content.contains("T1"),
+        "set_aside list must include T1; content:\n{content}"
+    );
+    assert!(
+        content.contains(reason),
+        "set_aside list must show the reason; content:\n{content}"
+    );
+    // Active targets should not appear in set_aside filter.
+    let file = store::load(&path).unwrap();
+    for (id, t) in &file.targets {
+        if t.status != bullseye::schema::Status::SetAside {
+            assert!(
+                !content.contains(&format!("🎯{id} ")),
+                "active target {id} must not appear in set_aside filter; content:\n{content}"
+            );
+        }
+    }
+
+    config::set_external_root_override(None);
+}
+
 // --- 🎯T20: envelope-leak guard ---
 //
 // Tests for the check_no_envelope_leak validator wired into every

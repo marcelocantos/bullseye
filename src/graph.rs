@@ -753,12 +753,22 @@ pub fn summary(
     let all_targets = &file.targets;
     let active = file.active();
     let achieved = file.achieved();
+    let set_aside_count = file.set_aside().len();
+
+    let disposition_parts = {
+        let mut parts = vec![
+            format!("{} active", active.len()),
+            format!("{} achieved", achieved.len()),
+        ];
+        if set_aside_count > 0 {
+            parts.push(format!("{set_aside_count} set aside"));
+        }
+        parts.join(", ")
+    };
 
     out.push_str(&format!(
-        "# Summary\nFile: {file_path}\nTotal: {} target(s) — {} active, {} achieved\n\n",
+        "# Summary\nFile: {file_path}\nTotal: {} target(s) — {disposition_parts}\n\n",
         all_targets.len(),
-        active.len(),
-        achieved.len(),
     ));
 
     // --- 1. Active targets grouped by parent ---

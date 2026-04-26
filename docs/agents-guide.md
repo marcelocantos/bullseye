@@ -59,7 +59,7 @@ List targets with optional filtering.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
-| `filter` | string | `"active"` | `"active"`, `"achieved"`, or `"all"` |
+| `filter` | string | `"active"` | `"active"`, `"achieved"`, `"set_aside"`, or `"all"` |
 
 ### bullseye_get
 
@@ -645,7 +645,7 @@ If this project doesn't have `bullseye.yaml` yet, call
 ### Assessing work
 
 - `bullseye_frontier` — unblocked targets ready for work right now.
-- `bullseye_list` — browse all targets (active, achieved, or all).
+- `bullseye_list` — browse all targets (active, achieved, set_aside, or all).
 
 Before starting work, call `bullseye_frontier` to see what's
 available.
