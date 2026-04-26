@@ -568,7 +568,7 @@ targets:
     achieved: 2026-04-13
   T20:
     name: Mutating tools reject string inputs containing leaked Claude tool-call envelope markers (`&lt;invoke `, `&lt;/invoke&gt;`, `&lt;parameter `, `&lt;/parameter&gt;`) before persistence
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -614,6 +614,7 @@ targets:
     - schema
     origin: forked-from cross-repo corruption observed 2026-04-26
     discovered: 2026-04-26
+    achieved: 2026-04-26
   T3:
     name: Protocol app priority sync
     status: identified
