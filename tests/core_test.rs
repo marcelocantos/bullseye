@@ -3574,3 +3574,355 @@ fn validate_flags_set_aside_reason_mismatch() {
         "valid set-aside should not produce set-aside-related errors; errors: {errs:?}"
     );
 }
+
+// --- 🎯T20: envelope-leak guard ---
+//
+// Tests for the check_no_envelope_leak validator wired into every
+// mutating handler. The four markers are:
+//   "<invoke "   "</invoke>"   "<parameter "   "</parameter>"
+// Generic tags like <context> or <tags> are NOT rejected.
+
+/// Each of the four envelope markers must be rejected on handle_put.name.
+/// The error message must name both the field and the marker.
+#[test]
+fn put_rejects_envelope_markers_in_name() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _path = store::create_at(tmp.path(), Location::InRepo, "envelope-name-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let markers = ["<invoke ", "</invoke>", "<parameter ", "</parameter>"];
+    for marker in markers {
+        let result = handle_put(PutTool {
+            cwd: cwd.clone(),
+            id: None,
+            name: Some(format!("some {marker} name")),
+            value: None,
+            cost: None,
+            acceptance: Some(vec!["CI green".to_string()]),
+            context: None,
+            kind: None,
+            status: None,
+            depends_on: None,
+            showcase: None,
+            blocks: None,
+            verifies: None,
+            origin: None,
+            tags: None,
+        });
+        let err = result.expect_err(&format!("marker `{marker}` in name must be rejected"));
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("name"),
+            "error must name the field `name`; marker={marker:?}; got: {msg}"
+        );
+        assert!(
+            msg.contains(marker.trim()),
+            "error must name the marker; marker={marker:?}; got: {msg}"
+        );
+    }
+
+    config::set_external_root_override(None);
+}
+
+/// Markers in context, acceptance items, tags, and origin are all rejected.
+/// Tests the field names appear in the error messages.
+#[test]
+fn put_rejects_envelope_markers_in_other_fields() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _path = store::create_at(tmp.path(), Location::InRepo, "envelope-fields-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let marker = "<invoke ";
+
+    // context
+    let r = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        name: Some("Legit name".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["CI green".to_string()]),
+        context: Some(format!("context with {marker} leaked")),
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: None,
+        tags: None,
+    });
+    let msg = format!("{:?}", r.expect_err("marker in context must be rejected"));
+    assert!(
+        msg.contains("context"),
+        "error must name field `context`; got: {msg}"
+    );
+
+    // acceptance[0]
+    let r = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        name: Some("Legit name".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec![format!("criterion {marker} bad")]),
+        context: None,
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: None,
+        tags: None,
+    });
+    let msg = format!(
+        "{:?}",
+        r.expect_err("marker in acceptance[0] must be rejected")
+    );
+    assert!(
+        msg.contains("acceptance[0]"),
+        "error must name field `acceptance[0]`; got: {msg}"
+    );
+
+    // tags[0]
+    let r = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        name: Some("Legit name".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["CI green".to_string()]),
+        context: None,
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: None,
+        tags: Some(vec![format!("bad{marker}tag")]),
+    });
+    let msg = format!("{:?}", r.expect_err("marker in tags[0] must be rejected"));
+    assert!(
+        msg.contains("tags[0]"),
+        "error must name field `tags[0]`; got: {msg}"
+    );
+
+    // origin
+    let r = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        name: Some("Legit name".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["CI green".to_string()]),
+        context: None,
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: Some(format!("{marker}bad-origin")),
+        tags: None,
+    });
+    let msg = format!("{:?}", r.expect_err("marker in origin must be rejected"));
+    assert!(
+        msg.contains("origin"),
+        "error must name field `origin`; got: {msg}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// Legitimate angle-bracket content that is NOT an envelope marker must
+/// pass validation — e.g. `<context>` or `<tags>` in prose.
+#[test]
+fn put_allows_legitimate_angle_bracket_prose() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _path = store::create_at(tmp.path(), Location::InRepo, "envelope-prose-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // These contain angle brackets but are NOT envelope markers.
+    let result = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        name: Some("Valid name with <context> reference".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec![
+            "Output matches <expected>".to_string(),
+            "No <tags> leakage".to_string(),
+        ]),
+        context: Some("<context> See design doc </context> for details".to_string()),
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: Some("<manual> 2026-04-26".to_string()),
+        tags: Some(vec!["<visual>".to_string()]),
+    });
+    assert!(
+        result.is_ok(),
+        "angle-bracket prose that isn't an envelope marker must pass; got: {result:?}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// When handle_put rejects a call due to an envelope-leak, the file on
+/// disk must be unchanged (no partial write).
+#[test]
+fn put_file_unchanged_on_envelope_rejection() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "envelope-unchanged-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Record the file content before the rejected call.
+    let before = std::fs::read_to_string(&path).unwrap();
+
+    let result = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        name: Some("Good name".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["<invoke bad".to_string()]),
+        context: None,
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: None,
+        tags: None,
+    });
+    assert!(
+        result.is_err(),
+        "envelope marker in acceptance must be rejected"
+    );
+
+    // File must be byte-for-byte identical after the rejected call.
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        before, after,
+        "file must be unchanged when handle_put rejects an envelope marker"
+    );
+
+    config::set_external_root_override(None);
+}
+
+/// handle_retire rejects an envelope marker in the demonstration field.
+#[test]
+fn retire_rejects_envelope_marker_in_demonstration() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_retire;
+    use bullseye::tools::RetireTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "envelope-retire-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Make T1 a showcase target so `demonstration` is mandatory, allowing
+    // the envelope check to run before the showcase-obligation check.
+    {
+        let mut file = store::load(&path).unwrap();
+        file.targets.get_mut("T1").unwrap().showcase = true;
+        store::save(&path, &file).unwrap();
+    }
+
+    let result = handle_retire(RetireTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        actual_cost: None,
+        demonstration: Some("<parameter bad>value</parameter>".to_string()),
+    });
+    let err = result.expect_err("envelope marker in demonstration must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("demonstration"),
+        "error must name field `demonstration`; got: {msg}"
+    );
+    assert!(
+        msg.contains("<parameter"),
+        "error must name the marker; got: {msg}"
+    );
+
+    // Target must remain unretired.
+    let file = store::load(&path).unwrap();
+    assert_ne!(file.targets["T1"].status, Status::Achieved);
+
+    config::set_external_root_override(None);
+}
+
+/// handle_set_aside rejects an envelope marker in the reason field.
+#[test]
+fn set_aside_rejects_envelope_marker_in_reason() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_set_aside;
+    use bullseye::tools::SetAsideTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "envelope-set-aside-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let result = handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T1".to_string(),
+        reason: "deferred </invoke> because".to_string(),
+    });
+    let err = result.expect_err("envelope marker in reason must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("reason"),
+        "error must name field `reason`; got: {msg}"
+    );
+    assert!(
+        msg.contains("</invoke>"),
+        "error must name the marker; got: {msg}"
+    );
+
+    // Target must remain un-set-aside.
+    let file = store::load(&path).unwrap();
+    assert_ne!(file.targets["T1"].status, Status::SetAside);
+
+    config::set_external_root_override(None);
+}
