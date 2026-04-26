@@ -373,7 +373,7 @@ fn summarize_repo_raw(
         }
     }
 
-    let errors = graph::validate(&file);
+    let errors = graph::validate_blocking(&file);
     let frontier_targets = if errors.is_empty() {
         graph::frontier(&file)
     } else {

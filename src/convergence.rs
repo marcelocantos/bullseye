@@ -103,6 +103,23 @@ pub fn convergence(
     let body_start = summary_out.find("## ").unwrap_or(0);
     out.push_str(&summary_out[body_start..]);
 
+    // --- 3.5 Stylistic warnings (non-blocking) ---
+    //
+    // Validation warnings — currently just non-conforming target IDs —
+    // are surfaced for visibility but never gate the next-action
+    // recommendation. The user can still operate on the offending
+    // target via bullseye_put / bullseye_retire / bullseye_set_aside;
+    // this section just makes sure the warning isn't silently swept
+    // under the carpet.
+    let warnings = graph::validate_warnings(file);
+    if !warnings.is_empty() {
+        out.push_str("## Validation warnings\n\n");
+        for w in &warnings {
+            out.push_str(&format!("- {w}\n"));
+        }
+        out.push('\n');
+    }
+
     // --- 4. Next action ---
     render_next_action(
         &mut out,
@@ -442,7 +459,7 @@ fn render_next_action(
     // input, not a repo-level signal. See 🎯T7 in `bullseye.yaml`
     // and §9 of `docs/mcp-triad.md`.
     let _ = momentum;
-    let errors = graph::validate(file);
+    let errors = graph::validate_blocking(file);
     if !errors.is_empty() {
         out.push_str(
             "**Blocked**: targets file has validation errors (see above). Fix the graph \

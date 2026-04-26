@@ -3926,3 +3926,47 @@ fn set_aside_rejects_envelope_marker_in_reason() {
 
     config::set_external_root_override(None);
 }
+
+/// A non-conforming target ID — e.g. "T36.v1" that snuck in via a bad
+/// tool call or hand edit — is a stylistic warning, not a structural
+/// error. The graph operates fine on it (depends_on, verifies, frontier
+/// resolution all key on the string itself), so frontier and convergence
+/// must not block on it; otherwise the user has no way to retire or
+/// set-aside the offending target without an out-of-band YAML edit.
+#[test]
+fn non_conforming_id_is_warning_not_blocking_error() {
+    let mut file = load_fixture();
+    // Inject a verify target with a non-conforming ID. Use one of the
+    // existing targets as the verifies anchor so the verify-must-have-
+    // verifies invariant doesn't trip.
+    let mut t = file.targets["T1"].clone();
+    t.kind = bullseye::schema::Kind::Verify;
+    t.verifies = vec!["T1".to_string()];
+    t.name = "Verify: stand-in for an arbitrary check".to_string();
+    file.targets.insert("T1.v1".to_string(), t);
+
+    let warnings = graph::validate_warnings(&file);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("T1.v1") && w.contains("invalid target ID format")),
+        "warnings must flag the non-conforming ID; got: {warnings:?}"
+    );
+
+    let errors = graph::validate_blocking(&file);
+    assert!(
+        !errors.iter().any(|e| e.contains("invalid target ID format")),
+        "ID format must NOT appear in blocking errors; got: {errors:?}"
+    );
+
+    // The legacy `validate()` (used by bullseye_validate's combined
+    // report) still surfaces the warning — callers that want the union
+    // get it.
+    let combined = graph::validate(&file);
+    assert!(
+        combined
+            .iter()
+            .any(|e| e.contains("invalid target ID format")),
+        "combined validate() must include the warning; got: {combined:?}"
+    );
+}
