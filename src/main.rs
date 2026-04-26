@@ -4,6 +4,7 @@
 use std::process;
 
 use bullseye::handler::TargetHandler;
+use bullseye::priorities;
 use rust_mcp_sdk::mcp_server::{McpServerOptions, server_runtime};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, ProtocolVersion, ServerCapabilities, ServerCapabilitiesTools,
@@ -33,6 +34,16 @@ async fn main() -> SdkResult<()> {
                 print!("{AGENT_GUIDE}");
                 process::exit(0);
             }
+            "sync-priorities" => match priorities::run_sync(&args[2..]) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("sync-priorities: {e}");
+                    process::exit(1);
+                }
+            },
             other => {
                 eprintln!("unknown flag: {other}");
                 eprintln!();
@@ -91,10 +102,13 @@ fn print_help() {
     );
     println!();
     println!("USAGE:");
-    println!("    bullseye              Start the MCP server (stdio transport)");
+    println!("    bullseye                       Start the MCP server (stdio transport)");
+    println!("    bullseye sync-priorities ...   Sync portfolio frontier into a SQLite table");
     println!();
     println!("FLAGS:");
     println!("    --version             Print version");
     println!("    --help                Print this help");
     println!("    --help-agent          Print help and agent guide");
+    println!();
+    println!("Run `bullseye sync-priorities --help` for subcommand details.");
 }
