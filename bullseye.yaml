@@ -2,7 +2,7 @@ schema_version: 3
 targets:
   T1:
     name: MCP triad integration (targets + sawmill + mnemo)
-    status: identified
+    status: achieved
     value: 13.0
     cost: 8.0
     acceptance:
@@ -22,6 +22,7 @@ targets:
     - architecture
     origin: manual
     discovered: 2026-04-07
+    achieved: 2026-04-26
   T1.1:
     name: Executable acceptance checks via sawmill
     status: achieved
