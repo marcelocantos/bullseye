@@ -485,6 +485,16 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
             }
         }
 
+        // Strategy validation: command and trigger must be non-empty.
+        if let Some(ref strategy) = t.strategy {
+            if strategy.command.trim().is_empty() {
+                errors.push(format!("{id}: strategy.command must not be empty"));
+            }
+            if strategy.trigger.trim().is_empty() {
+                errors.push(format!("{id}: strategy.trigger must not be empty"));
+            }
+        }
+
         // Rework validation.
         if let Some(ref rework) = t.rework {
             if t.kind != Kind::Verify {

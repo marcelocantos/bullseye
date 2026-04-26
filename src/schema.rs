@@ -55,6 +55,54 @@ pub struct TargetsFile {
     pub targets: BTreeMap<String, Target>,
 }
 
+/// Convergence strategy for a target — how the executor daemon should
+/// drive this target toward its desired state without human intervention.
+///
+/// The schema is intentionally minimal: `command` and `trigger` are
+/// the only required fields. The executor daemon (crosshair/bullseye-agent,
+/// a separate repo) interprets all fields; bullseye itself only parses,
+/// validates, and persists them. See 🎯T15.2.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Strategy {
+    /// Shell command (or path to script) the executor runs to attempt
+    /// convergence. Must be non-empty.
+    pub command: String,
+
+    /// When to run — free-form trigger expression the executor parses.
+    /// Examples: `"cron:0 * * * *"`, `"fswatch:/path/to/watch"`,
+    /// `"on_wake"`, `"manual"`. Must be non-empty.
+    pub trigger: String,
+
+    /// Hard ceiling per attempt, expressed as a human duration
+    /// (`"30m"`, `"2h"`). The executor kills the command when this
+    /// elapses. Optional; omit to let the executor use its default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+
+    /// Retry and backoff policy. Optional; omit to use executor defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
+}
+
+/// Retry and backoff policy for a [`Strategy`].
+///
+/// Both fields are optional and interpreted by the executor daemon.
+/// Bullseye stores them verbatim without semantic validation beyond
+/// structural presence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    /// Maximum number of consecutive attempts before the executor
+    /// circuit-breaks. Optional; executor uses its own default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
+
+    /// Backoff algorithm and parameters — free-form string the executor
+    /// parses. Examples: `"exponential"`, `"linear:30m"`.
+    /// Optional; executor uses its own default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backoff: Option<String>,
+}
+
 /// A single target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
@@ -214,6 +262,14 @@ pub struct Target {
     /// Freeform tags (e.g., "visual").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+
+    /// Convergence strategy — how the executor daemon should drive this
+    /// target toward its desired state. Parsed and persisted by bullseye;
+    /// executed by the separate executor daemon (see 🎯T15.2). Absent
+    /// on most targets; executor-driven targets set this to declare their
+    /// automation contract alongside their acceptance criteria.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<Strategy>,
 
     /// How this target was created.
     #[serde(default = "default_origin")]
