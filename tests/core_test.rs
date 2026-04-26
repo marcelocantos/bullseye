@@ -3955,7 +3955,9 @@ fn non_conforming_id_is_warning_not_blocking_error() {
 
     let errors = graph::validate_blocking(&file);
     assert!(
-        !errors.iter().any(|e| e.contains("invalid target ID format")),
+        !errors
+            .iter()
+            .any(|e| e.contains("invalid target ID format")),
         "ID format must NOT appear in blocking errors; got: {errors:?}"
     );
 
