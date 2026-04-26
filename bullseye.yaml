@@ -415,7 +415,7 @@ targets:
     achieved: 2026-04-22
   T18:
     name: Targets can be set aside (parked / deferred / wont_fix) with a documented rationale, without polluting context or status fields
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -438,6 +438,7 @@ targets:
     - ux
     origin: discovered while refreshing 🎯T1.4 / 🎯T1.5 cross_depends; identified as a missing primitive in the status model
     discovered: 2026-04-25
+    achieved: 2026-04-26
   T19:
     name: bullseye.yaml.lock lives outside the project directory, keyed by parent-directory inode rather than path
     status: achieved
