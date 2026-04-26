@@ -9,8 +9,40 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.22.0. Changes since v0.21.0 affecting the
+Snapshot as of v0.23.0. Changes since v0.22.0 affecting the
 interaction surface:
+
+- **Target-level `strategy` block in schema** (🎯T15.2). A new
+  optional `strategy: Strategy` field on `Target` lets a target
+  declare how it converges mechanically alongside its acceptance
+  criteria. `Strategy { command: String, trigger: String, timeout:
+  Option<String>, retry: Option<RetryPolicy> }` and `RetryPolicy {
+  max_attempts: Option<u32>, backoff: Option<String> }`. The
+  `command` and `trigger` fields are required and validated
+  non-empty (after trimming) by `bullseye_validate` whenever a
+  strategy is present; `timeout` and `retry` are free-form strings
+  that the future executor (🎯T15) parses. Bullseye itself does
+  not execute strategies — it only persists them. Targets without a
+  `strategy` field are unaffected; serde uses
+  `#[serde(skip_serializing_if = "Option::is_none")]` so legacy
+  files round-trip unchanged. Schema bump deferred — purely
+  additive optional field, schema_version stays at 3. Forward-
+  compat for the executor work in 🎯T15 (lives in a separate repo,
+  TBD).
+
+- **MCP triad integrations achieved end-to-end** (🎯T1.4, 🎯T1.5,
+  🎯T1). No bullseye-side surface change in v0.23.0 — both upstream
+  pieces (mnemo summarizer + mnemo_rework_history) shipped on the
+  mnemo side (mnemo v0.28.0 / mnemo PR #63) and the bullseye-side
+  surface for both was already in place in v0.21.0. v0.23.0 records
+  the achievement: the rework-payload composition and target-aware
+  compaction now work end-to-end in real sessions. Tracked here
+  because the rework-payload `Option<String>` shape (string-encoded
+  JSON) was a deliberate workaround for the Anthropic API's
+  rejection of `serde_json::Value` and that decision is now load-
+  bearing across the live integration.
+
+Earlier changes still in effect from v0.22.0:
 
 - **Tool-call envelope leak guard on every mutating handler**
   (🎯T20). All mutating tools (`bullseye_put`, `bullseye_retire`,
@@ -29,7 +61,10 @@ interaction surface:
   malformed YAML was observed in another repo where an agent
   serialised a bullseye_put call as XML and the harness's wrapper-
   stripping was incomplete, leaving `</invoke>` tags inside the
-  persisted `context:` field.
+  persisted `context:` field. v0.23.0 closes the test acceptance
+  gaps (added `import_rejects_envelope_markers_in_parsed_markdown`,
+  `store_load_still_loads_corrupted_files`; promoted `handle_import`
+  to `pub` for symmetry with the other tested handlers).
 
 Earlier changes still in effect from v0.21.0:
 
@@ -312,6 +347,7 @@ Planned additions (not yet implemented):
 | `cross_depends`, `cross_enables` | Fluid | New in v0.13.0. Advisory edges (don't block frontier computation) pointing at targets or capabilities in other repos. `CrossEdge { repo, target?, capability?, note? }` — each edge must have a non-empty `repo` and at least one of `target`/`capability`; dangling refs to unscanned repos are silently allowed. Surfaced in `bullseye_portfolio` output today; value propagation is 🎯T2.3. |
 | `showcase` | Fluid | Renamed from `observable` in v0.19.0; legacy YAML still loads via a serde alias on the new field. Boolean flag (default false, omitted from YAML when false). Marks a work target whose retirement requires a user-visible demonstration recorded via `bullseye_retire`'s `demonstration` parameter. Verify-kind targets are checkpoints by definition; this flag promotes a work target to checkpoint status (driving distance-to-checkpoint frontier ordering and `bullseye_tunnels` membership) AND obliges the demo on retire. Expected to see churn as the convention for marking showcase work targets settles in practice. |
 | `demonstration` | Fluid | New in v0.19.0. Optional string, populated by `bullseye_retire` when the retired target carries `showcase: true`; never serialised when absent. The recorded note is the permanent evidence that the showcase obligation was discharged with a real user-visible step rather than a "tests pass" stand-in. |
+| `strategy` | Fluid | New in v0.23.0. Optional `Strategy { command: String, trigger: String, timeout: Option<String>, retry: Option<RetryPolicy> }`; `RetryPolicy { max_attempts: Option<u32>, backoff: Option<String> }`. Targets that declare a strategy will be converged mechanically by the future bullseye-native executor (🎯T15, lives in a separate repo). Bullseye persists and validates (rejects empty `command` / `trigger` after trim) but does not execute. `trigger` is free-form for now (`cron:0 * * * *`, `fswatch:/path`, `on_wake`, `manual`) — the executor parses it. Expected churn as the executor lands and real-world use clarifies which sub-fields need to become structured. |
 | `verifies` | Stable | |
 | `rework` | Stable | |
 | `retry_budget`, `retries` | Stable | |
@@ -395,7 +431,13 @@ Planned additions:
   agent-side serialisation bugs at the write boundary so they don't
   silently corrupt YAML. Behavioural addition only; no schema
   change, no surface change visible to well-behaved callers, no
-  settling-clock reset.
+  settling-clock reset. v0.23.0 adds an optional `strategy` block
+  to the target schema (🎯T15.2) for the bullseye-native executor
+  to consume; closes 🎯T20's test-acceptance gaps; and retires the
+  full MCP triad integration (🎯T1, 🎯T1.4, 🎯T1.5) with live
+  end-to-end demonstrations across the rework and compaction
+  flows. All purely additive — no schema bump, no settling-clock
+  reset.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
