@@ -182,10 +182,11 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
     let targets: Vec<(&str, &Target)> = match t.filter.as_str() {
         "active" => file.active().into_iter().collect(),
         "achieved" => file.achieved().into_iter().collect(),
+        "set_aside" => file.set_aside().into_iter().collect(),
         "all" => file.targets.iter().map(|(k, v)| (k.as_str(), v)).collect(),
         other => {
             return err(format!(
-                "unknown filter: {other} (use active, achieved, all)"
+                "unknown filter: {other} (use active, achieved, set_aside, all)"
             ));
         }
     };
@@ -202,6 +203,9 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
             v = target.value,
             c = target.cost,
         ));
+        if let Some(reason) = &target.set_aside_reason {
+            out.push_str(&format!("  reason: {reason}\n"));
+        }
         if !target.tags.is_empty() {
             out.push_str(&format!("  tags: {}\n", target.tags.join(", ")));
         }

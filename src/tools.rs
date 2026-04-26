@@ -14,7 +14,7 @@ pub struct ListTool {
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
-    /// Filter: "active" (default), "achieved", or "all".
+    /// Filter: "active" (default), "achieved", "set_aside", or "all".
     #[serde(default = "default_filter")]
     pub filter: String,
 }
