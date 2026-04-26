@@ -159,6 +159,24 @@ parameters, the bullseye.yaml schema, usage workflows, and a
 [copy-pasteable CLAUDE.md snippet](docs/agents-guide.md#agent-integration)
 for wiring Bullseye into your project's agent instructions.
 
+## CLI subcommands
+
+Beyond the MCP server, bullseye exposes a small CLI for cron-driven
+maintenance:
+
+| Subcommand | Purpose |
+|------------|---------|
+| `bullseye sync-priorities` | Scan the workspace, compute the portfolio frontier, and upsert each frontier target into a SQLite `targets_priorities` table. Designed for periodic invocation from cron or a daemon hook. See [mcp-triad.md §7](docs/mcp-triad.md) for the Protocol-app sync chain. |
+
+Example crontab entry (every 30 minutes):
+
+```
+*/30 * * * * /usr/local/bin/bullseye sync-priorities
+```
+
+Run `bullseye sync-priorities --help` for flags (`--db`, `--root`,
+`--horizon`, `--max-depth`).
+
 ## Key concepts
 
 - **Frontier**: The set of unblocked leaf targets that can be worked

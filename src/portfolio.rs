@@ -52,6 +52,11 @@ pub struct PortfolioFrontierTarget {
     pub enabler_boost: f64,
     /// Per-target WSJF contribution: `(value / cost) * momentum * enabler_boost`.
     pub wsjf: f64,
+    /// Target's `context` field, if non-empty. Threaded through so the
+    /// priorities sync can write it into `targets_priorities.context`
+    /// without re-loading the targets file. None when the target has no
+    /// context set or the context string is empty.
+    pub context: Option<String>,
 }
 
 /// A discovered repo with its targets summary and aggregate WSJF score.
@@ -385,11 +390,18 @@ fn summarize_repo_raw(
     let frontier_named: Vec<PortfolioFrontierTarget> = frontier_targets
         .iter()
         .map(|ft| {
-            let (value, cost, cross_enables_count) = file
+            let (value, cost, cross_enables_count, context) = file
                 .targets
                 .get(&ft.id)
-                .map(|t| (t.value, t.cost, t.cross_enables.len()))
-                .unwrap_or((0.0, 1.0, 0));
+                .map(|t| {
+                    let ctx = if t.context.trim().is_empty() {
+                        None
+                    } else {
+                        Some(t.context.clone())
+                    };
+                    (t.value, t.cost, t.cross_enables.len(), ctx)
+                })
+                .unwrap_or((0.0, 1.0, 0, None));
             let mom = momentum_map.get(ft.id.as_str()).copied().unwrap_or(1.0);
             PortfolioFrontierTarget {
                 id: ft.id.clone(),
@@ -400,6 +412,7 @@ fn summarize_repo_raw(
                 momentum: mom,
                 enabler_boost: 1.0, // pass 2
                 wsjf: 0.0,          // pass 2
+                context,
             }
         })
         .collect();
@@ -616,6 +629,7 @@ mod tests {
             momentum: 1.0,
             enabler_boost: 1.0,
             wsjf: value, // value / cost(1.0) * momentum(1.0) * boost(1.0)
+            context: None,
         }
     }
 
@@ -643,6 +657,7 @@ mod tests {
             momentum,
             enabler_boost,
             wsjf,
+            context: None,
         }
     }
 

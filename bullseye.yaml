@@ -666,13 +666,14 @@ targets:
     discovered: 2026-04-07
   T3.1:
     name: targets_priorities SQLite table and writer
-    status: identified
+    status: converging
     value: 5.0
     cost: 3.0
     acceptance:
-    - targets_portfolio output upserted into targets_priorities table
-    - Table schema includes repo, name, weight, context, horizon, updated_at
-    - Periodic refresh via cron or daemon hook
+    - bullseye_portfolio output upserted into a targets_priorities SQLite table
+    - 'Schema columns: id (PRIMARY KEY, ''{repo}/{target_id}''), repo, name, priority (REAL — per-target WSJF), context, horizon, updated_at'
+    - 'Periodic refresh via cron or daemon hook (CLI: `bullseye sync-priorities`)'
+    - Stale rows (targets no longer on any repo's frontier) are deleted in the same transaction
     context: |
       Laptop-owned table. Protocol is read-only. Horizon field (today/tomorrow/ this_week) maps to Protocol's daily view paging.
     depends_on:
