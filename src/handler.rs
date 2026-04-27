@@ -531,6 +531,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         ));
     }
     out.push_str(&format!("\nFile: {}", path.display()));
+    append_tunnel_warnings(&mut out, &path);
     text_result(out)
 }
 
@@ -616,6 +617,7 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             if let Some(demo) = demonstration {
                 out.push_str(&format!("\nDemonstration: {demo}"));
             }
+            append_tunnel_warnings(&mut out, &path);
             text_result(out)
         }
     }
@@ -686,10 +688,29 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
              (not applied): {reason}",
             id = t.id,
         )),
-        Outcome::SetAside { name, prior } => text_result(format!(
-            "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
-            id = t.id,
-        )),
+        Outcome::SetAside { name, prior } => {
+            let mut out = format!(
+                "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
+                id = t.id,
+            );
+            append_tunnel_warnings(&mut out, &path);
+            text_result(out)
+        }
+    }
+}
+
+/// Reload the post-mutation file and append a tunnel-warning section
+/// to `out` if the graph has any tunnels at the default max_depth (2,
+/// matching `bullseye_tunnels`'s default and the value
+/// `bullseye_convergence` uses for its block decision). Silently
+/// no-ops when the file fails to reload — the mutation already
+/// persisted, and a transient read error shouldn't masquerade as a
+/// missing warning.
+fn append_tunnel_warnings(out: &mut String, path: &Path) {
+    if let Ok(file) = store::load(path)
+        && let Some(section) = graph::format_tunnel_warnings(&file, 2)
+    {
+        out.push_str(&section);
     }
 }
 
@@ -875,7 +896,8 @@ fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
 
     let errors = graph::validate_blocking(&file);
     let warnings = graph::validate_warnings(&file);
-    if errors.is_empty() && warnings.is_empty() {
+    let tunnel_section = graph::format_tunnel_warnings(&file, 2);
+    if errors.is_empty() && warnings.is_empty() && tunnel_section.is_none() {
         return text_result(format!(
             "Valid: {} ({} targets)",
             path.display(),
@@ -894,6 +916,9 @@ fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
             "\n## Warnings (advisory; non-blocking)\n\n{}\n",
             warnings.join("\n")
         ));
+    }
+    if let Some(section) = tunnel_section {
+        out.push_str(&section);
     }
     text_result(out)
 }

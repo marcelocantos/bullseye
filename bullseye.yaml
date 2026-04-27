@@ -644,6 +644,38 @@ targets:
     origin: forked-from cross-repo corruption observed 2026-04-26
     discovered: 2026-04-26
     achieved: 2026-04-26
+  T21:
+    name: Mutating tools warn about tunneled graphs without rejecting the write
+    status: identified
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - After any successful `bullseye_put` / `bullseye_retire` / `bullseye_set_aside`, the post-mutation graph is run through tunnel detection (existing `graph::tunnels` predicate)
+    - 'If tunnels exist, the tool response includes a warning section listing each orphaned target with its distance-to-checkpoint result (`no checkpoint reachable in N hops`) and suggested checkpoint candidates: the dependents-graph root, any convergence node with in-degree ≥ 2 on the path upward, plus a hint that any node on the path can take `showcase: true`'
+    - Mutations succeed regardless of warning state — the warning is informational, never a rejection. Existing tunnel-detection-as-block in `bullseye_convergence` and the read-side `bullseye_tunnels` tool stay unchanged as backstop signals
+    - '`bullseye_validate` includes the same tunnel warnings in its output so the agent can audit graph health on demand'
+    - 'Tests cover: (a) put/retire/set_aside that creates a tunnel emits the warning, (b) put/retire/set_aside that does not create a tunnel emits no warning, (c) the warning names the right targets and suggests at least one valid checkpoint candidate, (d) the mutation persisted regardless'
+    context: |-
+      Empirically every few sessions hits a state where the frontier is full of targets but `bullseye_convergence` refuses to recommend any of them because no checkpoint is reachable upward — every chain is a tunnel. The fix is almost always one-line: flip `showcase: true` on a parent / convergence node / root, which the agent can identify from context once it sees the graph shape.
+
+      The painful version of this design would hard-reject mutations that leave tunnels, forcing a two-step ceremony (put, see error, re-put with the flag) for what is structurally a single edit. The soft version warns instead: the mutation persists, the response carries an actionable warning naming the orphaned targets and suggesting candidate showcase locations, and the agent flips the flag in a follow-up put. The graph can transiently sit in a tunneled state — that's no worse than today, where graphs sit in tunneled states *until convergence runs and discovers it three operations later, with lost context*. Surfacing the warning at the moment of mutation is the whole win.
+
+      Heuristics for suggested checkpoints (informational, never auto-applied):
+      - The dependents-graph root (no active target depends on it) — by construction the integrated user-visible state.
+      - Convergence nodes (in-degree ≥ 2 on the path upward) — where multiple chains roll up.
+      - Any node on the orphaned target's dependents path — the agent might want a mid-chain showcase for early visibility.
+
+      Bullseye does not auto-flag anything. The agent decides; bullseye nudges.
+
+      If empirically the warning gets ignored and graphs accumulate tunnels anyway, escalating to soft rejection (warning becomes an error unless `allow_tunnel: true` is passed) is a one-flip follow-up. Until that data exists, the lighter touch wins.
+
+      Discovered 2026-04-27 in conversation while retiring 🎯T3.1, when the recurring "everything's a tunnel" pain prompted a redesign discussion that explored auto-promotion (rejected: dilutes signal) and hard rejection (rejected: ceremony for one-line fix) before landing on warn-and-persist.
+    tags:
+    - hygiene
+    - schema
+    - ux
+    origin: manual
+    discovered: 2026-04-27
   T3:
     name: Protocol app priority sync
     status: identified
