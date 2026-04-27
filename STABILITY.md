@@ -9,8 +9,51 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.23.0. Changes since v0.22.0 affecting the
+Snapshot as of v0.24.0. Changes since v0.23.0 affecting the
 interaction surface:
+
+- **`bullseye sync-priorities` CLI subcommand** (🎯T3.1). New
+  cron-targetable subcommand that scans the workspace via the
+  portfolio engine and upserts each frontier target into a SQLite
+  `targets_priorities` table (`id` PRIMARY KEY = `"{repo}/{target_id}"`,
+  `repo`, `name`, `priority` REAL = per-target WSJF, `context`,
+  `horizon`, `updated_at`). Stale rows whose targets are no longer on
+  any repo's frontier are deleted in the same transaction. Flags:
+  `--db PATH` (default `$BULLSEYE_DATA_DIR/priorities.db`),
+  `--root PATH` (default `~/work`), `--horizon STR` (default `today`),
+  `--max-depth N` (default 5). Designed for periodic invocation from
+  cron or a daemon hook; downstream sync chain (sqlpipe-over-pigeon →
+  Protocol app's `protocol.db`) is tracked separately. Adds a new
+  bundled SQLite dependency (`rusqlite = "0.39.0"` with `bundled`
+  feature) — no host SQLite required. New public Rust API:
+  `priorities::{open, sync, SyncCounts, SyncArgs, run_sync,
+  parse_sync_args, default_db_path}`. The `portfolio::PortfolioFrontierTarget`
+  struct gains a public `context: Option<String>` field threaded
+  through `summarize_repo_raw` so the writer doesn't reload each
+  repo's targets file. See `docs/mcp-triad.md` §7 for the full
+  Protocol-app sync chain.
+
+- **Tunnel warnings on every mutation** (🎯T21). After every
+  successful `bullseye_put` / `bullseye_retire` / `bullseye_set_aside`,
+  the post-mutation graph is re-evaluated for tunnels (work targets
+  with no checkpoint reachable within 2 hops) and a `## ⚠ Tunnel
+  warnings` section is appended to the response listing each
+  orphaned target with its distance-to-checkpoint result and ranked
+  candidate checkpoint locations (Convergence > Root > Self >
+  OnPath). `bullseye_validate` surfaces the same warnings.
+  **Mutations are never rejected** — the warning is informational, so
+  the agent can flip `showcase: true` on a candidate in a follow-up
+  `bullseye_put`. Eliminates the prior failure mode where
+  `bullseye_convergence` discovered a tunnel three operations after
+  the mutation that introduced it, with the original context lost.
+  Hard rejection was considered and dismissed: empirically the fix
+  is almost always one boolean toggle and forcing a two-step ceremony
+  for every such edit produces no benefit. New public Rust API:
+  `graph::{format_tunnel_warnings, suggest_checkpoint_candidates,
+  CheckpointCandidate, CandidateReason}`. The
+  `bullseye_convergence`-side "Blocked: tunnel" recommendation
+  remains as a last-resort backstop for the rare case where the
+  warning gets ignored.
 
 - **Target-level `strategy` block in schema** (🎯T15.2). A new
   optional `strategy: Strategy` field on `Target` lets a target
@@ -291,7 +334,7 @@ from `targets.yaml` to `bullseye.yaml` is a file-format break).
 | `bullseye_rework(cwd, id, diagnosis, sawmill_failure?, mnemo_history?)` | Needs review | v0.21.0 adds two optional JSON-encoded payload parameters that are validated and persisted into the rework target's context as labelled fenced JSON blocks. The string-encoded shape is a workaround for the rust-mcp-sdk JsonSchema derive emitting `type: "unknown"` for `serde_json::Value` (which the Anthropic API rejects); a typed wrapper may emerge once sawmill's and mnemo's payload schemas settle. The mnemo half waits on an upstream rework-aware query — see 🎯T1.5. |
 | `bullseye_tunnels(cwd, max_depth)` | Needs review | v0.13.0 generalised from "no verify within N hops" to "no checkpoint within N hops" (verify-kind targets, plus work-kind targets with `showcase: true` as of v0.19.0). Membership predicate widened; output format unchanged. Will need another review pass once the `showcase: true` flag sees real-world use. |
 | `bullseye_verify(cwd, id)` | Fluid | New in v0.13.0. Emits a structured plan (markdown + JSON) mapping each check on the target to a sawmill tool invocation. Bullseye does not execute the plan — the calling agent runs it against sawmill and folds results back into a report. The plan-only (no result-feedback) shape may evolve once we see how `/cv` or similar wrappers consume it. |
-| `bullseye_validate(cwd)` | Stable | Validation rules will grow but existing ones won't change |
+| `bullseye_validate(cwd)` | Needs review | v0.24.0 surfaces tunnel warnings (with ranked candidate checkpoint locations) alongside the existing structural-error and stylistic-warning sections — see 🎯T21. Output gains a `## ⚠ Tunnel warnings` block when the active graph has any tunnels. Validation rules will continue to grow; existing rules unchanged. |
 | `bullseye_graph(cwd)` | Stable | |
 | `bullseye_import(cwd, path, force)` | Stable | Markdown-to-YAML migration. `path` is now required (auto-discovery removed in v0.14.0). |
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
@@ -368,6 +411,7 @@ Planned additions:
 | `--help` | Stable | |
 | `--help-agent` | Stable | |
 | (no args) | Stable | Starts MCP stdio server |
+| `sync-priorities [--db PATH] [--root PATH] [--horizon STR] [--max-depth N]` | Fluid | New in v0.24.0. Cron-targetable subcommand that scans the workspace and upserts the portfolio frontier into a SQLite `targets_priorities` table. The flag set may evolve once the Protocol-app sync chain is live and real usage clarifies what's needed (e.g. multi-horizon banding, per-repo include/exclude). See 🎯T3.1. |
 
 ### Output formats
 
@@ -375,6 +419,8 @@ Planned additions:
 |--------|--------|-------|
 | Mermaid graph output | Needs review | Node/edge styling may change |
 | Tool response text format | Fluid | Not yet formalised; consumers should parse loosely |
+| `## ⚠ Tunnel warnings` section in mutating-tool / validate responses | Fluid | New in v0.24.0. Appended to `bullseye_put` / `bullseye_retire` / `bullseye_set_aside` / `bullseye_validate` output when the post-mutation active graph contains tunnels. Format and candidate-ranking heuristic (Convergence > Root > Self > OnPath) may evolve as real usage clarifies what nudges actually drive the right reshape. See 🎯T21. |
+| `targets_priorities` SQLite schema | Fluid | New in v0.24.0. Written by `bullseye sync-priorities`, replicated to the Protocol app via sqlpipe-over-pigeon. Columns: `id` PRIMARY KEY (`"{repo}/{target_id}"`), `repo` TEXT NOT NULL, `name` TEXT NOT NULL, `priority` REAL NOT NULL, `context` TEXT, `horizon` TEXT NOT NULL DEFAULT `'today'`, `updated_at` TEXT NOT NULL. Schema is laptop-owned (Protocol is read-only). Column set may evolve as the phone-side rendering settles — particularly whether `priority` should carry richer banding info or whether `horizon` should be auto-assigned by rank. See 🎯T3.1, `docs/mcp-triad.md` §7. |
 
 ## Gaps and prerequisites for 1.0
 
@@ -437,11 +483,14 @@ Planned additions:
   full MCP triad integration (🎯T1, 🎯T1.4, 🎯T1.5) with live
   end-to-end demonstrations across the rework and compaction
   flows. All purely additive — no schema bump, no settling-clock
-  reset.
+  reset. v0.24.0 ships the `bullseye sync-priorities` CLI subcommand
+  for the Protocol-app integration (🎯T3.1) and tunnel warnings on
+  every mutation (🎯T21). New CLI subcommand surface and a new
+  output section on four MCP tools, but no schema bump and no
+  breaking change to any existing tool — behavioural addition only,
+  no settling-clock reset.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
 
-- Protocol app sync — depends on external infrastructure (sqlpipe,
-  pigeon).
 - MCP resource support — waiting on protocol maturity.
