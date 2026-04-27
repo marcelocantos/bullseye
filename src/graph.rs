@@ -288,6 +288,227 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
     warnings
 }
 
+/// Why a target was suggested as a candidate location for a
+/// `showcase: true` flag (or a verify target above it) when
+/// resolving a tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateReason {
+    /// Multiple chains in the active graph converge into this node
+    /// (forward in-degree ≥ 2). The user's mental model places
+    /// showcases here naturally — it's where work fans in.
+    Convergence,
+    /// No active target depends on this node (forward out-degree 0).
+    /// The dependency-graph root of the path; the integrated state
+    /// the orphan ultimately rolls up into.
+    Root,
+    /// The orphan target itself. Always offered as a fallback — flip
+    /// `showcase: true` on the leaf when nothing better fits.
+    Self_,
+    /// On the orphan's forward path but not a convergence or root.
+    /// Last-resort suggestion for mid-chain showcases.
+    OnPath,
+}
+
+impl CandidateReason {
+    fn label(self) -> &'static str {
+        match self {
+            CandidateReason::Convergence => "convergence",
+            CandidateReason::Root => "root",
+            CandidateReason::Self_ => "self",
+            CandidateReason::OnPath => "on-path",
+        }
+    }
+
+    fn priority(self) -> u8 {
+        match self {
+            CandidateReason::Convergence => 0,
+            CandidateReason::Root => 1,
+            CandidateReason::Self_ => 2,
+            CandidateReason::OnPath => 3,
+        }
+    }
+}
+
+/// A candidate node for resolving a tunnel by adding a checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckpointCandidate {
+    pub target_id: String,
+    pub target_name: String,
+    pub reason: CandidateReason,
+    /// Forward distance from the orphan target (0 for self).
+    pub distance: usize,
+}
+
+/// For an orphaned (tunneled) target, suggest candidate locations
+/// where a `showcase: true` flag (or a verify target above) would
+/// resolve the tunnel. Walks the same forward graph that tunnel
+/// detection uses, so a candidate marked here is guaranteed to be
+/// reachable from the orphan.
+///
+/// Suggestions are ordered by usefulness: convergence nodes first
+/// (where the user's mental model places showcases), then roots
+/// (the integrated top-level state), then self (always works as a
+/// fallback), then mid-chain on-path nodes (last resort). Within
+/// each category, ordered by distance ascending then ID for
+/// determinism.
+///
+/// Returns an empty vector when `orphan_id` is not active.
+pub fn suggest_checkpoint_candidates(
+    file: &TargetsFile,
+    orphan_id: &str,
+) -> Vec<CheckpointCandidate> {
+    let active = file.active();
+    if !active.contains_key(orphan_id) {
+        return Vec::new();
+    }
+    let forward = forward_adjacency(&active);
+
+    // BFS forward from the orphan; collect all reachable active
+    // nodes with their distance.
+    let mut distances: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut queue: VecDeque<(&str, usize)> = VecDeque::new();
+    queue.push_back((orphan_id, 0));
+    distances.insert(orphan_id, 0);
+    while let Some((cur, depth)) = queue.pop_front() {
+        if let Some(neighbors) = forward.get(cur) {
+            for &next in neighbors {
+                if !distances.contains_key(next) {
+                    distances.insert(next, depth + 1);
+                    queue.push_back((next, depth + 1));
+                }
+            }
+        }
+    }
+
+    // Forward in-degree per node — how many edges point AT it.
+    // Convergence nodes have in-degree ≥ 2.
+    let mut indegree: BTreeMap<&str, usize> = BTreeMap::new();
+    for ys in forward.values() {
+        for &y in ys {
+            *indegree.entry(y).or_default() += 1;
+        }
+    }
+
+    let mut candidates: Vec<CheckpointCandidate> = Vec::new();
+    for (&id, &distance) in &distances {
+        let Some((&id_key, target)) = active.get_key_value(id) else {
+            continue;
+        };
+        // Already a checkpoint? Skip — it can't be a candidate, the
+        // tunnel detection would not have fired if it was reachable.
+        // But the orphan path may include nodes whose own checkpoint
+        // status is irrelevant to *this* tunnel; for safety we skip
+        // any pre-existing checkpoint to avoid suggesting a no-op.
+        if is_checkpoint(target) {
+            continue;
+        }
+
+        let in_deg = indegree.get(id_key).copied().unwrap_or(0);
+        let out_deg = forward.get(id_key).map(|v| v.len()).unwrap_or(0);
+
+        let reason = if id_key == orphan_id {
+            CandidateReason::Self_
+        } else if in_deg >= 2 {
+            CandidateReason::Convergence
+        } else if out_deg == 0 {
+            CandidateReason::Root
+        } else {
+            CandidateReason::OnPath
+        };
+
+        candidates.push(CheckpointCandidate {
+            target_id: id_key.to_string(),
+            target_name: target.name.clone(),
+            reason,
+            distance,
+        });
+    }
+
+    // Sort: reason priority, then distance, then ID.
+    candidates.sort_by(|a, b| {
+        a.reason
+            .priority()
+            .cmp(&b.reason.priority())
+            .then_with(|| a.distance.cmp(&b.distance))
+            .then_with(|| a.target_id.cmp(&b.target_id))
+    });
+
+    candidates
+}
+
+/// Render a markdown warning section for any tunnels in `file`, or
+/// `None` when the graph has no tunnels at `max_depth`.
+///
+/// The section names each orphaned target with its
+/// distance-to-checkpoint result (or "no checkpoint reachable") and
+/// lists candidate checkpoint locations from
+/// [`suggest_checkpoint_candidates`]. Designed to be appended to
+/// mutation responses (`bullseye_put`, `bullseye_retire`,
+/// `bullseye_set_aside`) and to `bullseye_validate` so the agent
+/// learns about the tunnel at the moment of the relevant edit, not
+/// three operations later when convergence finally trips on it.
+///
+/// The warning is informational — bullseye does *not* reject the
+/// mutation that produced the tunnel. The agent reads the warning
+/// and flips `showcase: true` on a candidate in a follow-up call.
+/// 🎯T21 in `bullseye.yaml` records the design rationale.
+pub fn format_tunnel_warnings(file: &TargetsFile, max_depth: usize) -> Option<String> {
+    let warnings = tunnels(file, max_depth);
+    if warnings.is_empty() {
+        return None;
+    }
+
+    // Render. Cap candidate display per orphan to keep the warning
+    // tractable on busy graphs — agents that want the full list can
+    // call `bullseye_tunnels` or read the YAML.
+    const MAX_CANDIDATES_PER_ORPHAN: usize = 4;
+
+    let mut out = format!(
+        "\n\n## ⚠ Tunnel warnings ({n} target{s})\n\n\
+         Mutation persisted; this is informational. The graph has \
+         work targets with no checkpoint reachable within {max_depth} hop(s), \
+         so distance-to-checkpoint ordering can't steer toward them. \
+         Mark a candidate `showcase: true` (or add a verify target above it) \
+         to resolve.\n\n",
+        n = warnings.len(),
+        s = if warnings.len() == 1 { "" } else { "s" },
+    );
+
+    for w in &warnings {
+        let dist_label = match w.depth {
+            Some(d) => format!("nearest checkpoint at {d} hops"),
+            None => "no checkpoint reachable".to_string(),
+        };
+        out.push_str(&format!(
+            "- 🎯{id} \"{name}\" — {dist}\n",
+            id = w.target_id,
+            name = w.target_name,
+            dist = dist_label,
+        ));
+        let cands = suggest_checkpoint_candidates(file, &w.target_id);
+        if cands.is_empty() {
+            out.push_str("    (no candidates found — graph may be disconnected)\n");
+            continue;
+        }
+        out.push_str("    Candidates: ");
+        let shown: Vec<String> = cands
+            .iter()
+            .take(MAX_CANDIDATES_PER_ORPHAN)
+            .map(|c| format!("🎯{} ({})", c.target_id, c.reason.label()))
+            .collect();
+        out.push_str(&shown.join(", "));
+        if cands.len() > MAX_CANDIDATES_PER_ORPHAN {
+            out.push_str(&format!(
+                ", … +{} more",
+                cands.len() - MAX_CANDIDATES_PER_ORPHAN
+            ));
+        }
+        out.push('\n');
+    }
+
+    Some(out)
+}
+
 /// Generate a Mermaid dependency graph of active targets.
 pub fn mermaid(file: &TargetsFile) -> String {
     let active = file.active();

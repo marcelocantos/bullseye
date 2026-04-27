@@ -337,6 +337,169 @@ fn tunnel_detects_deep_chain() {
     assert_eq!(t10.unwrap().depth, Some(1));
 }
 
+#[test]
+fn suggest_candidates_self_for_isolated_orphan() {
+    let file = load_fixture();
+    // T2 in the fixture has no dependents and isn't a checkpoint —
+    // it's an isolated leaf orphan. The only viable candidate is the
+    // target itself (flip showcase=true on T2).
+    let cands = graph::suggest_checkpoint_candidates(&file, "T2");
+    assert_eq!(cands.len(), 1, "got: {cands:#?}");
+    assert_eq!(cands[0].target_id, "T2");
+    assert_eq!(cands[0].reason, graph::CandidateReason::Self_);
+    assert_eq!(cands[0].distance, 0);
+}
+
+#[test]
+fn suggest_candidates_unknown_target_returns_empty() {
+    let file = load_fixture();
+    let cands = graph::suggest_checkpoint_candidates(&file, "T999");
+    assert!(cands.is_empty());
+}
+
+#[test]
+fn suggest_candidates_orders_convergence_then_root_then_self() {
+    use bullseye::schema::{Kind as K, Status, Target};
+    use chrono::NaiveDate;
+
+    // Build a graph from scratch with explicit shape:
+    //   T100 (orphan leaf) ──┐
+    //                        ├──> T102 (convergence: 2 deps)
+    //   T101 (other leaf) ───┘            └──> T103 (root)
+    // Suggestions for T100 should be: T102 (convergence) → T103
+    // (root) → T100 (self).
+    let date = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+    let mk = |name: &str, deps: Vec<&str>| Target {
+        name: name.to_string(),
+        kind: K::Work,
+        status: Status::Identified,
+        value: 1.0,
+        cost: 1.0,
+        showcase: false,
+        actual_cost: None,
+        demonstration: None,
+        set_aside_reason: None,
+        acceptance: vec!["done".to_string()],
+        checks: vec![],
+        context: String::new(),
+        gates: vec![],
+        depends_on: deps.into_iter().map(String::from).collect(),
+        cross_depends: vec![],
+        cross_enables: vec![],
+        verifies: vec![],
+        rework: None,
+        retry_budget: None,
+        retries: 0,
+        tags: vec![],
+        strategy: None,
+        origin: "test".to_string(),
+        discovered: date,
+        achieved: None,
+    };
+
+    let mut file = TargetsFile {
+        schema_version: None,
+        last_evaluated: None,
+        targets: std::collections::BTreeMap::new(),
+    };
+    file.targets.insert("T100".into(), mk("Leaf A", vec![]));
+    file.targets.insert("T101".into(), mk("Leaf B", vec![]));
+    file.targets
+        .insert("T102".into(), mk("Convergence", vec!["T100", "T101"]));
+    file.targets.insert("T103".into(), mk("Root", vec!["T102"]));
+
+    let cands = graph::suggest_checkpoint_candidates(&file, "T100");
+    let ordered_ids: Vec<&str> = cands.iter().map(|c| c.target_id.as_str()).collect();
+    let ordered_reasons: Vec<graph::CandidateReason> = cands.iter().map(|c| c.reason).collect();
+    assert_eq!(ordered_ids, vec!["T102", "T103", "T100"]);
+    assert_eq!(
+        ordered_reasons,
+        vec![
+            graph::CandidateReason::Convergence,
+            graph::CandidateReason::Root,
+            graph::CandidateReason::Self_,
+        ]
+    );
+}
+
+#[test]
+fn format_tunnel_warnings_returns_none_when_clean() {
+    use bullseye::schema::{Kind as K, Status, Target};
+    use chrono::NaiveDate;
+
+    // Single isolated showcase target — its own checkpoint, no
+    // tunnels possible.
+    let date = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+    let mut file = TargetsFile {
+        schema_version: None,
+        last_evaluated: None,
+        targets: std::collections::BTreeMap::new(),
+    };
+    file.targets.insert(
+        "T1".into(),
+        Target {
+            name: "Solo".to_string(),
+            kind: K::Work,
+            status: Status::Identified,
+            value: 1.0,
+            cost: 1.0,
+            showcase: true,
+            actual_cost: None,
+            demonstration: None,
+            set_aside_reason: None,
+            acceptance: vec!["done".to_string()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: vec![],
+            cross_depends: vec![],
+            cross_enables: vec![],
+            verifies: vec![],
+            rework: None,
+            retry_budget: None,
+            retries: 0,
+            tags: vec![],
+            strategy: None,
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+        },
+    );
+
+    assert!(graph::format_tunnel_warnings(&file, 2).is_none());
+}
+
+#[test]
+fn format_tunnel_warnings_lists_orphans_and_candidates() {
+    let file = load_fixture();
+    // Fixture: T2 is a tunneled orphan (no checkpoint reachable).
+    let section = graph::format_tunnel_warnings(&file, 2)
+        .expect("fixture should produce a tunnel warning for T2");
+    assert!(section.contains("Tunnel warnings"));
+    assert!(
+        section.contains("🎯T2"),
+        "section should name the orphaned target; got:\n{section}"
+    );
+    assert!(
+        section.contains("no checkpoint reachable"),
+        "T2 has no checkpoint reachable; got:\n{section}"
+    );
+    assert!(
+        section.contains("Candidates:"),
+        "section should list candidates; got:\n{section}"
+    );
+    // T2 is its own only candidate (isolated leaf).
+    assert!(
+        section.contains("🎯T2 (self)"),
+        "T2 should appear as a self candidate; got:\n{section}"
+    );
+    // Mutation-persisted nudge appears.
+    assert!(
+        section.contains("Mutation persisted"),
+        "warning text should clarify the mutation persisted; got:\n{section}"
+    );
+}
+
 // --- ops::rework tests ---
 
 #[test]
