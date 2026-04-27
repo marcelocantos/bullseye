@@ -333,6 +333,7 @@ targets:
     status: identified
     value: 5.0
     cost: 3.0
+    showcase: true
     acceptance:
     - The launchd job com.marcelocantos.yadm-auto-sync is unloaded and the plist removed
     - The script ~/.local/bin/yadm-auto-sync is removed (or reduced to a thin invocation of the executor CLI)
@@ -680,9 +681,10 @@ targets:
     achieved: 2026-04-27
   T3:
     name: Protocol app priority sync
-    status: identified
+    status: set_aside
     value: 8.0
     cost: 8.0
+    set_aside_reason: Parked — its third acceptance criterion (Focus section on Today page) is parked via 🎯T3.2; without that visible-demo leg, the remaining criteria (sqlpipe replication, periodic sync) have no end-user payoff to drive towards. Revive together with 🎯T3.2 once the UI design is settled.
     acceptance:
     - targets_portfolio output written to a targets_priorities SQLite table
     - sqlpipe replicates priorities to Protocol's protocol.db via pigeon
@@ -720,10 +722,11 @@ targets:
     achieved: 2026-04-26
   T3.2:
     name: Protocol Today page Focus section
-    status: identified
+    status: set_aside
     value: 5.0
     cost: 3.0
     showcase: true
+    set_aside_reason: Parked — speculative; design of the Focus section (what to show, how to update, schema replication path) isn't settled yet. Revisit when the priorities sync output is concrete enough to drive a clear UI decision.
     acceptance:
     - Focus section renders above daily checklist
     - Shows top frontier targets with repo, weight, and name
