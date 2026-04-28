@@ -681,7 +681,7 @@ targets:
     achieved: 2026-04-27
   T22:
     name: Bullseye self-commits a dirty bullseye.yaml so the project's invariants check never sees it
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -695,6 +695,7 @@ targets:
     context: 'Today the dirty-tree invariant in `make bullseye` blocks /cv whenever bullseye.yaml is uncommitted. The /cv skill carries a special-case workaround that detects "only bullseye.yaml is dirty" and auto-commits or amends. That workaround belongs inside bullseye itself: every bullseye mutation knows it just dirtied the file, so bullseye is the right layer to fold the change into git. Moving the policy server-side keeps the skill thin and makes the behaviour consistent across any caller (not just /cv). Decision rule (from the user): if the most recent commit is unpushed and contains only bullseye.yaml, amend it; otherwise, create a fresh commit with just bullseye.yaml. Implementation lives in a small `git_commit` module invoked from each mutation handler and from the start of `convergence::convergence` (defence in depth — covers manual yaml edits too). Best-effort: a git failure must never break a target mutation.'
     origin: manual — discovered while shipping 🎯T21 follow-ups
     discovered: 2026-04-28
+    achieved: 2026-04-28
   T3:
     name: Protocol app priority sync
     status: set_aside
