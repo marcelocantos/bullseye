@@ -1398,7 +1398,7 @@ fn convergence_end_to_end_green_invariants_picks_top_frontier() {
     assert!(out.contains("# Convergence"));
     assert!(out.contains("## Invariants"));
     assert!(
-        out.contains("Status: ✓ all green"),
+        out.contains("Status: ✅ all green"),
         "expected green status; got:\n{out}"
     );
     assert!(out.contains("## Unreleased fixes"));
@@ -1445,7 +1445,7 @@ fn convergence_end_to_end_red_invariants_blocks() {
     let file = store::load(&path).unwrap();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
 
-    assert!(out.contains("Status: ✗ failed"));
+    assert!(out.contains("Status: ❌ failed"));
     assert!(out.contains("tests failing"));
     let next = out
         .split("## Next action")
@@ -1474,7 +1474,7 @@ fn convergence_end_to_end_skip_invariants_flag_bypasses_hook() {
 
     assert!(out.contains("(skipped"));
     assert!(!out.contains("would have failed"));
-    assert!(!out.contains("Status: ✗"));
+    assert!(!out.contains("Status: ❌"));
     // With invariants skipped and no unreleased fixes, we should go
     // straight to the frontier-based recommendation.
     let next = out
@@ -1622,7 +1622,7 @@ fn handle_convergence_resolves_repo_root() {
     // instead report "not configured" + a setup warning, and the
     // status would be "unknown".
     assert!(
-        out.contains("Status: ✓ all green"),
+        out.contains("Status: ✅ all green"),
         "expected green invariants status — this is the regression guard for the \
          root-level bullseye.yaml bug; if this fails, handle_convergence is \
          computing repo_root incorrectly. Output:\n{out}"

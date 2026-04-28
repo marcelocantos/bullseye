@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
+use crate::git_commit;
 use crate::graph;
 use crate::schema::TargetsFile;
 
@@ -62,6 +63,17 @@ pub fn convergence(
         active_count,
         achieved_count,
     ));
+
+    // --- 0. Auto-commit a dirty bullseye.yaml (🎯T22) ---
+    //
+    // If the file was edited externally (or any earlier mutation in
+    // this process didn't reach the post-save hook), fold the change
+    // into git before invariants run. Otherwise, the project's
+    // `make bullseye` dirty-tree check would always block convergence
+    // on a freshly-mutated yaml. Best-effort: a no-git or hook-rejected
+    // case leaves the file dirty and the invariants block fires as
+    // before.
+    git_commit::auto_commit_yaml(file_path);
 
     // --- 1. Invariants (project-supplied hook) ---
     //
@@ -297,22 +309,38 @@ fn run_invariants_command(argv: &[String], repo_root: &Path, out: &mut String) -
 
     out.push_str("## Invariants\n\n");
     out.push_str(&format!("```\n$ {}\n", argv.join(" ")));
-    out.push_str(stdout.trim_end());
+    out.push_str(&colorize_status_glyphs(stdout.trim_end()));
     if !stdout.is_empty() && !stderr.is_empty() {
         out.push('\n');
     }
     if !stderr.is_empty() {
-        out.push_str(stderr.trim_end());
+        out.push_str(&colorize_status_glyphs(stderr.trim_end()));
     }
     out.push_str("\n```\n\n");
 
     if exit_code == 0 {
-        out.push_str("Status: ✓ all green\n\n");
+        out.push_str("Status: ✅ all green\n\n");
         InvariantsResult::Green
     } else {
-        out.push_str(&format!("Status: ✗ failed (exit {exit_code})\n\n"));
+        out.push_str(&format!("Status: ❌ failed (exit {exit_code})\n\n"));
         InvariantsResult::Violated { exit_code }
     }
+}
+
+/// Replaces the ✓/✗ glyphs with their already-coloured emoji
+/// counterparts (✅/❌) so pass/fail status pops visually in any
+/// markdown renderer — ANSI escapes don't survive code fences in
+/// most terminal renderers, but emoji do.
+fn colorize_status_glyphs(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '✓' => out.push('✅'),
+            '✗' => out.push('❌'),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// A single unreleased fix commit.

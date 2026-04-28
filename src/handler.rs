@@ -14,6 +14,7 @@ use rust_mcp_sdk::schema::{
 };
 
 use crate::config::{self, LOCATION_PROMPT, Location};
+use crate::git_commit;
 use crate::graph;
 use crate::import;
 use crate::ops;
@@ -510,6 +511,8 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
+    git_commit::auto_commit_yaml(&path);
+
     let verb = if outcome.is_create {
         "Created"
     } else {
@@ -610,6 +613,8 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             cost,
             demonstration,
         } => {
+            git_commit::auto_commit_yaml(&path);
+
             let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
             if let Some(actual) = t.actual_cost {
                 out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
@@ -689,6 +694,8 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
             id = t.id,
         )),
         Outcome::SetAside { name, prior } => {
+            git_commit::auto_commit_yaml(&path);
+
             let mut out = format!(
                 "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
                 id = t.id,
@@ -795,6 +802,8 @@ fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
         ops::rework(file, &t.id, &diagnosis).map_err(|e| e.to_string())
     })
     .map_err(|e| tool_err(e.to_string()))?;
+
+    git_commit::auto_commit_yaml(&path);
 
     let mut out = format!(
         "Rework triggered: 🎯{} → 🎯{} \"{}\"\nRetry {}",
@@ -955,6 +964,8 @@ pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
     let path = store::create_at(dir, location, &project).map_err(tool_err)?;
     let _ = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
 
+    git_commit::auto_commit_yaml(&path);
+
     text_result(format!(
         "Created starter targets file at {} (location: {}).\n\
          Contains 1 sample target (🎯T1) — edit or replace it with your own.",
@@ -1017,6 +1028,8 @@ pub fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
             .map_err(|e| tool_err(format!("failed to create {}: {e}", parent.display())))?;
     }
     store::with_locked_write(&yaml_path, &file).map_err(|e| tool_err(e.to_string()))?;
+
+    git_commit::auto_commit_yaml(&yaml_path);
 
     text_result(format!(
         "Imported {} targets from {}\n\

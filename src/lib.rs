@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod convergence;
+pub mod git_commit;
 pub mod graph;
 pub mod handler;
 pub mod import;
