@@ -9,8 +9,27 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.24.0. Changes since v0.23.0 affecting the
+Snapshot as of v0.25.0. Changes since v0.24.0 affecting the
 interaction surface:
+
+- **Bullseye self-commits a dirty `bullseye.yaml`** (🎯T22). Every
+  mutating tool call (`bullseye_put`, `bullseye_retire`,
+  `bullseye_set_aside`, `bullseye_rework`, `bullseye_init`,
+  `bullseye_import`) and the start of `bullseye_convergence` now
+  fold a dirty `bullseye.yaml` into git automatically. Decision
+  rule: if the most recent commit on `HEAD` is unpushed and its set
+  of changed files is exactly `{bullseye.yaml}`, fold the new
+  state via `git commit --amend --no-edit` (existing message
+  preserved); otherwise create a fresh `Update bullseye.yaml`
+  commit containing only `bullseye.yaml` (other staged changes
+  are left in the index untouched). Best-effort: outside a git
+  repo (shadow-tree storage, tempdir tests) and on git failures
+  the auto-commit is a silent no-op and the file stays dirty.
+  No new public Rust API; the new `git_commit` module is internal.
+  Eliminates the prior `/cv` skill workaround for the dirty-tree
+  invariants block. See 🎯T22.
+
+Earlier v0.24.0 changes still in effect:
 
 - **`bullseye sync-priorities` CLI subcommand** (🎯T3.1). New
   cron-targetable subcommand that scans the workspace via the
