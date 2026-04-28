@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
+use crate::git_commit;
 use crate::graph;
 use crate::schema::TargetsFile;
 
@@ -62,6 +63,17 @@ pub fn convergence(
         active_count,
         achieved_count,
     ));
+
+    // --- 0. Auto-commit a dirty bullseye.yaml (🎯T22) ---
+    //
+    // If the file was edited externally (or any earlier mutation in
+    // this process didn't reach the post-save hook), fold the change
+    // into git before invariants run. Otherwise, the project's
+    // `make bullseye` dirty-tree check would always block convergence
+    // on a freshly-mutated yaml. Best-effort: a no-git or hook-rejected
+    // case leaves the file dirty and the invariants block fires as
+    // before.
+    git_commit::auto_commit_yaml(file_path);
 
     // --- 1. Invariants (project-supplied hook) ---
     //

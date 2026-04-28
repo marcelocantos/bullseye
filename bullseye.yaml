@@ -679,6 +679,22 @@ targets:
     origin: manual
     discovered: 2026-04-27
     achieved: 2026-04-27
+  T22:
+    name: Bullseye self-commits a dirty bullseye.yaml so the project's invariants check never sees it
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - After any mutating tool call (put, retire, set_aside, rework, init, import), `bullseye.yaml` is committed automatically when the file lives inside a git repo.
+    - If the most recent commit on HEAD is unpushed AND its set of changed files is exactly `{bullseye.yaml}`, the new state is folded into it via `git commit --amend --no-edit -- bullseye.yaml` (the existing message is preserved).
+    - Otherwise, a new commit `Update bullseye.yaml` is created containing only the dirty `bullseye.yaml` (no other staged changes are folded in).
+    - When `bullseye.yaml` is not inside a git repo (e.g. shadow-tree storage, tempdir tests), the auto-commit is a silent no-op.
+    - Failures from git (broken repo state, hook rejection, missing binary) do not propagate as tool errors — they emit a single stderr line and leave the file dirty for the user to resolve manually.
+    - '`bullseye_convergence` also runs the same auto-commit before evaluating invariants, so an externally-edited dirty `bullseye.yaml` is resolved at /cv time without a skill-side workaround.'
+    - The `/cv` skill's special-case dirty-`bullseye.yaml` auto-commit block is removed in the same release that ships this behaviour — bullseye owns the policy now.
+    context: 'Today the dirty-tree invariant in `make bullseye` blocks /cv whenever bullseye.yaml is uncommitted. The /cv skill carries a special-case workaround that detects "only bullseye.yaml is dirty" and auto-commits or amends. That workaround belongs inside bullseye itself: every bullseye mutation knows it just dirtied the file, so bullseye is the right layer to fold the change into git. Moving the policy server-side keeps the skill thin and makes the behaviour consistent across any caller (not just /cv). Decision rule (from the user): if the most recent commit is unpushed and contains only bullseye.yaml, amend it; otherwise, create a fresh commit with just bullseye.yaml. Implementation lives in a small `git_commit` module invoked from each mutation handler and from the start of `convergence::convergence` (defence in depth — covers manual yaml edits too). Best-effort: a git failure must never break a target mutation.'
+    origin: manual — discovered while shipping 🎯T21 follow-ups
+    discovered: 2026-04-28
   T3:
     name: Protocol app priority sync
     status: set_aside
