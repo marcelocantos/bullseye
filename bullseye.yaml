@@ -323,9 +323,14 @@ targets:
       - MCP server for status/control (established pattern across mnemo/sysinfo-mcp/sawmill).
       - CLI for adhoc invocation and inspection.
 
-      The executor will likely live in its own repo (working name TBD — crosshair? bullseye-agent?) but the strategic design lives in bullseye.yaml because the two are conceptually one system.
+      The executor lives in its own repo: https://github.com/marcelocantos/crosshair (created 2026-04-29). Strategic design stays in bullseye.yaml because the two are conceptually one system; the daemon work itself is tracked in crosshair's own bullseye.yaml under 🎯T1.
     depends_on:
     - T15.2
+    cross_depends:
+    - repo: marcelocantos/crosshair
+      target: T1
+      capability: convergence executor daemon
+      note: crosshair created 2026-04-29; crosshair 🎯T1 is the "minimal convergence loop end-to-end" target whose completion satisfies this umbrella's daemon-side acceptance
     origin: designed in conversation 2026-04-17 — emerged from yadm-auto-sync resilience problem (SSH push hung 9.5h, blocking subsequent launchd runs); generalised into "state convergence is the right abstraction for many recurring jobs"
     discovered: 2026-04-17
   T15.1:
@@ -353,6 +358,11 @@ targets:
       Until the executor lands, the script needs a stopgap fix (add SSH timeout + push pending commits on heartbeat) so it stops failing visibly. That stopgap is intentionally NOT part of this target — it's pre-work to stop the bleeding while the proper solution is built.
     depends_on:
     - T15
+    cross_depends:
+    - repo: marcelocantos/crosshair
+      target: T1
+      capability: convergence executor daemon
+      note: yadm convergence acceptance is satisfied as part of crosshair 🎯T1 (yadm is the chosen proof-point use case for the v0.1 daemon)
     origin: forked-from T15 design conversation 2026-04-17
     discovered: 2026-04-17
   T15.2:
