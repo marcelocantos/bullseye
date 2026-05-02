@@ -2593,6 +2593,29 @@ fn summary_with_validation_errors_skips_frontier() {
 }
 
 #[test]
+fn summary_with_only_warnings_still_renders_frontier() {
+    // Advisory warnings (e.g. non-conforming target IDs) must not strand
+    // the frontier section. graph::summary gates on validate_blocking,
+    // not the warning-inclusive validate, so a malformed-ID complaint
+    // doesn't suppress the unblocked-targets list. See `validate_warnings`
+    // doc comment and convergence.rs's separate "## Validation warnings"
+    // rendering.
+    let mut file = load_fixture();
+    let target = file.targets.get("T1").unwrap().clone();
+    file.targets.insert("Bogus".to_string(), target);
+
+    let out = graph::summary(&file, "test", None, false);
+    assert!(
+        out.contains("## Frontier"),
+        "warning-only validation should not suppress ## Frontier:\n{out}"
+    );
+    assert!(
+        !out.contains("## Validation errors"),
+        "warning-only validation should not produce ## Validation errors:\n{out}"
+    );
+}
+
+#[test]
 fn startup_context_no_file_is_graceful() {
     // A repo with no bullseye.yaml must not make startup_context fail
     // outright — the session-start hook that typically invokes it runs
