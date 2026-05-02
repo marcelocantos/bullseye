@@ -980,7 +980,7 @@ pub fn summary(
     let _ = momentum;
     let mut out = String::new();
 
-    let errors = validate(file);
+    let errors = validate_blocking(file);
     let all_targets = &file.targets;
     let active = file.active();
     let achieved = file.achieved();
