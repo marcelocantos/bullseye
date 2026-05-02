@@ -9,8 +9,24 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.25.0. Changes since v0.24.0 affecting the
+Snapshot as of v0.26.0. Changes since v0.25.0 affecting the
 interaction surface:
+
+- **Advisory validation warnings no longer suppress `## Frontier`**
+  in `bullseye_summary` / `bullseye_convergence`. The summary
+  renderer now gates the inline frontier section on
+  `validate_blocking` (structural errors only), matching the
+  documented contract on `validate()` and the existing behaviour
+  of `frontier`, `convergence`, and `portfolio`. Previously, any
+  cosmetic warning (today, only the non-conforming-target-ID check
+  on IDs like `T34a`) collapsed the convergence response into
+  `## Active targets by group` + `## Validation errors` and stripped
+  the frontier-detail section the `/cv` skill consumes for fan-out.
+  Warnings continue to render under their own `## Validation
+  warnings` heading via `convergence`. No public Rust API change.
+  See `src/graph.rs:983`.
+
+Earlier v0.25.0 changes still in effect:
 
 - **Bullseye self-commits a dirty `bullseye.yaml`** (🎯T22). Every
   mutating tool call (`bullseye_put`, `bullseye_retire`,
