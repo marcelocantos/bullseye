@@ -19,20 +19,30 @@ use serde::{Deserialize, Serialize};
 ///   `verifies`/`rework` edges, optional `momentum` parameter on
 ///   `bullseye_summary`.
 /// - `Some(2)` → v0.19.0+ format: the work-target `observable: true`
-///   flag is renamed to `showcase: true` (with semantic strengthening
-///   — retirement of a showcase target now requires a `demonstration`
-///   string recorded via `bullseye_retire`). The legacy field name
-///   continues to deserialise via `#[serde(alias = "observable")]`,
-///   so older files load cleanly and are rewritten under the new name
-///   on next save. The gates-field and parent-field migrations from
-///   v0.4.0 and v0.8.0 continue to run transparently on load.
+///   flag was renamed to `showcase: true` with a `demonstration`
+///   obligation on retire. Both have since been removed (see v4
+///   below); v2 files load via permissive deserialisation, with the
+///   `showcase` / `observable` / `demonstration` keys silently
+///   dropped on next save. The gates-field and parent-field
+///   migrations from v0.4.0 and v0.8.0 continue to run transparently
+///   on load.
 /// - `Some(3)` → 🎯T18: introduces the `set_aside` status (parked /
 ///   deferred / wont_fix) with a required `set_aside_reason` field.
 ///   Set-aside targets are terminal for graph traversal (they unblock
-///   dependents) but distinct from achieved in summary output. Older
-///   binaries reading a v3 file fail at load with a "schema_version
-///   too new" error rather than silently dropping the new variant.
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+///   dependents) but distinct from achieved in summary output.
+/// - `Some(4)` → 🎯T23: removes the work-target `showcase` flag and
+///   the `demonstration` retire-time field. The construct didn't
+///   change agent behaviour in practice — the demonstration step it
+///   was meant to force still got skipped, while the field added
+///   schema, doc, and tool surface that callers had to reason about.
+///   `is_checkpoint` now means strictly verify-kind; tunnel
+///   resolution recommends adding a verify target. v3 yaml files
+///   load cleanly via permissive deserialisation; the dropped keys
+///   disappear on next save (one-shot migration, equivalent to how
+///   `observable` → `showcase` migrated in v0.19.0). Older binaries
+///   reading a v4 file fail at load with a "schema_version too new"
+///   error rather than silently misinterpreting the file.
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 /// Top-level targets file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,50 +146,9 @@ pub struct Target {
     /// does not drive repo-level frontier ordering. See 🎯T7.
     pub cost: f64,
 
-    /// Showcase marker — the obligation half of the
-    /// "this target produces a human-visible checkpoint" idea.
-    ///
-    /// A work target with `showcase: true` declares an *obligation*
-    /// the agent must discharge on retirement: literally demonstrate
-    /// the user-visible result (run the binary with the player
-    /// attached, publish the screenshot, open the dashboard, etc.)
-    /// — not just report "checks pass". `bullseye_retire` enforces
-    /// this by requiring a non-empty `demonstration` parameter when
-    /// the target carries this flag, recorded as
-    /// [`Target::demonstration`] for posterity.
-    ///
-    /// At the prioritisation layer, a showcase target counts as a
-    /// **checkpoint** for distance-to-checkpoint ordering, alongside
-    /// verify-kind targets (which are checkpoints by definition —
-    /// their whole point is to emit a pass/fail signal). Chains of
-    /// non-checkpoint targets longer than a few hops form **tunnels**
-    /// that repo-level ordering actively steers away from. See
-    /// [`crate::graph::is_checkpoint`] and 🎯T7, 🎯T14 in
-    /// `bullseye.yaml`.
-    ///
-    /// Renamed from `observable` in schema v2 to make the obligation
-    /// half of the original "produces something visible" intent
-    /// explicit. The legacy YAML key still deserialises via
-    /// `#[serde(alias = "observable")]` so old files load cleanly.
-    /// Default `false`; omitted from YAML when false so the common
-    /// case stays clean.
-    #[serde(default, alias = "observable", skip_serializing_if = "is_false")]
-    pub showcase: bool,
-
     /// Actual cost recorded on retirement, for calibration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_cost: Option<f64>,
-
-    /// Demonstration recorded on retirement of a showcase target —
-    /// a human-readable note describing what was actually shown to
-    /// the user (e.g. "ran tiltbuggy with player attached and shared
-    /// the live frames", "deployed to staging and walked the user
-    /// through the new flow"). Required by `bullseye_retire` when
-    /// the target carries `showcase: true`; omitted otherwise.
-    /// Persisted so that the historical record of why the target was
-    /// considered done is auditable after the fact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub demonstration: Option<String>,
 
     /// Rationale recorded when the target's status is set to
     /// [`Status::SetAside`] — the free-text "why we decided not to
@@ -409,10 +378,6 @@ pub enum Kind {
 
 fn is_zero(v: &u32) -> bool {
     *v == 0
-}
-
-fn is_false(v: &bool) -> bool {
-    !*v
 }
 
 fn is_work(kind: &Kind) -> bool {

@@ -182,29 +182,14 @@ Run `bullseye sync-priorities --help` for flags (`--db`, `--root`,
 - **Frontier**: The set of unblocked leaf targets that can be worked
   on right now, in parallel.
 - **Checkpoint**: A target whose completion produces a signal the
-  human decision-maker can react to. Two flavours:
-  - **Verify-kind targets** are checkpoints by definition — their
-    whole purpose is to emit a pass/fail signal (a technical
-    verification).
-  - **Showcase work targets** — work targets explicitly marked
-    `showcase: true` because their retirement requires a literal
-    user-visible demonstration (running the binary with the player
-    attached, opening the dashboard, posting a screenshot).
-    `bullseye_retire` enforces the obligation by requiring a
-    `demonstration` string when the flag is set, so showcase targets
-    can't sneak into "achieved" on the strength of "tests pass".
-  Repo-level frontier ordering rewards shortest-path-to-nearest-
-  checkpoint, so chains of opaque work targets get flagged rather
-  than ordered.
+  human decision-maker can react to. **Verify-kind targets** are
+  checkpoints by definition — their whole purpose is to emit a
+  pass/fail signal. Repo-level frontier ordering rewards
+  shortest-path-to-nearest-checkpoint, so chains of opaque work
+  targets get flagged rather than ordered.
 - **Tunnels**: Work targets with no checkpoint reachable within N
   hops — a signal to reshape the graph by adding an intermediate
-  verify target or promoting an existing work target with the
-  `showcase` flag.
-- **Verification vs. showcase**: A verify target says "this is
-  technically correct" (the machine signs off). A showcase target
-  says "this is visibly working for the user" (the human signs off,
-  in person). Reach for `showcase: true` when "tests pass" leaves
-  the user with nothing to look at.
+  verify target above the tunneled work.
 - **Phase boundary**: Bullseye uses different prioritisation engines
   at repo and portfolio scopes. Inside a repo (sub-week horizon,
   human as decision-maker), ordering is driven by distance-to-

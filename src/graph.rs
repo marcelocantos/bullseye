@@ -17,7 +17,7 @@ pub const REPO_SCOPE_BANNER: &str = "\
 > **Repo-scope ordering**: min distance-to-checkpoint, then max unblocking fanout. \
 WSJF/value/cost/SAFe framing is portfolio-scope only — do not use it at repo scope.
 >
-> **Legend**: `checkpoint` = target is itself a checkpoint (verify-kind, or work-kind with `showcase: true`) · `dist=N` = N hops to nearest checkpoint · `no checkpoint reachable` = tunnel, reshape the graph · `fanout=N` = downstream targets unblocked by this one · `[showcase]` = work target whose retirement requires a user-visible demonstration.
+> **Legend**: `checkpoint` = target is verify-kind · `dist=N` = N hops to nearest checkpoint · `no checkpoint reachable` = tunnel, reshape the graph by adding a verify target · `fanout=N` = downstream targets unblocked by this one.
 
 ";
 
@@ -76,10 +76,7 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
 /// human decision-maker gets a signal they can react to?
 ///
 /// Verify-kind targets are checkpoints by definition: their whole
-/// purpose is to emit a pass/fail signal. Work-kind targets become
-/// checkpoints when [`crate::schema::Target::showcase`] is set,
-/// which obliges the agent to discharge the demonstration on
-/// retirement (see [`crate::schema::Target::demonstration`]).
+/// purpose is to emit a pass/fail signal.
 ///
 /// Repo-level prioritisation (🎯T7) uses checkpoint reachability as
 /// its primary sort signal: the frontier is ordered to move the
@@ -87,7 +84,7 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
 /// chains of non-checkpoint targets (tunnels) are flagged so the
 /// user can reshape the graph rather than blunder through them.
 pub fn is_checkpoint(target: &Target) -> bool {
-    target.kind == Kind::Verify || target.showcase
+    target.kind == Kind::Verify
 }
 
 /// Build the forward adjacency map used by both tunnel detection
@@ -131,10 +128,9 @@ fn forward_adjacency<'a>(
 /// checkpoint is reachable within `max_depth` hops.
 ///
 /// Returns `Some(0)` when `start_id` is itself a checkpoint (a
-/// verify target or a work target with `showcase: true`). That's
-/// the base case and the thing repo-level ordering wants to reward:
-/// working on a checkpoint directly produces a signal with zero
-/// intermediate hops.
+/// verify target). That's the base case and the thing repo-level
+/// ordering wants to reward: working on a checkpoint directly
+/// produces a signal with zero intermediate hops.
 ///
 /// Walks the same forward graph [`tunnels`] uses. The two functions
 /// share this traversal so a change in the checkpoint predicate
@@ -203,15 +199,14 @@ pub struct TunnelWarning {
     pub nearest_verify: Option<String>,
 }
 
-/// Detect tunnels: active non-checkpoint work targets that are
-/// far from any checkpoint.
+/// Detect tunnels: active work targets that are far from any
+/// verify target.
 ///
-/// A tunnel exists when a work target is not itself a checkpoint
-/// AND has no checkpoint reachable within `max_depth` hops along
-/// the forward dependency graph (targets that depend on it, or
-/// verify targets whose `verifies` list includes it). "Checkpoint"
-/// means either a verify-kind target or a work target marked
-/// `showcase: true` — see [`is_checkpoint`] for the full rule.
+/// A tunnel exists when a work target has no verify target
+/// reachable within `max_depth` hops along the forward dependency
+/// graph (targets that depend on it, or verify targets whose
+/// `verifies` list includes it). See [`is_checkpoint`] — verify-kind
+/// targets are the only checkpoints in the model.
 ///
 /// Default max_depth is 2.
 pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
@@ -221,10 +216,9 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
     let mut warnings = Vec::new();
 
     for (id, t) in &active {
-        // Only flag work targets that aren't themselves checkpoints.
-        // Verify targets (always checkpoints) and showcase work
-        // targets are not themselves tunnels.
-        if t.kind != Kind::Work || is_checkpoint(t) {
+        // Only flag work targets — verify-kind targets are the
+        // checkpoints, so they can't themselves be tunnels.
+        if t.kind != Kind::Work {
             continue;
         }
 
@@ -288,24 +282,23 @@ pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
     warnings
 }
 
-/// Why a target was suggested as a candidate location for a
-/// `showcase: true` flag (or a verify target above it) when
-/// resolving a tunnel.
+/// Why a target was suggested as a candidate location for adding a
+/// verify target above when resolving a tunnel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CandidateReason {
     /// Multiple chains in the active graph converge into this node
     /// (forward in-degree ≥ 2). The user's mental model places
-    /// showcases here naturally — it's where work fans in.
+    /// verification here naturally — it's where work fans in.
     Convergence,
     /// No active target depends on this node (forward out-degree 0).
     /// The dependency-graph root of the path; the integrated state
     /// the orphan ultimately rolls up into.
     Root,
-    /// The orphan target itself. Always offered as a fallback — flip
-    /// `showcase: true` on the leaf when nothing better fits.
+    /// The orphan target itself. Always offered as a fallback — add
+    /// a verify target above the leaf when nothing better fits.
     Self_,
     /// On the orphan's forward path but not a convergence or root.
-    /// Last-resort suggestion for mid-chain showcases.
+    /// Last-resort suggestion for mid-chain verification.
     OnPath,
 }
 
@@ -340,13 +333,13 @@ pub struct CheckpointCandidate {
 }
 
 /// For an orphaned (tunneled) target, suggest candidate locations
-/// where a `showcase: true` flag (or a verify target above) would
-/// resolve the tunnel. Walks the same forward graph that tunnel
-/// detection uses, so a candidate marked here is guaranteed to be
-/// reachable from the orphan.
+/// where adding a verify target above would resolve the tunnel.
+/// Walks the same forward graph that tunnel detection uses, so a
+/// candidate marked here is guaranteed to be reachable from the
+/// orphan.
 ///
 /// Suggestions are ordered by usefulness: convergence nodes first
-/// (where the user's mental model places showcases), then roots
+/// (where the user's mental model places verification), then roots
 /// (the integrated top-level state), then self (always works as a
 /// fallback), then mid-chain on-path nodes (last resort). Within
 /// each category, ordered by distance ascending then ID for
@@ -450,8 +443,9 @@ pub fn suggest_checkpoint_candidates(
 ///
 /// The warning is informational — bullseye does *not* reject the
 /// mutation that produced the tunnel. The agent reads the warning
-/// and flips `showcase: true` on a candidate in a follow-up call.
-/// 🎯T21 in `bullseye.yaml` records the design rationale.
+/// and adds a verify target above one of the candidates in a
+/// follow-up call. 🎯T21 in `bullseye.yaml` records the design
+/// rationale.
 pub fn format_tunnel_warnings(file: &TargetsFile, max_depth: usize) -> Option<String> {
     let warnings = tunnels(file, max_depth);
     if warnings.is_empty() {
@@ -466,10 +460,9 @@ pub fn format_tunnel_warnings(file: &TargetsFile, max_depth: usize) -> Option<St
     let mut out = format!(
         "\n\n## ⚠ Tunnel warnings ({n} target{s})\n\n\
          Mutation persisted; this is informational. The graph has \
-         work targets with no checkpoint reachable within {max_depth} hop(s), \
+         work targets with no verify target reachable within {max_depth} hop(s), \
          so distance-to-checkpoint ordering can't steer toward them. \
-         Mark a candidate `showcase: true` (or add a verify target above it) \
-         to resolve.\n\n",
+         Add a verify target above one of the candidates below to resolve.\n\n",
         n = warnings.len(),
         s = if warnings.len() == 1 { "" } else { "s" },
     );
@@ -1104,13 +1097,7 @@ pub fn summary(
             for rf in &ranked {
                 let ft = rf.target;
                 let kind_label = match ft.kind {
-                    Kind::Work => {
-                        if all_targets.get(&ft.id).is_some_and(|t| t.showcase) {
-                            " [showcase]"
-                        } else {
-                            ""
-                        }
-                    }
+                    Kind::Work => "",
                     Kind::Verify => " [verify]",
                 };
                 let distance_label = match rf.distance {

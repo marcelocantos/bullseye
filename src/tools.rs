@@ -57,10 +57,8 @@ pub struct GetTool {
         they are NOT consumed by repo-level frontier ordering, which uses distance-to-nearest-checkpoint instead. \
         Omit value/cost when working at repo scope; supply them only when you also intend to participate in \
         cross-repo portfolio prioritisation and have a meaningful estimate. \
-        The key repo-scope field is `showcase`: set it on work targets whose retirement requires a user-visible \
-        demonstration (running the binary with the player attached, opening the dashboard, posting a screenshot) \
-        — verify-kind targets are checkpoints automatically, this flag promotes a work target to checkpoint status \
-        for ordering purposes AND obliges `bullseye_retire` to record a `demonstration` string. \
+        Repo-scope ordering is shaped by adding verify-kind targets at the right places — verify targets \
+        are the only checkpoints in the model. \
         On patch, all fields are optional. \
         Use `depends_on` to declare this target's blockers, or `blocks` (sugar) to inject this target into other \
         targets' depends_on lists — handy when adding a new prerequisite above existing work."
@@ -113,18 +111,6 @@ pub struct PutTool {
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
 
-    /// Mark a work target as a *showcase* — its retirement requires
-    /// a user-visible demonstration recorded via `bullseye_retire`'s
-    /// `demonstration` parameter, and the target counts as a
-    /// checkpoint for repo-level distance-to-checkpoint ordering.
-    /// Verify-kind targets are checkpoints automatically; this flag
-    /// only matters for work-kind targets. Defaults to unchanged on
-    /// patch; omit (or pass `false`) when the target should retire
-    /// on technical verification alone. See 🎯T7, 🎯T14 and
-    /// `docs/mcp-triad.md` §9.
-    #[serde(default)]
-    pub showcase: Option<bool>,
-
     /// Sugar: IDs of targets that should gain this target as a dependency.
     /// The handler appends this target's ID to each listed target's `depends_on`.
     /// Lets you declare "I am a new prerequisite for X, Y" at creation time
@@ -148,10 +134,7 @@ pub struct PutTool {
 /// Retire a target (move to achieved).
 #[mcp_tool(
     name = "bullseye_retire",
-    description = "Retire a target by marking it achieved with today's date. Optionally records actual cost for calibration. \
-        When the target carries `showcase: true`, a non-empty `demonstration` parameter is REQUIRED — \
-        a short note describing what was actually shown to the user (e.g. \"ran the binary with the player attached and shared a screen recording\"). \
-        Showcase targets retire only after a real demonstration; technical verification (\"tests pass\", \"builds clean\") is not enough."
+    description = "Retire a target by marking it achieved with today's date. Optionally records actual cost for calibration."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct RetireTool {
@@ -164,16 +147,6 @@ pub struct RetireTool {
     /// Actual cost (Fibonacci scale) for calibration against the estimate.
     #[serde(default)]
     pub actual_cost: Option<f64>,
-
-    /// Demonstration of the user-visible result. **Required** when
-    /// the target has `showcase: true`; ignored otherwise. Should be
-    /// a short, factual note describing what was actually shown to
-    /// the user — e.g. "deployed to staging and walked the user
-    /// through the new flow", "ran tiltbuggy with the player and
-    /// shared the live frames", "posted screenshot to Slack". The
-    /// note is stored on the retired target as a permanent record.
-    #[serde(default)]
-    pub demonstration: Option<String>,
 }
 
 /// Set a target aside (parked / deferred / wont_fix) with a documented
@@ -192,8 +165,7 @@ pub struct RetireTool {
         not delivered: parked indefinitely, deferred to a later milestone, or actively rejected \
         as won't-fix. The reason is free text — it should explain the disposition (e.g. \"parked \
         pending design discussion in 🎯T42\", \"deferred to v2.0\", \"won't fix — superseded by \
-        🎯T57's redesign\"). Distinct from `bullseye_retire`, which is achievement-only and may \
-        require a showcase demonstration."
+        🎯T57's redesign\"). Distinct from `bullseye_retire`, which is achievement-only."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct SetAsideTool {

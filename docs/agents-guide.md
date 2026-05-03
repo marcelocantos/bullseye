@@ -88,13 +88,13 @@ optional; only the ones provided are changed.
 
 **Achieved targets are immutable.** As of v0.13.0 `bullseye_put`
 rejects content edits (name/acceptance/context/value/cost/tags/
-depends_on/verifies/showcase) on a target whose current status
-is `achieved`. Achieved targets are historical artifacts. To
-modify one, re-open it first by patching `status: identified`
-— either in a prior call, or atomically in the same call
-alongside the content edits (the reopen applies first, then
-the content lands on the now-identified target). Status-only
-transitions on achieved targets remain allowed.
+depends_on/verifies) on a target whose current status is
+`achieved`. Achieved targets are historical artifacts. To modify
+one, re-open it first by patching `status: identified` — either
+in a prior call, or atomically in the same call alongside the
+content edits (the reopen applies first, then the content lands
+on the now-identified target). Status-only transitions on
+achieved targets remain allowed.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -107,7 +107,6 @@ transitions on achieved targets remain allowed.
 | `context` | string | null | Why this target matters |
 | `kind` | string | `"work"` on create | `"work"` or `"verify"`; settable only on create |
 | `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"`. The `set_aside` value is **not** settable here — call `bullseye_set_aside(id, reason)` instead so the rationale is always recorded. |
-| `showcase` | bool | `false` on create, unchanged on patch | Mark a work target as a *showcase* — its retirement requires a user-visible demonstration recorded via `bullseye_retire`'s `demonstration` parameter, and the target counts as a checkpoint for distance-to-checkpoint ordering. Verify-kind targets are checkpoints automatically; this flag only matters for work-kind targets. Renamed from `observable` in schema v2; legacy YAML still loads via a serde alias. |
 | `depends_on` | string[] | null | IDs of targets this one depends on (must be achieved first) |
 | `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work. Refuses to inject into achieved targets (same rule as content patches). |
 | `verifies` | string[] | null | For verify targets: IDs of targets this verifies |
@@ -118,27 +117,11 @@ transitions on achieved targets remain allowed.
 
 Mark a target achieved.
 
-When the target carries `showcase: true`, a non-empty `demonstration`
-parameter is **required** — see the showcase obligation note below.
-Plain work targets and verify targets retire without it.
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | required | Target ID |
 | `actual_cost` | number | null | Actual cost for calibration |
-| `demonstration` | string | null | Required when the target has `showcase: true`; ignored otherwise. A short factual note describing what was actually shown to the user (e.g. "ran the binary with the player attached and shared a screen recording"). Stored on the retired target as a permanent record. |
-
-**Showcase obligation (🎯T14).** A showcase target promises a
-user-visible demonstration on completion — running the binary with
-the player attached, opening the dashboard, posting the screenshot.
-`bullseye_retire` enforces the promise: missing or whitespace-only
-`demonstration` returns an explanatory error, the target stays
-unretired, and the agent has to actually perform the demo before
-trying again. Technical verification (\"tests pass\", \"builds
-clean\") is not a demonstration. Reach for `showcase: true` when the
-target's value to the user is something they need to see, not
-something the machine can sign off on.
 
 ### bullseye_set_aside
 
@@ -146,8 +129,7 @@ Set a target aside with a documented rationale (🎯T18). Use this
 when the target was **not** delivered — parked indefinitely,
 deferred to a later milestone, or actively rejected as won't-fix —
 but should no longer surface on the frontier. Distinct from
-`bullseye_retire`, which is achievement-only and may require a
-showcase demo.
+`bullseye_retire`, which is achievement-only.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -199,8 +181,7 @@ on this one), then ascending ID. Per-target `value`/`cost` and
 When every frontier target has no checkpoint reachable at all,
 `bullseye_convergence`'s next-action emits a `**Blocked**: … reshape`
 recommendation instead of auto-selecting, prompting the human to
-add an intermediate verify target or promote an existing
-downstream work target with `showcase: true`.
+add an intermediate verify target above the tunneled work.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -221,12 +202,11 @@ verify target to identified.
 ### bullseye_tunnels
 
 Detect work targets that have no **checkpoint** reachable within N
-hops along the forward dependency graph. As of v0.13.0 a target is
-a checkpoint iff `kind: verify` OR (as of v0.19.0) `showcase: true`
-is set on a work target. Previous releases defined this strictly as
-verification reachability. Legacy targets files carry no showcase
-work targets until the human opts in, so on a freshly-upgraded repo
-most work targets will be flagged — the reshape signal is the point.
+hops along the forward dependency graph. A target is a checkpoint
+iff `kind: verify`. (v0.19.0–v0.26.0 also treated `showcase: true`
+work targets as checkpoints; the showcase construct was removed in
+v0.27.0 — see 🎯T23.) Resolve a tunnel by adding a verify-kind
+target above one of the suggested candidates.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -466,12 +446,6 @@ targets:
     value: 8                              # Fibonacci (portfolio-scope input only)
     cost: 3                               # Fibonacci (portfolio-scope input only)
     actual_cost: 5                        # recorded on retirement (optional)
-    showcase: true                        # v0.19.0 (was `observable` in v0.13.0):
-                                          # mark a work target as a showcase
-                                          # checkpoint — its retirement requires
-                                          # a `demonstration` recorded via
-                                          # bullseye_retire (optional, default
-                                          # false, omitted when false)
     acceptance:                           # how to verify achievement (required)
       - CI green on all platforms
       - No test skips without documented reason
@@ -508,12 +482,12 @@ Bullseye uses different prioritisation engines at repo and portfolio
 scopes (`docs/mcp-triad.md` §9):
 
 - **Repo-level** (sub-week horizon, human as decision-maker): ordering
-  rewards shortest path to the next **checkpoint** (verify-kind, or
-  work-kind with `showcase: true`), tiebroken by unblocking fanout.
-  Per-target `value`/`cost` and the `momentum` input are **not
-  consumed** at this layer. The point is to drive work toward the next
-  human decision point as quickly as possible, and to flag opaque
-  tunnels where the graph has no checkpoint to head toward.
+  rewards shortest path to the next **checkpoint** (verify-kind
+  target), tiebroken by unblocking fanout. Per-target `value`/`cost`
+  and the `momentum` input are **not consumed** at this layer. The
+  point is to drive work toward the next human decision point as
+  quickly as possible, and to flag opaque tunnels where the graph
+  has no checkpoint to head toward.
 - **Portfolio-level** (weekly-plus horizon, human as bottleneck
   allocator): WSJF with momentum and cross-repo enabler propagation
   earns its keep. This is where `value`/`cost`/`momentum`/
