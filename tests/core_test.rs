@@ -4125,3 +4125,339 @@ fn validate_strategy_valid_passes() {
         "valid strategy should not produce errors; got: {errors:?}"
     );
 }
+
+// ── 🎯T24: refuse mutation in submodule replicas / detached HEAD ────────────
+
+/// Run `git -C <dir> <args>` and panic on failure with captured stderr.
+/// Used by the 🎯T24 integration tests to set up parent + submodule
+/// repos and to flip HEAD into a detached state. Identity / hooks
+/// config matches the helpers in `git_commit::tests::git_init` so
+/// commits work in CI without a global gitconfig.
+fn t24_run_git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git invocation failed");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed in {dir:?}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Initialise a git repo at `dir` with stable identity + an empty
+/// hooks dir so the developer's global pre-commit hooks don't fire.
+fn t24_git_init(dir: &std::path::Path) {
+    t24_run_git(dir, &["init", "-q", "-b", "master"]);
+    t24_run_git(dir, &["config", "user.email", "test@example.com"]);
+    t24_run_git(dir, &["config", "user.name", "Test"]);
+    t24_run_git(dir, &["config", "commit.gpgsign", "false"]);
+    let empty = dir.join(".git/empty-hooks");
+    std::fs::create_dir_all(&empty).unwrap();
+    t24_run_git(dir, &["config", "core.hooksPath", empty.to_str().unwrap()]);
+}
+
+/// Set the standard env vars `git commit` requires when no system
+/// gitconfig is available (CI). The tests' per-repo `user.name` /
+/// `user.email` config is enough on most platforms, but
+/// `git submodule add` runs a sub-command in the child working tree
+/// before our config takes effect — these env vars carry through.
+fn t24_set_git_env() {
+    // Safety: tests run sequentially within one process here, but
+    // `cargo test` parallelises across tests by default. We set these
+    // env vars defensively even though per-repo `user.*` config is
+    // also populated; they're idempotent and process-local.
+    unsafe {
+        std::env::set_var("GIT_AUTHOR_NAME", "Test");
+        std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
+        std::env::set_var("GIT_COMMITTER_NAME", "Test");
+        std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
+    }
+}
+
+/// Commit count on `HEAD` for `repo`, or 0 if `HEAD` is unborn.
+fn t24_commit_count(repo: &std::path::Path) -> usize {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap_or(0)
+}
+
+const T24_FIXTURE_YAML: &str = r#"schema_version: 1
+targets:
+  T1:
+    name: Example target
+    kind: work
+    status: identified
+    value: 1
+    cost: 1
+    acceptance:
+      - it works
+    origin: manual
+    discovered: 2026-01-01
+"#;
+
+/// Mutating `bullseye_put` from inside a submodule replica must be
+/// refused with a clear error naming the superproject path. The
+/// submodule worktree must remain at its original commit count — no
+/// auto-commit must land on a dangling local branch.
+#[test]
+fn t24_mutation_refused_in_submodule_replica() {
+    use bullseye::config;
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    t24_set_git_env();
+
+    let scratch = tempfile::tempdir().unwrap();
+    let parent = scratch.path().join("parent");
+    let inner = scratch.path().join("inner-source");
+    std::fs::create_dir_all(&parent).unwrap();
+    std::fs::create_dir_all(&inner).unwrap();
+
+    // Build a self-contained "inner" repo to serve as the submodule
+    // source. Carries a bullseye.yaml so `discover_anywhere` finds it
+    // inside the submodule path.
+    t24_git_init(&inner);
+    std::fs::write(inner.join("bullseye.yaml"), T24_FIXTURE_YAML).unwrap();
+    t24_run_git(&inner, &["add", "bullseye.yaml"]);
+    t24_run_git(&inner, &["commit", "-q", "-m", "init inner"]);
+
+    // Parent repo with the inner repo nested as a submodule. Modern
+    // git refuses `submodule add` on file:// URLs by default; allow it.
+    t24_git_init(&parent);
+    std::fs::write(parent.join("README.md"), "parent\n").unwrap();
+    t24_run_git(&parent, &["add", "README.md"]);
+    t24_run_git(&parent, &["commit", "-q", "-m", "init parent"]);
+    let inner_url = format!("file://{}", inner.display());
+    t24_run_git(
+        &parent,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &inner_url,
+            "sub",
+        ],
+    );
+    t24_run_git(&parent, &["commit", "-q", "-m", "add submodule"]);
+
+    let submodule = parent.join("sub");
+    assert!(
+        submodule.join("bullseye.yaml").exists(),
+        "submodule should carry bullseye.yaml after add",
+    );
+
+    // Isolate the external shadow root so discover_anywhere can't pick
+    // up a file in the developer's real ~/.local/share/bullseye.
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            bullseye::config::set_external_root_override(None);
+        }
+    }
+    let _cleanup = Cleanup;
+
+    let commits_before = t24_commit_count(&submodule);
+
+    let result = handle_put(PutTool {
+        cwd: submodule.to_string_lossy().to_string(),
+        id: Some("T1".to_string()),
+        name: Some("Renamed via submodule".to_string()),
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: None,
+        tags: None,
+    });
+
+    let err = result.expect_err("mutation in submodule must be refused");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("submodule"),
+        "error should mention submodule: {msg}",
+    );
+    assert!(
+        msg.contains(&parent.display().to_string()),
+        "error should name the superproject path {parent:?}; got: {msg}",
+    );
+    assert!(
+        msg.contains(&submodule.display().to_string()),
+        "error should name the submodule cwd {submodule:?}; got: {msg}",
+    );
+
+    // Commit count in the submodule worktree is unchanged — no
+    // auto-commit landed on a dangling branch.
+    assert_eq!(
+        t24_commit_count(&submodule),
+        commits_before,
+        "no commit should land in the submodule when the mutation is refused",
+    );
+
+    // The bullseye.yaml inside the submodule is byte-identical to the
+    // fixture: the refusal happened before any read-modify-write.
+    let after = std::fs::read_to_string(submodule.join("bullseye.yaml")).unwrap();
+    assert_eq!(
+        after, T24_FIXTURE_YAML,
+        "submodule's bullseye.yaml must be untouched after a refused mutation",
+    );
+}
+
+/// Mutating `bullseye_put` against a repo with detached HEAD must be
+/// refused with a clear error naming the detached state. Auto-commit
+/// onto a dangling local branch would otherwise lose the work.
+#[test]
+fn t24_mutation_refused_in_detached_head() {
+    use bullseye::config;
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    t24_set_git_env();
+
+    let scratch = tempfile::tempdir().unwrap();
+    let repo = scratch.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+
+    t24_git_init(&repo);
+    std::fs::write(repo.join("bullseye.yaml"), T24_FIXTURE_YAML).unwrap();
+    t24_run_git(&repo, &["add", "bullseye.yaml"]);
+    t24_run_git(&repo, &["commit", "-q", "-m", "init"]);
+    // Detach HEAD by checking out the SHA directly.
+    t24_run_git(&repo, &["checkout", "-q", "--detach", "HEAD"]);
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            bullseye::config::set_external_root_override(None);
+        }
+    }
+    let _cleanup = Cleanup;
+
+    let commits_before = t24_commit_count(&repo);
+
+    let result = handle_put(PutTool {
+        cwd: repo.to_string_lossy().to_string(),
+        id: Some("T1".to_string()),
+        name: Some("Renamed via detached HEAD".to_string()),
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        kind: None,
+        status: None,
+        depends_on: None,
+        showcase: None,
+        blocks: None,
+        verifies: None,
+        origin: None,
+        tags: None,
+    });
+
+    let err = result.expect_err("mutation under detached HEAD must be refused");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("detached"),
+        "error should mention detached HEAD: {msg}",
+    );
+    assert!(
+        msg.contains(&repo.display().to_string()),
+        "error should name the repo path {repo:?}; got: {msg}",
+    );
+    assert!(
+        msg.contains("checkout") || msg.contains("switch"),
+        "error should suggest a branch checkout: {msg}",
+    );
+
+    assert_eq!(
+        t24_commit_count(&repo),
+        commits_before,
+        "no commit should land when detached HEAD blocks the mutation",
+    );
+    let after = std::fs::read_to_string(repo.join("bullseye.yaml")).unwrap();
+    assert_eq!(after, T24_FIXTURE_YAML, "yaml must be untouched");
+}
+
+/// Read-only operations (here: `bullseye_list`) must succeed even
+/// inside a submodule replica — the 🎯T24 guard fires only on
+/// mutating handlers, so research from inside a parent project's
+/// submodule still works.
+#[test]
+fn t24_read_only_ops_unaffected_in_submodule() {
+    use bullseye::config;
+    use bullseye::handler::handle_list;
+    use bullseye::tools::ListTool;
+
+    t24_set_git_env();
+
+    let scratch = tempfile::tempdir().unwrap();
+    let parent = scratch.path().join("parent");
+    let inner = scratch.path().join("inner-source");
+    std::fs::create_dir_all(&parent).unwrap();
+    std::fs::create_dir_all(&inner).unwrap();
+
+    t24_git_init(&inner);
+    std::fs::write(inner.join("bullseye.yaml"), T24_FIXTURE_YAML).unwrap();
+    t24_run_git(&inner, &["add", "bullseye.yaml"]);
+    t24_run_git(&inner, &["commit", "-q", "-m", "init inner"]);
+
+    t24_git_init(&parent);
+    std::fs::write(parent.join("README.md"), "parent\n").unwrap();
+    t24_run_git(&parent, &["add", "README.md"]);
+    t24_run_git(&parent, &["commit", "-q", "-m", "init parent"]);
+    let inner_url = format!("file://{}", inner.display());
+    t24_run_git(
+        &parent,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &inner_url,
+            "sub",
+        ],
+    );
+    t24_run_git(&parent, &["commit", "-q", "-m", "add submodule"]);
+
+    let submodule = parent.join("sub");
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            bullseye::config::set_external_root_override(None);
+        }
+    }
+    let _cleanup = Cleanup;
+
+    // bullseye_list is read-only; it must succeed despite the cwd
+    // sitting inside a submodule worktree.
+    handle_list(ListTool {
+        cwd: submodule.to_string_lossy().to_string(),
+        filter: "active".to_string(),
+    })
+    .expect("read-only list should succeed inside a submodule");
+}

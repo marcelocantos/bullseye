@@ -19,6 +19,7 @@ use crate::graph;
 use crate::import;
 use crate::ops;
 use crate::portfolio;
+use crate::repo_guard;
 use crate::schema::{Status, Target};
 use crate::store;
 use crate::tools::TargetTools;
@@ -174,6 +175,19 @@ fn discover_path(cwd: &str) -> Result<std::path::PathBuf, CallToolError> {
     store::discover_anywhere(dir).ok_or_else(|| tool_err(no_targets_file_message(dir)))
 }
 
+/// Refuse the mutation when the repo containing `targets_path` is in
+/// a state that would silently lose the auto-commit (submodule clone,
+/// detached HEAD). See [`crate::repo_guard`] for the full rationale
+/// and the two unsafe states. `cwd` is the caller-supplied working
+/// directory, used only in the error message — the structural check
+/// runs against the *repo containing* `targets_path`, not `cwd`,
+/// because `cwd` may sit deeper in the tree.
+fn ensure_mutation_allowed(targets_path: &Path, cwd: &str) -> Result<(), CallToolError> {
+    let repo_root = targets_path.parent().unwrap_or(Path::new("."));
+    repo_guard::check_mutation_allowed(repo_root)
+        .map_err(|guard| tool_err(guard.message(Path::new(cwd))))
+}
+
 pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
 
@@ -246,6 +260,7 @@ fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
+    ensure_mutation_allowed(&path, &t.cwd)?;
 
     // Envelope-leak guard (🎯T20). Validate every caller-controlled
     // string before entering the locked mutation block — fail fast if
@@ -531,6 +546,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
 
 pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
+    ensure_mutation_allowed(&path, &t.cwd)?;
 
     enum Outcome {
         AlreadyAchieved,
@@ -580,6 +596,7 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
 /// or already set aside with the same reason (no-op).
 pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
+    ensure_mutation_allowed(&path, &t.cwd)?;
 
     // Envelope-leak guard (🎯T20). Validate before trim/empty check
     // so a reason that's "just a leaked tag" reports the leak (more
@@ -717,6 +734,7 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
 
 fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
+    ensure_mutation_allowed(&path, &t.cwd)?;
 
     // Envelope-leak guard (🎯T20). Check each input separately so the
     // error names the offending field; check before composing so the
@@ -899,6 +917,19 @@ pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
             .map_or("my-project".into(), |n| n.to_string_lossy().into_owned())
     });
 
+    // Guard 🎯T24 against the would-be repo root *before* writing the
+    // file. For in-repo init, that's `dir`; for external init, the
+    // shadow path isn't a git repo so the guard naturally passes.
+    let probe_root = match location {
+        Location::InRepo => dir.to_path_buf(),
+        Location::External => store::target_path_for_new(dir, location)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| dir.to_path_buf()),
+    };
+    repo_guard::check_mutation_allowed(&probe_root)
+        .map_err(|guard| tool_err(guard.message(dir)))?;
+
     let path = store::create_at(dir, location, &project).map_err(tool_err)?;
     let _ = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
 
@@ -961,6 +992,20 @@ pub fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
 
     // Write to the requested target path (in-repo or shadow).
     let yaml_path = store::target_path_for_new(dir, location);
+
+    // Guard 🎯T24 against the would-be repo root before any write.
+    // For in-repo writes this is the cwd; for external writes the
+    // shadow tree is not a git repo so the guard passes.
+    let probe_root = match location {
+        Location::InRepo => dir.to_path_buf(),
+        Location::External => yaml_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| dir.to_path_buf()),
+    };
+    repo_guard::check_mutation_allowed(&probe_root)
+        .map_err(|guard| tool_err(guard.message(dir)))?;
+
     if let Some(parent) = yaml_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| tool_err(format!("failed to create {}: {e}", parent.display())))?;
