@@ -518,9 +518,11 @@ This decomposes into two sub-objectives:
 The signal for both is the same: **distance to the nearest
 checkpoint**. A checkpoint is a target whose completion produces a
 signal the human can react to — a verify-kind target by definition
-(machine signs off), or a work-kind target explicitly marked
-`showcase: true` (the agent owes a recorded user-visible
-demonstration on retirement, see 🎯T14). Long chains of
+(its whole purpose is to emit a pass/fail signal). The earlier
+`showcase: true` flag on work targets (v0.13.0–v0.26.0) carried the
+same checkpoint role with an additional retire-time demonstration
+obligation; it was retired in v0.27.0 (🎯T23) after the obligation
+half failed to change agent behaviour in practice. Long chains of
 non-checkpoint targets are **tunnels**, and repo-level ordering
 actively steers away from them.
 
@@ -558,11 +560,10 @@ no momentum parameter.
 When the top-ranked frontier candidate has *no* checkpoint
 reachable at all, `bullseye_convergence` refuses to auto-select it.
 Instead it emits a `**Blocked**:` next-action line recommending the
-user reshape the graph — either add an intermediate verify target
-or promote an existing downstream work target to `showcase:
-true`. The `**Blocked**:` prefix triggers the `/cv` skill's
-existing pause-for-human branch, so the agent doesn't blunder
-forward into a tunnel it can't see the end of. See
+user reshape the graph by adding a verify target above one of the
+tunneled work targets. The `**Blocked**:` prefix triggers the `/cv`
+skill's existing pause-for-human branch, so the agent doesn't
+blunder forward into a tunnel it can't see the end of. See
 [`graph::tunnels`] for the flag-on-detection side and
 `convergence::render_next_action` for the block-on-selection side;
 they share the same `is_checkpoint` predicate.

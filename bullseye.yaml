@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 targets:
   T1:
     name: MCP triad integration (targets + sawmill + mnemo)
@@ -45,7 +45,6 @@ targets:
     status: achieved
     value: 5.0
     cost: 3.0
-    showcase: true
     acceptance:
     - bullseye_summary accepts an optional momentum parameter (map of target ID to multiplier)
     - When momentum is present, each target's WSJF score is multiplied by its value before ranking; targets missing from the map default to 1.0 (no-op)
@@ -63,7 +62,6 @@ targets:
     status: achieved
     value: 8.0
     cost: 3.0
-    showcase: true
     acceptance:
     - /cv calls targets_frontier + targets_rank (no markdown parsing)
     - /cv optionally calls mnemo_recent_activity for momentum
@@ -84,8 +82,6 @@ targets:
     status: achieved
     value: 5.0
     cost: 3.0
-    showcase: true
-    demonstration: 'Inspected the shipped integration end-to-end. mnemo''s compactor (since v0.28.0) reads the bullseye target graph via the new internal/targets package (walking up from session CWD to find bullseye.yaml), injects a "Bullseye target graph" preface into the LLM prompt, parses targets_active / targets_progressed / targets_next from the LLM output, and persists them as structured fields in the compactions table payload. mnemo_restore''s tool description exposes the contract directly ("structured summaries (targets, decisions, files touched, open threads) produced by the background compactor"). Ran TestCompactRoundTripWithTargets, TestBuildUserPrompt_WithTargets, and TestBuildUserPrompt_NilTargetContext in /Users/marcelo/work/github.com/marcelocantos/mnemo/internal/compact — all PASS. Sample output shape: `{"targets_active": ["T1.4"], "targets_progressed": {"T1.4": "compactor reads bullseye.yaml"}, "targets_next": "T1.5"}`. Live compaction in the user''s index hasn''t fired yet (5-min compactor tick on active sessions; compactions table currently empty across the whole DB) but the integration is wired, tested, and shipped — the empty table is a "runtime hasn''t ticked yet" condition, not a missing integration.'
     acceptance:
     - mnemo summarizer calls targets_list to anchor compaction output
     - Compaction includes targets_active, targets_progressed, targets_next fields
@@ -109,8 +105,6 @@ targets:
     status: achieved
     value: 5.0
     cost: 5.0
-    showcase: true
-    demonstration: 'Drove a live rework cycle in an isolated bullseye repo with both structured payloads. After calling bullseye_rework with a sawmill_failure JSON (two unit-test failures with file/line/expected/actual fields) and a mnemo_history JSON (two prior session attempts with timestamps, summaries, and open threads), bullseye_get on the rework target T1 returned the combined context with the free-form diagnosis line followed by a `## Sawmill failure` fenced JSON block and a `## Prior attempts (mnemo)` fenced JSON block. The verify target T1.v reset to identified, retry counter incremented to 1. Mnemo upstream half (mnemo_rework_history) shipped in mnemo PR #63 (2026-04-26).'
     acceptance:
     - Verify target failure includes sawmill structural failure report
     - Rework diagnosis includes mnemo prior-attempt history
@@ -194,7 +188,6 @@ targets:
     status: achieved
     value: 8.0
     cost: 8.0
-    showcase: true
     actual_cost: 8.0
     acceptance:
     - ~/.config/bullseye/config.yaml declares storage.mode as in_repo or external, with storage.root configurable (default ~/.local/share/bullseye)
@@ -265,9 +258,7 @@ targets:
     status: achieved
     value: 5.0
     cost: 3.0
-    showcase: true
     actual_cost: 3.0
-    demonstration: 'All observable references renamed to showcase throughout schema (serde alias preserves backward compat), handler, graph, tools, and docs. bullseye_retire enforces non-empty demonstration on showcase targets (whitespace-only rejected). Two regression tests added: legacy_observable_field_still_deserialises and retire_showcase_target_requires_demonstration. Audit log records v0.19.0 release. All 117 tests pass, clippy clean.'
     acceptance:
     - The `observable` field is renamed to `showcase` (or equivalent) throughout schema, docs, and tooling
     - Target retirement requires a showcase step when the flag is set — documented in the convention and enforced in the bullseye_retire flow
@@ -333,7 +324,6 @@ targets:
     status: identified
     value: 5.0
     cost: 3.0
-    showcase: true
     acceptance:
     - The launchd job com.marcelocantos.yadm-auto-sync is unloaded and the plist removed
     - The script ~/.local/bin/yadm-auto-sync is removed (or reduced to a thin invocation of the executor CLI)
@@ -377,7 +367,6 @@ targets:
     status: achieved
     value: 0.0
     cost: 0.0
-    showcase: true
     actual_cost: 2.0
     acceptance:
     - '`bullseye_frontier`, `bullseye_summary`, and `bullseye_convergence` output include a one-line banner naming the repo-scope ordering function (min distance-to-observable, max fanout) and explicitly disavowing WSJF/value/cost at repo scope'
@@ -404,7 +393,6 @@ targets:
     status: achieved
     value: 0.0
     cost: 0.0
-    showcase: true
     acceptance:
     - 'Fresh read per tool call: every mutation (bullseye_put, bullseye_retire, and any other write-bearing tool) re-reads bullseye.yaml from disk before applying its changes. The cross-tool-call in-memory cache is removed, or invalidated via a cheap mtime+size check before every read.'
     - 'File lock around the read-modify-write cycle: mutations acquire an exclusive advisory lock (flock(2) on POSIX, LockFileEx on Windows) on bullseye.yaml for the entire RMW window. Concurrent bullseye processes serialise cleanly; readers that only list don''t need the lock.'
@@ -555,7 +543,6 @@ targets:
     status: achieved
     value: 8.0
     cost: 5.0
-    showcase: true
     acceptance:
     - '`bullseye_portfolio` returns repos ranked by an aggregate WSJF score combining per-target `value`/`cost`, caller-supplied momentum, and cross-repo enabler propagation'
     - 'Per-repo formula committed: `sum(value_i / cost_i × momentum_i × enabler_boost_i) / frontier_size_i`. The `frontier_size_i` divisor encodes the bias that parallelisable repos need less per-unit human attention'
@@ -579,7 +566,6 @@ targets:
     status: achieved
     value: 5.0
     cost: 3.0
-    showcase: true
     acceptance:
     - '"/cv global" runs portfolio-level evaluation'
     - Presents top 1-3 repos with reasoning
@@ -742,7 +728,6 @@ targets:
     status: set_aside
     value: 5.0
     cost: 3.0
-    showcase: true
     set_aside_reason: Parked — speculative; design of the Focus section (what to show, how to update, schema replication path) isn't settled yet. Revisit when the priorities sync output is concrete enough to drive a clear UI decision.
     acceptance:
     - Focus section renders above daily checklist
@@ -995,7 +980,6 @@ targets:
     status: achieved
     value: 3.0
     cost: 1.0
-    showcase: true
     acceptance:
     - '`docs/agents-guide.md` §`bullseye_convergence` hook documents the decomposed Makefile form — `bullseye:` as an aggregator phony target depending on independent `check-fmt`, `check-clippy`, `check-tests`, `check-clean` sub-rules (or equivalent per-tool split)'
     - Preamble shows `NPROC := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)` followed by `MAKEFLAGS += -j$(NPROC)` with portable fallback chain

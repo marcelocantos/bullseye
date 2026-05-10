@@ -143,9 +143,6 @@ fn check_target_no_envelope_leaks(id: &str, target: &crate::schema::Target) -> R
     check_no_envelope_leak(&format!("{id}.name"), &target.name)?;
     check_no_envelope_leak(&format!("{id}.context"), &target.context)?;
     check_no_envelope_leak(&format!("{id}.origin"), &target.origin)?;
-    if let Some(d) = &target.demonstration {
-        check_no_envelope_leak(&format!("{id}.demonstration"), d)?;
-    }
     if let Some(r) = &target.set_aside_reason {
         check_no_envelope_leak(&format!("{id}.set_aside_reason"), r)?;
     }
@@ -364,9 +361,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 status,
                 value,
                 cost,
-                showcase: t.showcase.unwrap_or(false),
                 actual_cost: None,
-                demonstration: None,
                 set_aside_reason: None,
                 acceptance,
                 checks: Vec::new(),
@@ -426,8 +421,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 || t.tags.is_some()
                 || t.origin.is_some()
                 || t.depends_on.is_some()
-                || t.verifies.is_some()
-                || t.showcase.is_some();
+                || t.verifies.is_some();
             if target_currently_achieved && would_remain_achieved && content_edits_present {
                 return Err(format!(
                     "🎯{id} is achieved — its content is immutable. Re-open it first by \
@@ -459,9 +453,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             }
             if let Some(ref deps) = t.depends_on {
                 target.depends_on = deps.clone();
-            }
-            if let Some(showcase) = t.showcase {
-                target.showcase = showcase;
             }
             if let Some(ref verifies) = t.verifies {
                 target.verifies = verifies.clone();
@@ -541,29 +532,10 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
 pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
 
-    // Envelope-leak guard (🎯T20).
-    if let Some(s) = &t.demonstration {
-        check_no_envelope_leak("demonstration", s).map_err(tool_err)?;
-    }
-
     enum Outcome {
         AlreadyAchieved,
-        Retired {
-            name: String,
-            cost: f64,
-            demonstration: Option<String>,
-        },
+        Retired { name: String, cost: f64 },
     }
-
-    // Normalise the optional demonstration to its trimmed form once
-    // — empty/whitespace-only strings are treated as "not provided"
-    // so callers can't sidestep the showcase obligation by passing
-    // a single space.
-    let demonstration: Option<String> = t
-        .demonstration
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
 
     let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
         let target = file
@@ -573,54 +545,26 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
         if target.status == Status::Achieved {
             return Ok(Outcome::AlreadyAchieved);
         }
-        // Showcase obligation (🎯T14): a target with `showcase: true`
-        // must be demonstrated before it retires. A non-empty
-        // `demonstration` argument is the recorded evidence; refuse
-        // retirement otherwise so the agent can't shortcut a real
-        // demo with a "tests pass" report.
-        if target.showcase && demonstration.is_none() {
-            return Err(format!(
-                "🎯{id} is a showcase target — `bullseye_retire` requires a non-empty \
-                 `demonstration` argument describing what was actually shown to the user \
-                 (e.g. \"ran the binary with the player attached and shared a screen \
-                 recording\"). Technical verification (\"tests pass\", \"builds clean\") \
-                 is not a demonstration. Retire this target only after performing the \
-                 user-visible step the showcase flag promised, and pass that step's \
-                 description as `demonstration`.",
-                id = t.id,
-            ));
-        }
         target.status = Status::Achieved;
         target.achieved = Some(Local::now().date_naive());
         if let Some(actual) = t.actual_cost {
             target.actual_cost = Some(actual);
         }
-        if let Some(ref demo) = demonstration {
-            target.demonstration = Some(demo.clone());
-        }
         Ok(Outcome::Retired {
             name: target.name.clone(),
             cost: target.cost,
-            demonstration: demonstration.clone(),
         })
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
     match outcome {
         Outcome::AlreadyAchieved => text_result(format!("🎯{} is already achieved", t.id)),
-        Outcome::Retired {
-            name,
-            cost,
-            demonstration,
-        } => {
+        Outcome::Retired { name, cost } => {
             git_commit::auto_commit_yaml(&path);
 
             let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
             if let Some(actual) = t.actual_cost {
                 out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
-            }
-            if let Some(demo) = demonstration {
-                out.push_str(&format!("\nDemonstration: {demo}"));
             }
             append_tunnel_warnings(&mut out, &path);
             text_result(out)
@@ -740,13 +684,7 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
     for rf in &ranked {
         let ft = rf.target;
         let kind_label = match ft.kind {
-            crate::schema::Kind::Work => {
-                if file.targets.get(&ft.id).is_some_and(|t| t.showcase) {
-                    " [showcase]"
-                } else {
-                    ""
-                }
-            }
+            crate::schema::Kind::Work => "",
             crate::schema::Kind::Verify => " [verify]",
         };
         let distance_label = match rf.distance {
@@ -1297,7 +1235,6 @@ targets:
             kind: None,
             status: None,
             depends_on: None,
-            showcase: None,
             blocks: None,
             verifies: None,
             origin: None,
@@ -1777,9 +1714,7 @@ targets:
             status: Status::Identified,
             value: 0.0,
             cost: 0.0,
-            showcase: false,
             actual_cost: None,
-            demonstration: None,
             set_aside_reason: None,
             acceptance: vec!["fine".into()],
             checks: Vec::new(),
