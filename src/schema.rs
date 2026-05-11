@@ -32,7 +32,16 @@ use serde::{Deserialize, Serialize};
 ///   dependents) but distinct from achieved in summary output. Older
 ///   binaries reading a v3 file fail at load with a "schema_version
 ///   too new" error rather than silently dropping the new variant.
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+/// - `Some(4)` → 🎯T23: the `showcase` construct is removed entirely.
+///   The boolean field on `Target` (and its legacy `observable` alias)
+///   is gone, the `demonstration` field is gone, and `bullseye_put` /
+///   `bullseye_retire` no longer accept the corresponding parameters.
+///   Only verify-kind targets are checkpoints now. Pre-v4 YAML files
+///   continue to load — `showcase` and `demonstration` keys are
+///   ignored on parse via serde's default behaviour and are stripped
+///   on the next save. Older binaries reading a v4 file fail at load
+///   with a "schema_version too new" error.
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 /// Top-level targets file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,50 +145,9 @@ pub struct Target {
     /// does not drive repo-level frontier ordering. See 🎯T7.
     pub cost: f64,
 
-    /// Showcase marker — the obligation half of the
-    /// "this target produces a human-visible checkpoint" idea.
-    ///
-    /// A work target with `showcase: true` declares an *obligation*
-    /// the agent must discharge on retirement: literally demonstrate
-    /// the user-visible result (run the binary with the player
-    /// attached, publish the screenshot, open the dashboard, etc.)
-    /// — not just report "checks pass". `bullseye_retire` enforces
-    /// this by requiring a non-empty `demonstration` parameter when
-    /// the target carries this flag, recorded as
-    /// [`Target::demonstration`] for posterity.
-    ///
-    /// At the prioritisation layer, a showcase target counts as a
-    /// **checkpoint** for distance-to-checkpoint ordering, alongside
-    /// verify-kind targets (which are checkpoints by definition —
-    /// their whole point is to emit a pass/fail signal). Chains of
-    /// non-checkpoint targets longer than a few hops form **tunnels**
-    /// that repo-level ordering actively steers away from. See
-    /// [`crate::graph::is_checkpoint`] and 🎯T7, 🎯T14 in
-    /// `bullseye.yaml`.
-    ///
-    /// Renamed from `observable` in schema v2 to make the obligation
-    /// half of the original "produces something visible" intent
-    /// explicit. The legacy YAML key still deserialises via
-    /// `#[serde(alias = "observable")]` so old files load cleanly.
-    /// Default `false`; omitted from YAML when false so the common
-    /// case stays clean.
-    #[serde(default, alias = "observable", skip_serializing_if = "is_false")]
-    pub showcase: bool,
-
     /// Actual cost recorded on retirement, for calibration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_cost: Option<f64>,
-
-    /// Demonstration recorded on retirement of a showcase target —
-    /// a human-readable note describing what was actually shown to
-    /// the user (e.g. "ran tiltbuggy with player attached and shared
-    /// the live frames", "deployed to staging and walked the user
-    /// through the new flow"). Required by `bullseye_retire` when
-    /// the target carries `showcase: true`; omitted otherwise.
-    /// Persisted so that the historical record of why the target was
-    /// considered done is auditable after the fact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub demonstration: Option<String>,
 
     /// Rationale recorded when the target's status is set to
     /// [`Status::SetAside`] — the free-text "why we decided not to
@@ -409,10 +377,6 @@ pub enum Kind {
 
 fn is_zero(v: &u32) -> bool {
     *v == 0
-}
-
-fn is_false(v: &bool) -> bool {
-    !*v
 }
 
 fn is_work(kind: &Kind) -> bool {

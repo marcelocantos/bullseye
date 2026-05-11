@@ -511,11 +511,10 @@ fn render_next_action(
     // no checkpoint reachable at all, selecting it would extend a
     // tunnel — a chain of non-checkpoint targets with no
     // human-visible signal at the end. Recommend reshaping the graph
-    // (adding an intermediate verify target or promoting an existing
-    // work target to `showcase: true`) rather than blundering
-    // forward. Uses the `**Blocked**:` prefix so the `/cv` skill's
-    // existing auto-execute branch correctly pauses instead of
-    // dispatching to an agent. See acceptance #5 on 🎯T7.
+    // (adding a verify target above the candidate) rather than
+    // blundering forward. Uses the `**Blocked**:` prefix so the `/cv`
+    // skill's existing auto-execute branch correctly pauses instead
+    // of dispatching to an agent. See acceptance #5 on 🎯T7.
     let top = &ranked[0];
     if top.distance.is_none() {
         let tun_len = ranked.iter().take_while(|rf| rf.distance.is_none()).count();
@@ -523,11 +522,10 @@ fn render_next_action(
             "**Blocked**: top frontier target 🎯{id} \"{name}\" would extend a tunnel with \
              no checkpoint reachable downstream. {tun_len} of {total} frontier \
              target(s) have no checkpoint reachable at all.\n\n\
-             Reshape the graph before proceeding — either add an intermediate verify target \
-             or mark an existing downstream work target as `showcase: true` so the \
-             decision-maker gets a checkpoint within a few hops. See the ## Frontier section \
-             above for the full target list and the 🎯T7 rationale in \
-             `docs/mcp-triad.md` §9.\n",
+             Reshape the graph before proceeding — add a verify target above one of the \
+             tunneled work targets so the decision-maker gets a checkpoint within a few \
+             hops. See the ## Frontier section above for the full target list and the \
+             🎯T7 rationale in `docs/mcp-triad.md` §9.\n",
             id = top.target.id,
             name = top.target.name,
             total = ranked.len(),
