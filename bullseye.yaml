@@ -275,9 +275,10 @@ targets:
     achieved: 2026-04-26
   T15:
     name: A bullseye-native executor converges declared-strategy targets without human intervention
-    status: identified
+    status: set_aside
     value: 13.0
     cost: 13.0
+    set_aside_reason: Delegated to crosshair — the executor itself is tracked at marcelocantos/crosshair, an independent project. Bullseye's contribution (the Strategy YAML block) shipped in v0.25.0 via 🎯T15.2; the daemon, escalation ladder, persistence, and CLI live in crosshair. Crosshair consumes bullseye's YAML format the way kubectl consumes K8s YAML — a format dependency, not a project linkage.
     acceptance:
     - Targets in bullseye.yaml can declare a `strategy` block (command, trigger, timeout, retry/backoff policy)
     - A daemon reads strategy-bearing targets and runs them on a convergence loop, persisting per-target attempt state
@@ -321,9 +322,10 @@ targets:
     discovered: 2026-04-17
   T15.1:
     name: yadm-tracked dotfiles converge to clean+pushed state via the executor, replacing the launchd script
-    status: identified
+    status: set_aside
     value: 5.0
     cost: 3.0
+    set_aside_reason: Delegated to crosshair — yadm-sync convergence is operational executor work tracked at marcelocantos/crosshair, not bullseye. Bullseye-side Strategy schema shipped in v0.25.0 (🎯T15.2 achieved); no further bullseye-side work remains.
     acceptance:
     - The launchd job com.marcelocantos.yadm-auto-sync is unloaded and the plist removed
     - The script ~/.local/bin/yadm-auto-sync is removed (or reduced to a thin invocation of the executor CLI)
@@ -682,6 +684,37 @@ targets:
     origin: manual — discovered while shipping 🎯T21 follow-ups
     discovered: 2026-04-28
     achieved: 2026-04-28
+  T23:
+    name: The showcase construct is removed from bullseye — schema, tools, docs, tests, and self-targets carry no `showcase`/`demonstration` field, and `bullseye_retire` no longer enforces a demonstration string
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - The `showcase` and `demonstration` fields are removed from `schema::Target`, the `#[serde(alias = "observable")]` is gone, and CURRENT_SCHEMA_VERSION is bumped (with a v4 doc note explaining the breaking removal)
+    - '`is_checkpoint` returns true only for verify-kind targets; `tunnels` and tunnel candidate suggestions describe "add a verify target above this candidate" rather than "flip showcase: true"'
+    - '`bullseye_put` no longer accepts a `showcase` parameter and `bullseye_retire` no longer accepts (or requires) a `demonstration` parameter; tool docstrings, banner, and legend reflect the simplified model'
+    - Tests dropping showcase-specific behaviour (legacy_observable_field_still_deserialises, retire_showcase_target_requires_demonstration, retire_non_showcase_target_does_not_require_demonstration, showcase_field_yaml_roundtrip, showcase_flag_changes_frontier_order, tunnels_treats_showcase_work_as_checkpoint) are removed; remaining `Target` literals build cleanly without `showcase` / `demonstration`
+    - README, STABILITY, agents-guide, mcp-triad, and audit-log all describe the removal; STABILITY records the v4 schema bump and removed parameters
+    - 'bullseye.yaml in this repo is stripped of all `showcase: true` lines on active targets and the file loads + saves cleanly with no remaining showcase references in active target metadata'
+    - '`cargo build`, `cargo test`, `cargo clippy --all-targets`, and `cargo fmt --check` all pass at HEAD of the integration branch'
+    context: 'User declared the showcase construct ineffective in practice and asked for a clean removal. The flag was introduced in v0.13.0 (as `observable`) and renamed/strengthened in v0.19.0 (🎯T14) to oblige a `demonstration` string on retire. Empirically it didn''t change agent behaviour — the demonstration step it was meant to force still got skipped, while the field added schema surface, doc surface, tunnel-candidate code paths, and a parameter on `bullseye_put`/`bullseye_retire` that callers had to reason about. Removing it simplifies the model back to: verify-kind targets are checkpoints, everything else isn''t. Tunnel resolution becomes "add a verify target" full stop. This is a breaking change to schema (v3 → v4), to `bullseye_put` (loses `showcase`), and to `bullseye_retire` (loses `demonstration`); v3 yaml files load via permissive deserialisation and lose `showcase` / `demonstration` keys on next save (one-shot migration, equivalent to how `observable` → `showcase` migrated in v0.19.0).'
+    origin: manual
+    discovered: 2026-05-03
+    achieved: 2026-05-11
+  T24:
+    name: bullseye refuses to mutate when running inside a submodule replica of the target repo
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Before any mutating operation (put, retire, rework, set_aside, validate-with-rewrite, etc.) bullseye runs git rev-parse --show-superproject-working-tree. If the output is non-empty (i.e. cwd is inside a submodule), the mutation is refused with a clear error naming the superproject path and suggesting the canonical clone location (e.g. `~/work/<host>/<owner>/<repo>/`)
+    - Read-only operations (list, frontier, get, summary, graph, etc.) are unaffected - they continue to work in submodule checkouts so an agent doing research from inside a parent project can still see targets
+    - Mutating operations additionally refuse to auto-commit when HEAD is detached, even if not in a submodule. Detached HEAD means the user is at a tag or arbitrary SHA; auto-committing creates a dangling local branch that goes nowhere. The refusal explains that the user must check out a named branch first
+    - 'Refusal messages are actionable: name the actual cwd, name the superproject (when applicable), name the suggested canonical path, and tell the agent how to retry (cd elsewhere or invoke with the right cwd parameter)'
+    - 'Test coverage: a regression test creates a parent repo, adds the target repo as a submodule, runs bullseye_put with cwd inside the submodule, and asserts the call refuses with the expected error and that no commit lands in the submodule'
+    origin: multimaze2 5/2026 - filed T41 in the multimaze2/ge submodule, which auto-committed to a local-only branch one commit past v0.9.0. The canonical clone showed nothing on grep. Auto-commit hides the modification from `git status` in the parent, so the bug is invisible until you go looking
+    discovered: 2026-05-09
+    achieved: 2026-05-11
   T3:
     name: Protocol app priority sync
     status: set_aside
