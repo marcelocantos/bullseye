@@ -33,6 +33,22 @@ interaction surface:
   clock to v0.27.0 — schema bump, removed parameters on two mutating
   tools.
 
+- **Mutating operations refuse submodule replicas and detached HEAD**
+  (🎯T24). `bullseye_put`, `bullseye_retire`, `bullseye_set_aside`,
+  `bullseye_rework`, `bullseye_init`, and `bullseye_import` now run
+  `git rev-parse --show-superproject-working-tree` and
+  `git symbolic-ref -q HEAD` against the repo containing the
+  discovered `bullseye.yaml` before any read or write. If the file
+  lives inside a submodule replica of the canonical repo, the call
+  is refused with an error naming the superproject path and the
+  suggested canonical clone location (e.g.
+  `~/work/<host>/<owner>/<repo>/`). If HEAD is detached (tag, SHA,
+  arbitrary checkout), mutation is refused with an explanation that
+  auto-committing would land on a dangling local branch. Read-only
+  operations (list, frontier, get, summary, graph, validate, etc.)
+  are unaffected. Tool surface is unchanged — the refusal is a new
+  error class only.
+
 Earlier v0.26.0 changes still in effect:
 
 - **Advisory validation warnings no longer suppress `## Frontier`**
