@@ -715,6 +715,57 @@ targets:
     origin: multimaze2 5/2026 - filed T41 in the multimaze2/ge submodule, which auto-committed to a local-only branch one commit past v0.9.0. The canonical clone showed nothing on grep. Auto-commit hides the modification from `git status` in the parent, so the bug is invisible until you go looking
     discovered: 2026-05-09
     achieved: 2026-05-11
+  T25:
+    name: 'Schema v5: target nodes are uniform — kind, verify edges, and rework apparatus are removed'
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - The `kind` field is removed from `Target`; legacy `kind:` values (`work`, `verify`) are silently dropped by serde on parse and stripped on the next save (one-shot migration, same shape as the v3→v4 showcase removal)
+    - The `verifies` edge type and the `rework` edge with retry budget are removed; `depends_on` is the only structural edge type
+    - Failed retirement reverts the target's status (to `converging` if previously attempted, otherwise `identified`) with audit-log entry; replaces the verify→rework retry-budget loop
+    - '`is_checkpoint`, `checkpoint_distance`, `CHECKPOINT_REACH_LIMIT`, tunnel detection (`graph::tunnels`, `format_tunnel_warnings`, `suggest_checkpoint_candidates`), and the `bullseye_tunnels` MCP tool are all removed'
+    - Repo-scope frontier ordering uses `depends_on` shape only (fanout, depth) — no checkpoint distance, no tunnel suppression
+    - '`append_tunnel_warnings` is removed from the post-mutation handler path; mutations no longer emit checkpoint-related warnings'
+    - 'Schema bumps to `schema_version: 5`; pre-v5 yaml files load unchanged with `kind:` / `verifies:` / `rework:` keys silently dropped'
+    - '`bullseye.yaml` for the bullseye project itself is stripped of any remaining verify-kind nodes / verifies edges / rework edges on the migration commit'
+    - README, agents-guide, mcp-triad, STABILITY, and convergence.md are updated to describe the uniform-node model; references to checkpoints/tunnels/verify-kind are removed or rewritten
+    - Cargo tests pass; `make bullseye` is green
+    context: 'Verify-kind targets have the same structural problem showcase had: they''re an arbitrary declaration that the graph and ordering should not have required. Acceptance criteria already carry the verification contract — whether the pass signal comes from CI, a human thumbs-up, a smoke test, or a design review is free-text on the acceptance, not a node-type property. Topologically a human ack and a CI green are identical: an assertion held, the node retires. The `kind` enum encodes shape into types when shape is a property of subgraphs, not nodes. Confusing the two is how showcase happened, and `kind: verify` is the same mistake with a different name. Collapsing the apparatus clears the substrate so graph-shape-as-design-vocabulary can carry the weight that the kind enum was trying to. The collapse also resolves the tool/agent split: bullseye-the-tool becomes minimal substrate (like Make), and the leverage moves to bullseye-the-practice — graph-shaping discipline carried by the agent.'
+    origin: manual
+    discovered: 2026-05-17
+  T26:
+    name: Bullseye has a documented vocabulary of graph-shape patterns plus an agent discipline for using them
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A `docs/shapes.md` catalogue exists, describing recurring graph patterns with name, ASCII diagram, when-to-use heuristic, and a worked example for each
+    - 'The catalogue includes at minimum: diamond (design → build ∥ tests → validate), fan-out (one prerequisite enables many parallel children), chain (sequential dependency), choke-point (many parallel branches converge through a single node), spike-then-decide (research target gates fan-out of parallel implementation paths), contract-first (define API/contract, then parallel implementations against it), migration shape (prepare → cut-over ∥ keep-old-running → verify → remove-old)'
+    - 'Global convergence.md (or equivalent guidance) names the agent discipline: when filing a new target, interrogate whether the acceptance criteria are hiding a subgraph; if they read as ''do X, then Y, then check Z'' inside one node''s text, propose the decomposition before doing the work'
+    - Examples in the catalogue describe the post-v5 model (uniform nodes, no `kind` tagging) so the doc doesn't ossify the about-to-be-removed apparatus
+    - '`bullseye_put` documentation or tool description references the vocabulary so the agent has the pattern names at hand when filing or patching'
+    - At least one existing bullseye target is restructured into a diamond as a worked example of the discipline applied
+    context: Graph shape is the primary artifact in bullseye; nodes are slots that the shape gives meaning to. A vocabulary of recurring patterns lets the agent recognise shapes mid-planning and propose them as decompositions ('this single node smells like a diamond'). Without named patterns and an explicit discipline, shaping stays ad-hoc and the agent under-uses the leverage. This is half of the agent-side investment that turns bullseye from a YAML format into a usable design substrate; the other half is subgraph-shaped tool affordances (separate target). Should be authored consistently with the schema v5 model (uniform nodes) so the doc doesn't need rewriting on landing.
+    origin: manual
+    discovered: 2026-05-17
+  T27:
+    name: Reshaping the graph is a single-call operation, not a sequence of node edits
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A batch / subgraph-shaped tool affordance exists (either an extended `bullseye_put` or a new `bullseye_put_batch` / `bullseye_decompose`) that accepts a description of multiple nodes plus their internal edges in one call
+    - 'Common reshape operations are single-call: splitting one node into a diamond (design → build ∥ tests → validate) is one call, not four `bullseye_put` calls plus manual dependency rewiring on whatever was downstream'
+    - 'The tool supports rewiring: when decomposing node X into a subgraph, any existing dependents of X can be re-pointed to the subgraph''s tail node in the same call'
+    - 'Tests cover end-to-end reshape operations: diamond decomposition, fan-out insertion above an existing node, chain extension, choke-point hoisting (multiple parents → one new prerequisite → many existing children)'
+    - 'The tool surface either supports named patterns from `docs/shapes.md` (e.g. `shape: diamond, parts: [...]`) OR provides a generic enough batch-put that the named patterns can be built on top as a client-side convention'
+    - Documentation for the new affordance points back at the shapes vocabulary
+    context: 'The current schema makes reshaping ceremonial: splitting one node into a diamond is four `bullseye_put` calls plus dependency rewiring on whatever was downstream. That ceremony discourages the move. If continuous graph evolution is the central rhythm (the waterfall → iterative reframe that justifies the whole state-graph framing), the friction of edits must be low enough that the agent reaches for them naturally. Batch / subgraph-shaped operations are what make that friction-free. Depends on schema v5 because designing the batch operation against the simpler post-v5 substrate (uniform nodes, single edge type) is dramatically cleaner than designing it against the current kind/verify/rework apparatus.'
+    depends_on:
+    - T25
+    origin: manual
+    discovered: 2026-05-17
   T3:
     name: Protocol app priority sync
     status: set_aside
