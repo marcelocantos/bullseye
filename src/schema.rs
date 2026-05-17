@@ -41,7 +41,22 @@ use serde::{Deserialize, Serialize};
 ///   ignored on parse via serde's default behaviour and are stripped
 ///   on the next save. Older binaries reading a v4 file fail at load
 ///   with a "schema_version too new" error.
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+/// - `Some(5)` → 🎯T25: the `kind` enum is removed entirely, along
+///   with the `verifies` / `rework` / `retry_budget` / `retries`
+///   fields and the whole checkpoint / tunnel apparatus that grew up
+///   around `kind: verify`. Targets are now uniform: every node has
+///   acceptance criteria, every node retires when those are met,
+///   regardless of whether the pass signal comes from CI, a human ack,
+///   or a smoke test (the signal source is free text on the
+///   acceptance, not a node-type discriminator). Failed retirements
+///   route through the new `bullseye_revert` operation. Pre-v5 YAML
+///   files load unchanged — `kind`, `verifies`, `rework`,
+///   `retry_budget`, and `retries` keys are silently dropped by serde
+///   on parse and stripped on the next save (one-shot migration,
+///   same shape as the v3→v4 showcase removal). Older binaries
+///   reading a v5 file fail at load with a "schema_version too new"
+///   error.
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
 /// Top-level targets file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,10 +133,6 @@ pub struct Target {
     /// Short assertion describing the desired state.
     pub name: String,
 
-    /// Target kind: work (default) or verify.
-    #[serde(default, skip_serializing_if = "is_work")]
-    pub kind: Kind,
-
     /// Current status.
     pub status: Status,
 
@@ -133,16 +144,15 @@ pub struct Target {
     /// cross-repo ordering in [`crate::portfolio`] (the weekly-plus
     /// horizon where human attention is the scarce resource). It is
     /// *not* consumed by repo-level frontier ordering — inside a
-    /// repo, 🎯T7 replaced value/cost throughput optimisation with
-    /// distance-to-nearest-checkpoint ordering, see
-    /// `docs/mcp-triad.md` section 9.
+    /// repo, the frontier is the parallelisable set; ordering is
+    /// derived from `depends_on` shape (unblocking fanout) alone.
     pub value: f64,
 
     /// Agent-estimated cost on Fibonacci scale.
     ///
     /// **Portfolio-scope input only.** Same scoping rule as
     /// [`Target::value`]: cost feeds cross-repo prioritisation but
-    /// does not drive repo-level frontier ordering. See 🎯T7.
+    /// does not drive repo-level frontier ordering.
     pub cost: f64,
 
     /// Actual cost recorded on retirement, for calibration.
@@ -207,25 +217,6 @@ pub struct Target {
     /// portfolio view since completing them unblocks work elsewhere.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cross_enables: Vec<CrossEdge>,
-
-    /// For verify targets: which upstream targets this verifies.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub verifies: Vec<String>,
-
-    /// For verify targets: the upstream target to re-enter on failure.
-    /// When verification fails, the rework target is reset to converging
-    /// and the verify target carries forward a diagnosis.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rework: Option<String>,
-
-    /// Maximum number of rework cycles before escalation.
-    /// Only meaningful on targets that are rework destinations.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry_budget: Option<u32>,
-
-    /// Current retry count (incremented each time rework re-enters this target).
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub retries: u32,
 
     /// Freeform tags (e.g., "visual").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -364,23 +355,6 @@ impl Status {
     pub fn is_terminal(self) -> bool {
         matches!(self, Status::Achieved | Status::SetAside)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum Kind {
-    #[default]
-    Work,
-    Verify,
-}
-
-fn is_zero(v: &u32) -> bool {
-    *v == 0
-}
-
-fn is_work(kind: &Kind) -> bool {
-    *kind == Kind::Work
 }
 
 fn default_origin() -> String {

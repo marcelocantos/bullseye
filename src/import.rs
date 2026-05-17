@@ -7,7 +7,7 @@ use chrono::NaiveDate;
 use regex::Regex;
 
 use crate::schema::{
-    CURRENT_SCHEMA_VERSION, Kind, LegacyGateEdge, Status, Target, TargetsFile,
+    CURRENT_SCHEMA_VERSION, LegacyGateEdge, Status, Target, TargetsFile,
     migrate_gates_to_depends_on,
 };
 
@@ -34,7 +34,10 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
 
         if let Some(caps) = header_re.captures(line) {
             let id = caps[1].to_string();
-            let is_verify = caps.get(2).is_some();
+            // Legacy markdown may carry a ✓ marker that v4 used to
+            // denote a verify-kind target. In v5 there's no kind
+            // discriminator; the marker is parsed but ignored.
+            let _ = caps.get(2);
             let name = caps[3].trim().trim_start_matches('—').trim().to_string();
 
             i += 1;
@@ -142,7 +145,6 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
 
             let target = Target {
                 name,
-                kind: if is_verify { Kind::Verify } else { Kind::Work },
                 status: fields.status.unwrap_or(Status::Identified),
                 value: fields.value.unwrap_or(1.0),
                 cost: fields.cost.unwrap_or(1.0),
@@ -155,10 +157,6 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 depends_on: fields.depends_on,
                 cross_depends: Vec::new(),
                 cross_enables: Vec::new(),
-                verifies: fields.verifies,
-                rework: fields.rework,
-                retry_budget: fields.retry_budget,
-                retries: fields.retries,
                 tags: fields.tags,
                 strategy: None,
                 origin: fields.origin.unwrap_or_else(|| "manual".to_string()),
@@ -216,10 +214,6 @@ struct ParsedFields {
     parent_ref: Option<String>,
     gates: Vec<LegacyGateEdge>,
     depends_on: Vec<String>,
-    verifies: Vec<String>,
-    rework: Option<String>,
-    retry_budget: Option<u32>,
-    retries: u32,
     tags: Vec<String>,
     origin: Option<String>,
     discovered: Option<NaiveDate>,
@@ -288,17 +282,8 @@ fn parse_field(line: &str, lines: &[&str], i: &mut usize, fields: &mut ParsedFie
         "Depends on" => {
             fields.depends_on = parse_target_refs(field_value);
         }
-        "Verifies" => {
-            fields.verifies = parse_target_refs(field_value);
-        }
-        "Rework" => {
-            fields.rework = parse_target_ref(field_value);
-        }
-        "Retry budget" => {
-            fields.retry_budget = field_value.parse().ok();
-        }
-        "Retries" => {
-            fields.retries = field_value.parse().unwrap_or(0);
+        "Verifies" | "Rework" | "Retry budget" | "Retries" => {
+            // v4 fields removed in v5. Ignore on legacy markdown imports.
         }
         "Tags" => {
             fields.tags = field_value
@@ -413,24 +398,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_verify_kind() {
+    fn legacy_verify_marker_and_fields_silently_dropped() {
+        // The v4 ✓ marker on the header line and the Verifies / Rework /
+        // Retry budget bullets are all v4 apparatus. v5 imports parse
+        // them without error but drops them on the floor — the target
+        // is a plain work-like node with no kind discriminator.
         let md = r#"# Targets
 
 ## Active
 
-### 🎯T5 ✓ Verify things work
+### 🎯T5 ✓ Was a verify target
 - **Weight**: 3 (value 3 / cost 1)
 - **Acceptance**: tests pass
 - **Verifies**: 🎯T1, 🎯T3
 - **Rework**: 🎯T1
+- **Retry budget**: 3
 - **Status**: Identified
 - **Discovered**: 2026-03-10
 "#;
         let file = parse_markdown(md).unwrap();
         let t5 = &file.targets["T5"];
-        assert_eq!(t5.kind, Kind::Verify);
-        assert_eq!(t5.verifies, vec!["T1", "T3"]);
-        assert_eq!(t5.rework.as_deref(), Some("T1"));
+        assert_eq!(t5.name, "Was a verify target");
+        assert_eq!(t5.status, Status::Identified);
     }
 
     #[test]

@@ -5,9 +5,9 @@ Reference for AI agents using Bullseye as an MCP server.
 ## What Bullseye does
 
 Bullseye manages **targets** — desired project states expressed as
-testable properties. It stores targets in
-`bullseye.yaml`, computes which are unblocked (the frontier),
-and detects gaps in verification coverage.
+testable properties. It stores targets in `bullseye.yaml`, computes
+which are unblocked (the frontier), and helps agents fan out across
+parallel work.
 
 Every target-operating tool accepts a `cwd` parameter. Where the
 targets file is discovered depends on the configured storage mode.
@@ -86,14 +86,13 @@ inside a single repo. Provide them when adding a target intended to
 participate in cross-repo WSJF ranking. On patch, all fields are
 optional; only the ones provided are changed.
 
-**Achieved targets are immutable.** As of v0.13.0 `bullseye_put`
-rejects content edits (name/acceptance/context/value/cost/tags/
-depends_on/verifies) on a target whose current status
-is `achieved`. Achieved targets are historical artifacts. To
-modify one, re-open it first by patching `status: identified`
-— either in a prior call, or atomically in the same call
-alongside the content edits (the reopen applies first, then
-the content lands on the now-identified target). Status-only
+**Achieved targets are immutable.** `bullseye_put` rejects content
+edits (name/acceptance/context/value/cost/tags/depends_on) on a
+target whose current status is `achieved`. Achieved targets are
+historical artifacts. To modify one, re-open it first by patching
+`status: identified` — either in a prior call, or atomically in the
+same call alongside the content edits (the reopen applies first,
+then the content lands on the now-identified target). Status-only
 transitions on achieved targets remain allowed.
 
 | Parameter | Type | Default | Description |
@@ -103,13 +102,11 @@ transitions on achieved targets remain allowed.
 | `name` | string | null | Desired state assertion (required on create) |
 | `value` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
 | `cost` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
-| `acceptance` | string[] | null | How to verify the target is achieved (required on create) |
+| `acceptance` | string[] | null | How to verify the target is achieved (required on create). This is the verification contract — whether the pass signal comes from CI, a human review, a smoke test, or a design walkthrough is described here in free text. |
 | `context` | string | null | Why this target matters |
-| `kind` | string | `"work"` on create | `"work"` or `"verify"`; settable only on create |
 | `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"`. The `set_aside` value is **not** settable here — call `bullseye_set_aside(id, reason)` instead so the rationale is always recorded. |
 | `depends_on` | string[] | null | IDs of targets this one depends on (must be achieved first) |
 | `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work. Refuses to inject into achieved targets (same rule as content patches). |
-| `verifies` | string[] | null | For verify targets: IDs of targets this verifies |
 | `origin` | string | `"manual"` on create | How the target was created |
 | `tags` | string[] | null | Freeform tags |
 
@@ -168,54 +165,40 @@ report template. Checks come in three shapes, matching the
 | `cwd` | string | required | Working directory |
 | `id` | string | required | Target ID whose `checks` field should be planned |
 
+### bullseye_revert
+
+Move a target from achieved back to converging — use this when a
+regression or new information shows that the achievement was premature.
+Clears the achieved date and appends `Reverted YYYY-MM-DD: <reason>`
+to the target's context. Achievement-only: to resume a set-aside
+target use `bullseye_put` with `status: identified`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `id` | string | required | The achieved target to revert |
+| `reason` | string | required | Why the achievement is being reversed |
+
 ### bullseye_frontier
 
 Compute unblocked leaf targets ready for work. Validates the target
 graph first and returns errors if invalid.
 
-As of v0.13.0, the frontier is ordered by the **repo-level signal**:
-ascending distance to the nearest checkpoint, tiebroken by
-descending unblocking fanout (count of active targets that depend
-on this one), then ascending ID. Per-target `value`/`cost` and
-`momentum` are **not consumed** — those are portfolio-scope inputs.
-When every frontier target has no checkpoint reachable at all,
-`bullseye_convergence`'s next-action emits a `**Blocked**: … reshape`
-recommendation instead of auto-selecting, prompting the human to
-add a verify target above one of the tunneled work targets.
+The frontier is the *parallelisable set* — agents are expected to fan
+out across it rather than pick a single item. Frontier targets are
+ordered by **descending unblocking fanout** (count of active targets
+that depend on this one), tiebroken by ascending ID. Per-target
+`value`/`cost` and `momentum` are **not consumed** — those are
+portfolio-scope inputs.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
-
-### bullseye_rework
-
-Trigger rework from a failed verification. Resets the rework
-destination to converging, increments its retry count, and resets the
-verify target to identified.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cwd` | string | required | Working directory |
-| `id` | string | required | The verify target that failed |
-| `diagnosis` | string | `""` | What went wrong (appended to rework target context) |
-
-### bullseye_tunnels
-
-Detect work targets that have no **checkpoint** reachable within N
-hops along the forward dependency graph. As of v0.27.0 the only
-checkpoints are verify-kind targets (the broader `showcase: true`
-flag was retired in 🎯T23). Resolve a tunnel by adding a verify
-target above the offending work.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cwd` | string | required | Working directory |
-| `max_depth` | number | `2` | Maximum hops before flagging |
 
 ### bullseye_validate
 
-Validate the targets file: ID format, dependency references,
-cycle detection, verify/rework constraints.
+Validate the targets file: ID format, dependency references, and
+cycle detection.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -259,9 +242,9 @@ parsed result before writing. Refuses to overwrite an existing
 ### bullseye_startup_context
 
 Return a concise startup context for the current project: active target count,
-frontier targets ready for work, recently achieved targets, and any warnings
-(tunnels, validation errors). Designed for agent consumption at session start —
-pair with mnemo_recent_activity for full session context.
+frontier targets ready for work, recently achieved targets, and any validation
+warnings. Designed for agent consumption at session start — pair with
+mnemo_recent_activity for full session context.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -283,14 +266,13 @@ Use this for cross-project prioritisation and global convergence assessment.
 
 Return a consolidated status overview in one call: active targets
 grouped by parent with rollup counts, frontier (unblocked) targets
-ordered by the repo-level signal (distance-to-checkpoint then
-unblocking fanout), blocked targets with blockers, and stale targets
-with inconsistent graph state. Replaces separate calls to
-`bullseye_list`, `bullseye_frontier`, and `bullseye_validate` when you
-want a single snapshot.
+ordered by descending unblocking fanout, blocked targets with
+blockers, and stale targets with inconsistent graph state. Replaces
+separate calls to `bullseye_list`, `bullseye_frontier`, and
+`bullseye_validate` when you want a single snapshot.
 
-Each frontier entry is annotated with `dist=N, fanout=M` showing the
-two sort keys, so the ordering is always visible and debuggable.
+Each frontier entry is annotated with `fanout=M` showing the sort
+key, so the ordering is always visible and debuggable.
 
 The optional `momentum` parameter is **retained for wire
 compatibility but not consumed at repo scope** as of v0.13.0.
@@ -428,7 +410,7 @@ appropriate caution.
 ## bullseye.yaml schema
 
 ```yaml
-schema_version: 1          # required going forward; legacy files
+schema_version: 5          # required going forward; legacy files
                            # without it are accepted and stamped on
                            # next save. Bullseye refuses to load a
                            # file whose schema_version is higher than
@@ -438,16 +420,17 @@ last_evaluated: <git-sha>  # optional, last /cv evaluation point
 targets:
   T1:
     name: "All tests pass on CI"          # desired state assertion (required)
-    kind: work                            # work (default) or verify
     status: converging                    # identified, converging, achieved,
                                           # set_aside (the latter is set via
                                           # bullseye_set_aside, not bullseye_put).
     value: 8                              # Fibonacci (portfolio-scope input only)
     cost: 3                               # Fibonacci (portfolio-scope input only)
     actual_cost: 5                        # recorded on retirement (optional)
-    acceptance:                           # how to verify achievement (required)
-      - CI green on all platforms
-      - No test skips without documented reason
+    acceptance:                           # verification contract (required):
+      - CI green on all platforms         # prose describing what "done" looks like.
+      - No test skips without documented reason  # whether pass signal comes from
+                                          # CI, human review, smoke test, or design
+                                          # walkthrough is described here in free text.
     checks:                               # v0.13.0: executable checks (optional)
       - convention: no-skipped-tests      # sawmill convention name
       - query:                            # sawmill query tool invocation
@@ -465,34 +448,29 @@ targets:
     cross_enables:                        # v0.13.0: advisory cross-repo enablers
       - repo: marcelocantos/mnemo         # (optional, feeds portfolio ranking)
         capability: "Session startup context"
-    verifies: [T4, T5]                    # verify targets only (optional)
-    rework: T4                            # re-entry on verify failure (optional)
-    retry_budget: 3                       # max rework cycles (optional)
-    retries: 0                            # current retry count (auto-managed)
     tags: [ci, infrastructure]            # freeform (optional)
     origin: manual                        # how created (default "manual")
     discovered: 2026-03-01                # date discovered (required)
     achieved: 2026-03-15                  # date achieved (optional)
 ```
 
-### Phase-boundary hypothesis (v0.13.0)
+### Phase-boundary hypothesis
 
 Bullseye uses different prioritisation engines at repo and portfolio
 scopes (`docs/mcp-triad.md` §9):
 
 - **Repo-level** (sub-week horizon, human as decision-maker): ordering
-  rewards shortest path to the next **checkpoint** (a verify-kind
-  target), tiebroken by unblocking fanout.
-  Per-target `value`/`cost` and the `momentum` input are **not
-  consumed** at this layer. The point is to drive work toward the next
-  human decision point as quickly as possible, and to flag opaque
-  tunnels where the graph has no checkpoint to head toward.
+  rewards maximum unblocking fanout (targets that unblock the most
+  downstream work move more of the graph per unit effort), tiebroken
+  by ascending target ID. Per-target `value`/`cost` and the `momentum`
+  input are **not consumed** at this layer. The frontier is the
+  parallelisable set — agents are expected to fan out across it.
 - **Portfolio-level** (weekly-plus horizon, human as bottleneck
   allocator): WSJF with momentum and cross-repo enabler propagation
   earns its keep. This is where `value`/`cost`/`momentum`/
   `cross_enables` are consumed. 🎯T2.3 is the portfolio engine;
-  v0.13.0 has the schema fields in place but weighted propagation
-  is still pending.
+  the schema fields are in place but weighted propagation is still
+  pending.
 
 The phase boundary means per-target `value` and `cost` should be
 thought of as portfolio-scope inputs — they don't drive repo-level
@@ -519,8 +497,9 @@ Sub-target IDs (`T1.2`) can be created by passing an explicit
 
 `identified` → `converging` → `achieved`
 
-Rework resets a verify target to `identified` and its rework
-destination to `converging`.
+To undo an achievement (e.g. a regression shows it was premature),
+use `bullseye_revert` — it moves the target back to `converging` and
+appends a timestamped revert note to its context.
 
 ### Edges
 
@@ -528,12 +507,8 @@ Bullseye has a single structural edge type: `depends_on`. Legacy
 `gates` edges from older targets files are migrated into `depends_on`
 on load (the owning target absorbs its gates as blockers).
 
-- **depends_on**: Hard blocking. Target cannot start until all
-  dependencies are achieved. The only structural edge.
-- **verifies**: Verify targets validate work targets. Only valid on
-  `kind: verify`.
-- **rework**: On verify failure, re-enter this target. Must be one of
-  the `verifies` targets. Increments `retries` on the destination.
+- **depends_on**: Hard blocking. A target cannot be worked until all
+  of its dependencies are achieved. This is the only structural edge.
 
 ## Typical workflows
 
@@ -563,20 +538,18 @@ bullseye_put(cwd, name, acceptance, blocks: [T5, T7])
     so both become blocked on the new prerequisite in one call
 ```
 
-### Verify and rework
+### Revert a mistaken retirement
 
 ```
-bullseye_frontier(cwd)
-  → includes verify targets when their verifies are achieved
-bullseye_rework(cwd, id, diagnosis)
-  → failed verification triggers rework cycle
+bullseye_revert(cwd, id, reason)
+  → move an achieved target back to converging, clearing the
+    achieved date and appending a timestamped revert note
 ```
 
 ### Health checks
 
 ```
-bullseye_validate(cwd)  → schema conformance
-bullseye_tunnels(cwd)   → work chains with no checkpoint reachable
+bullseye_validate(cwd)  → schema conformance and cycle detection
 bullseye_graph(cwd)     → visual dependency map
 ```
 

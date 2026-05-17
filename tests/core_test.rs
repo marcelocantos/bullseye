@@ -4,8 +4,7 @@
 use std::path::PathBuf;
 
 use bullseye::graph;
-use bullseye::ops;
-use bullseye::schema::{Kind, RetryPolicy, Status, Strategy, TargetsFile};
+use bullseye::schema::{RetryPolicy, Status, Strategy, TargetsFile};
 use bullseye::store;
 
 fn fixture_path() -> PathBuf {
@@ -105,541 +104,6 @@ fn frontier_excludes_blocked() {
     assert!(!ids.contains(&"T2"), "T2 should be blocked by T1");
     assert!(ids.contains(&"T1"));
     assert!(ids.contains(&"T3"));
-}
-
-#[test]
-fn verify_target_kind() {
-    let file = load_fixture();
-    let t5 = &file.targets["T5"];
-    assert_eq!(t5.kind, Kind::Verify);
-    assert_eq!(t5.verifies, vec!["T1", "T3"]);
-}
-
-#[test]
-fn work_target_default_kind() {
-    let file = load_fixture();
-    let t1 = &file.targets["T1"];
-    assert_eq!(t1.kind, Kind::Work);
-    assert!(t1.verifies.is_empty());
-}
-
-#[test]
-fn validate_verify_without_verifies_is_error() {
-    let mut file = load_fixture();
-    // Make T5 a verify target but clear its verifies list.
-    file.targets.get_mut("T5").unwrap().verifies.clear();
-    let errors = graph::validate(&file);
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("T5") && e.contains("non-empty verifies"))
-    );
-}
-
-#[test]
-fn validate_work_with_verifies_is_error() {
-    let mut file = load_fixture();
-    // Give T1 (work) a verifies list.
-    file.targets.get_mut("T1").unwrap().verifies = vec!["T2".to_string()];
-    let errors = graph::validate(&file);
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("T1") && e.contains("must not have verifies"))
-    );
-}
-
-#[test]
-fn frontier_includes_verify_when_unblocked() {
-    let mut file = load_fixture();
-    // Achieve T1 and T3 so T5 becomes unblocked.
-    file.targets.get_mut("T1").unwrap().status = Status::Achieved;
-    file.targets.get_mut("T3").unwrap().status = Status::Achieved;
-    let front = graph::frontier(&file);
-    let ids: Vec<&str> = front.iter().map(|f| f.id.as_str()).collect();
-    assert!(
-        ids.contains(&"T5"),
-        "T5 should be in frontier when T1+T3 achieved"
-    );
-    let t5 = front.iter().find(|f| f.id == "T5").unwrap();
-    assert_eq!(t5.kind, Kind::Verify);
-    assert_eq!(t5.verifies, vec!["T1", "T3"]);
-}
-
-#[test]
-fn mermaid_shows_verifies_edges() {
-    let file = load_fixture();
-    let diagram = graph::mermaid(&file);
-    assert!(diagram.contains("verifies"));
-}
-
-#[test]
-fn rework_field_parsed() {
-    let file = load_fixture();
-    let t5 = &file.targets["T5"];
-    assert_eq!(t5.rework.as_deref(), Some("T1"));
-}
-
-#[test]
-fn retry_budget_parsed() {
-    let file = load_fixture();
-    assert_eq!(file.targets["T1"].retry_budget, Some(3));
-    assert_eq!(file.targets["T1"].retries, 0);
-}
-
-#[test]
-fn validate_rework_must_be_in_verifies() {
-    let mut file = load_fixture();
-    // Point rework at T3 which is not in verifies... wait, T3 IS in verifies.
-    // Point rework at T2 which is NOT in verifies.
-    file.targets.get_mut("T5").unwrap().rework = Some("T2".to_string());
-    let errors = graph::validate(&file);
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("T5") && e.contains("must be in verifies"))
-    );
-}
-
-#[test]
-fn validate_rework_only_on_verify() {
-    let mut file = load_fixture();
-    // Give T1 (work target) a rework field.
-    file.targets.get_mut("T1").unwrap().rework = Some("T2".to_string());
-    let errors = graph::validate(&file);
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("T1") && e.contains("only verify"))
-    );
-}
-
-#[test]
-fn mermaid_shows_rework_edge() {
-    let file = load_fixture();
-    let diagram = graph::mermaid(&file);
-    assert!(diagram.contains("rework"));
-}
-
-#[test]
-fn tunnel_detects_uncovered_work() {
-    let file = load_fixture();
-    let warnings = graph::tunnels(&file, 2);
-    // T2 has no verify target covering it — should be flagged.
-    let t2_warning = warnings.iter().find(|w| w.target_id == "T2");
-    assert!(t2_warning.is_some(), "T2 should be flagged as a tunnel");
-    assert!(
-        t2_warning.unwrap().depth.is_none(),
-        "T2 has no verify reachable"
-    );
-}
-
-#[test]
-fn tunnel_no_warning_for_covered_work() {
-    let file = load_fixture();
-    let warnings = graph::tunnels(&file, 2);
-    // T1 and T3 are covered by T5 (1 hop) — should NOT be flagged.
-    assert!(
-        !warnings.iter().any(|w| w.target_id == "T1"),
-        "T1 should not be flagged (covered by T5)"
-    );
-    assert!(
-        !warnings.iter().any(|w| w.target_id == "T3"),
-        "T3 should not be flagged (covered by T5)"
-    );
-}
-
-#[test]
-fn tunnel_detects_deep_chain() {
-    use bullseye::schema::{Kind as K, Target};
-    use chrono::NaiveDate;
-
-    let mut file = load_fixture();
-    let date = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-
-    // Build a chain: T10 → T11 → T12 → T13(verify covers T10)
-    // T10 is 3 hops from verification — should be flagged at max_depth=2.
-    for (id, deps) in [("T10", vec![]), ("T11", vec!["T10"]), ("T12", vec!["T11"])] {
-        file.targets.insert(
-            id.to_string(),
-            Target {
-                name: format!("Work {id}"),
-                kind: K::Work,
-                status: Status::Identified,
-                value: 1.0,
-                cost: 1.0,
-                actual_cost: None,
-                set_aside_reason: None,
-                acceptance: vec!["done".to_string()],
-                checks: vec![],
-                context: String::new(),
-
-                gates: vec![],
-                depends_on: deps.into_iter().map(String::from).collect(),
-                cross_depends: vec![],
-                cross_enables: vec![],
-                verifies: vec![],
-                rework: None,
-                retry_budget: None,
-                retries: 0,
-                tags: vec![],
-                strategy: None,
-
-                origin: "test".to_string(),
-                discovered: date,
-                achieved: None,
-            },
-        );
-    }
-    // T13 is a verify target covering T10, depending on T12.
-    file.targets.insert(
-        "T13".to_string(),
-        Target {
-            name: "Verify chain".to_string(),
-            kind: K::Verify,
-            status: Status::Identified,
-            value: 1.0,
-            cost: 1.0,
-            actual_cost: None,
-            set_aside_reason: None,
-            acceptance: vec!["verified".to_string()],
-            checks: vec![],
-            context: String::new(),
-            gates: vec![],
-            depends_on: vec!["T12".to_string()],
-            cross_depends: vec![],
-            cross_enables: vec![],
-            verifies: vec!["T10".to_string()],
-            rework: None,
-            retry_budget: None,
-            retries: 0,
-            tags: vec![],
-            strategy: None,
-
-            origin: "test".to_string(),
-            discovered: date,
-            achieved: None,
-        },
-    );
-
-    // At max_depth=2 these are all within range. Test with max_depth=0
-    // where distance 1 is already too far.
-    let warnings_strict = graph::tunnels(&file, 0);
-    // At max_depth=0, any target that is not itself a verify target and doesn't
-    // have a verify target at distance 0 is flagged. Distance 1 = too far.
-    // T10 → T13 at distance 1: flagged.
-    let t10 = warnings_strict.iter().find(|w| w.target_id == "T10");
-    assert!(t10.is_some(), "T10 should be flagged at max_depth=0");
-    assert_eq!(t10.unwrap().depth, Some(1));
-}
-
-#[test]
-fn suggest_candidates_self_for_isolated_orphan() {
-    let file = load_fixture();
-    // T2 in the fixture has no dependents and isn't a checkpoint —
-    // it's an isolated leaf orphan. The only viable candidate is the
-    // target itself (flip showcase=true on T2).
-    let cands = graph::suggest_checkpoint_candidates(&file, "T2");
-    assert_eq!(cands.len(), 1, "got: {cands:#?}");
-    assert_eq!(cands[0].target_id, "T2");
-    assert_eq!(cands[0].reason, graph::CandidateReason::Self_);
-    assert_eq!(cands[0].distance, 0);
-}
-
-#[test]
-fn suggest_candidates_unknown_target_returns_empty() {
-    let file = load_fixture();
-    let cands = graph::suggest_checkpoint_candidates(&file, "T999");
-    assert!(cands.is_empty());
-}
-
-#[test]
-fn suggest_candidates_orders_convergence_then_root_then_self() {
-    use bullseye::schema::{Kind as K, Status, Target};
-    use chrono::NaiveDate;
-
-    // Build a graph from scratch with explicit shape:
-    //   T100 (orphan leaf) ──┐
-    //                        ├──> T102 (convergence: 2 deps)
-    //   T101 (other leaf) ───┘            └──> T103 (root)
-    // Suggestions for T100 should be: T102 (convergence) → T103
-    // (root) → T100 (self).
-    let date = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
-    let mk = |name: &str, deps: Vec<&str>| Target {
-        name: name.to_string(),
-        kind: K::Work,
-        status: Status::Identified,
-        value: 1.0,
-        cost: 1.0,
-        actual_cost: None,
-        set_aside_reason: None,
-        acceptance: vec!["done".to_string()],
-        checks: vec![],
-        context: String::new(),
-        gates: vec![],
-        depends_on: deps.into_iter().map(String::from).collect(),
-        cross_depends: vec![],
-        cross_enables: vec![],
-        verifies: vec![],
-        rework: None,
-        retry_budget: None,
-        retries: 0,
-        tags: vec![],
-        strategy: None,
-        origin: "test".to_string(),
-        discovered: date,
-        achieved: None,
-    };
-
-    let mut file = TargetsFile {
-        schema_version: None,
-        last_evaluated: None,
-        targets: std::collections::BTreeMap::new(),
-    };
-    file.targets.insert("T100".into(), mk("Leaf A", vec![]));
-    file.targets.insert("T101".into(), mk("Leaf B", vec![]));
-    file.targets
-        .insert("T102".into(), mk("Convergence", vec!["T100", "T101"]));
-    file.targets.insert("T103".into(), mk("Root", vec!["T102"]));
-
-    let cands = graph::suggest_checkpoint_candidates(&file, "T100");
-    let ordered_ids: Vec<&str> = cands.iter().map(|c| c.target_id.as_str()).collect();
-    let ordered_reasons: Vec<graph::CandidateReason> = cands.iter().map(|c| c.reason).collect();
-    assert_eq!(ordered_ids, vec!["T102", "T103", "T100"]);
-    assert_eq!(
-        ordered_reasons,
-        vec![
-            graph::CandidateReason::Convergence,
-            graph::CandidateReason::Root,
-            graph::CandidateReason::Self_,
-        ]
-    );
-}
-
-#[test]
-fn format_tunnel_warnings_returns_none_when_clean() {
-    use bullseye::schema::{Kind as K, Status, Target};
-    use chrono::NaiveDate;
-
-    // A work target with a verify target above it — the work has a
-    // checkpoint at distance 1, so no tunnels.
-    let date = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
-    let mut file = TargetsFile {
-        schema_version: None,
-        last_evaluated: None,
-        targets: std::collections::BTreeMap::new(),
-    };
-    let mk = |name: &str, kind: K, deps: &[&str], verifies: &[&str]| Target {
-        name: name.to_string(),
-        kind,
-        status: Status::Identified,
-        value: 1.0,
-        cost: 1.0,
-        actual_cost: None,
-        set_aside_reason: None,
-        acceptance: vec!["done".to_string()],
-        checks: vec![],
-        context: String::new(),
-        gates: vec![],
-        depends_on: deps.iter().map(|s| s.to_string()).collect(),
-        cross_depends: vec![],
-        cross_enables: vec![],
-        verifies: verifies.iter().map(|s| s.to_string()).collect(),
-        rework: None,
-        retry_budget: None,
-        retries: 0,
-        tags: vec![],
-        strategy: None,
-        origin: "test".to_string(),
-        discovered: date,
-        achieved: None,
-    };
-    file.targets
-        .insert("T1".into(), mk("Solo", K::Work, &[], &[]));
-    file.targets
-        .insert("T2".into(), mk("Verify T1", K::Verify, &["T1"], &["T1"]));
-
-    assert!(graph::format_tunnel_warnings(&file, 2).is_none());
-}
-
-#[test]
-fn format_tunnel_warnings_lists_orphans_and_candidates() {
-    let file = load_fixture();
-    // Fixture: T2 is a tunneled orphan (no checkpoint reachable).
-    let section = graph::format_tunnel_warnings(&file, 2)
-        .expect("fixture should produce a tunnel warning for T2");
-    assert!(section.contains("Tunnel warnings"));
-    assert!(
-        section.contains("🎯T2"),
-        "section should name the orphaned target; got:\n{section}"
-    );
-    assert!(
-        section.contains("no checkpoint reachable"),
-        "T2 has no checkpoint reachable; got:\n{section}"
-    );
-    assert!(
-        section.contains("Candidates:"),
-        "section should list candidates; got:\n{section}"
-    );
-    // T2 is its own only candidate (isolated leaf).
-    assert!(
-        section.contains("🎯T2 (self)"),
-        "T2 should appear as a self candidate; got:\n{section}"
-    );
-    // Mutation-persisted nudge appears.
-    assert!(
-        section.contains("Mutation persisted"),
-        "warning text should clarify the mutation persisted; got:\n{section}"
-    );
-}
-
-// --- ops::rework tests ---
-
-#[test]
-fn rework_resets_statuses() {
-    let mut file = load_fixture();
-    // Achieve T1 and T3 so T5 is actionable, then mark T5 as converging
-    // (simulating a verification in progress that fails).
-    file.targets.get_mut("T1").unwrap().status = Status::Achieved;
-    file.targets.get_mut("T3").unwrap().status = Status::Achieved;
-    file.targets.get_mut("T5").unwrap().status = Status::Converging;
-
-    let result = ops::rework(&mut file, "T5", "tests failed on Linux").unwrap();
-
-    assert_eq!(result.rework_id, "T1");
-    assert_eq!(result.retries, 1);
-    assert!(!result.budget_exhausted);
-
-    // Verify target reset to identified.
-    assert_eq!(file.targets["T5"].status, Status::Identified);
-    // Rework destination reset to converging.
-    assert_eq!(file.targets["T1"].status, Status::Converging);
-    assert_eq!(file.targets["T1"].retries, 1);
-}
-
-#[test]
-fn rework_appends_diagnosis() {
-    let mut file = load_fixture();
-    let original_context = file.targets["T1"].context.clone();
-
-    ops::rework(&mut file, "T5", "linker error on arm64").unwrap();
-
-    let ctx = &file.targets["T1"].context;
-    assert!(ctx.contains(&original_context));
-    assert!(ctx.contains("Rework #1: linker error on arm64"));
-}
-
-#[test]
-fn rework_empty_diagnosis_preserves_context() {
-    let mut file = load_fixture();
-    let original_context = file.targets["T1"].context.clone();
-
-    ops::rework(&mut file, "T5", "").unwrap();
-
-    assert_eq!(file.targets["T1"].context, original_context);
-}
-
-#[test]
-fn rework_increments_retries() {
-    let mut file = load_fixture();
-
-    // First rework.
-    let r1 = ops::rework(&mut file, "T5", "attempt 1").unwrap();
-    assert_eq!(r1.retries, 1);
-    assert!(!r1.budget_exhausted);
-
-    // Second rework.
-    let r2 = ops::rework(&mut file, "T5", "attempt 2").unwrap();
-    assert_eq!(r2.retries, 2);
-    assert!(!r2.budget_exhausted);
-
-    // Third rework — hits budget (T1 has retry_budget: 3).
-    let r3 = ops::rework(&mut file, "T5", "attempt 3").unwrap();
-    assert_eq!(r3.retries, 3);
-    assert!(r3.budget_exhausted);
-    assert_eq!(r3.budget, Some(3));
-}
-
-#[test]
-fn rework_exceeds_budget() {
-    let mut file = load_fixture();
-
-    // Burn through the budget.
-    for i in 1..=3 {
-        let r = ops::rework(&mut file, "T5", &format!("attempt {i}")).unwrap();
-        assert_eq!(r.retries, i);
-    }
-
-    // Fourth rework — past budget. Still works (budget is advisory),
-    // but budget_exhausted remains true.
-    let r4 = ops::rework(&mut file, "T5", "attempt 4").unwrap();
-    assert_eq!(r4.retries, 4);
-    assert!(r4.budget_exhausted);
-}
-
-#[test]
-fn rework_no_budget_never_exhausted() {
-    let mut file = load_fixture();
-    // Remove T1's retry budget.
-    file.targets.get_mut("T1").unwrap().retry_budget = None;
-
-    for i in 1..=5 {
-        let r = ops::rework(&mut file, "T5", &format!("attempt {i}")).unwrap();
-        assert_eq!(r.retries, i);
-        assert!(!r.budget_exhausted);
-        assert_eq!(r.budget, None);
-    }
-}
-
-#[test]
-fn rework_multiple_diagnoses_separated() {
-    let mut file = load_fixture();
-
-    ops::rework(&mut file, "T5", "first issue").unwrap();
-    ops::rework(&mut file, "T5", "second issue").unwrap();
-
-    let ctx = &file.targets["T1"].context;
-    assert!(ctx.contains("Rework #1: first issue"));
-    assert!(ctx.contains("Rework #2: second issue"));
-    // Separated by blank line.
-    assert!(ctx.contains("first issue\n\nRework #2"));
-}
-
-#[test]
-fn rework_error_not_found() {
-    let mut file = load_fixture();
-    let err = ops::rework(&mut file, "T99", "").unwrap_err();
-    assert_eq!(err, ops::ReworkError::TargetNotFound("T99".to_string()));
-}
-
-#[test]
-fn rework_error_not_verify() {
-    let mut file = load_fixture();
-    let err = ops::rework(&mut file, "T1", "").unwrap_err();
-    assert_eq!(err, ops::ReworkError::NotVerifyTarget("T1".to_string()));
-}
-
-#[test]
-fn rework_error_no_rework_target() {
-    let mut file = load_fixture();
-    // Remove the rework field from T5.
-    file.targets.get_mut("T5").unwrap().rework = None;
-    let err = ops::rework(&mut file, "T5", "").unwrap_err();
-    assert_eq!(err, ops::ReworkError::NoReworkTarget("T5".to_string()));
-}
-
-#[test]
-fn rework_error_dest_not_found() {
-    let mut file = load_fixture();
-    // Point rework at a nonexistent target (bypass validation for this test).
-    file.targets.get_mut("T5").unwrap().rework = Some("T99".to_string());
-    file.targets
-        .get_mut("T5")
-        .unwrap()
-        .verifies
-        .push("T99".to_string());
-    let err = ops::rework(&mut file, "T5", "").unwrap_err();
-    assert_eq!(err, ops::ReworkError::ReworkDestNotFound("T99".to_string()));
 }
 
 #[test]
@@ -1150,18 +614,6 @@ fn startup_context_omits_old_achieved() {
     assert!(!ctx.contains("## Recently achieved"));
 }
 
-#[test]
-fn startup_context_shows_tunnel_warnings() {
-    let mut file = load_fixture();
-    // Remove the verify target so tunnels are detected.
-    file.targets.remove("T5");
-
-    let ctx = graph::startup_context(&file, "test", 14);
-    assert!(ctx.contains("## Warnings"));
-    assert!(ctx.contains("Tunnels:"));
-    assert!(ctx.contains("lack nearby verification"));
-}
-
 // --- Summary tests ---
 
 #[test]
@@ -1204,12 +656,15 @@ fn summary_shows_frontier_targets() {
 
 #[test]
 fn summary_frontier_section_opens_with_repo_scope_banner() {
-    // 🎯T16: every repo-scope frontier rendering must lead with the
+    // 🎯T16 (v5): every repo-scope frontier rendering must lead with the
     // banner + legend so agents see the correct ordering framing
     // inline and don't default to WSJF/SAFe reasoning from
     // training-data habit. The banner has to sit inside the
     // `## Frontier` section (not before it) so it survives
     // convergence's summary-body splicing.
+    //
+    // v5 removed the verify/checkpoint/tunnel apparatus; the banner
+    // now describes fanout-only ordering.
     let file = load_fixture();
     let out = graph::summary(&file, "test", None, false);
     let frontier_section = out.split("## Frontier").nth(1).unwrap();
@@ -1223,12 +678,8 @@ fn summary_frontier_section_opens_with_repo_scope_banner() {
         "banner must name the repo-scope ordering function; got:\n{frontier_text}"
     );
     assert!(
-        frontier_text.contains("min distance-to-checkpoint"),
-        "banner must describe the primary sort key; got:\n{frontier_text}"
-    );
-    assert!(
         frontier_text.contains("max unblocking fanout"),
-        "banner must describe the tiebreaker; got:\n{frontier_text}"
+        "banner must describe the primary sort key; got:\n{frontier_text}"
     );
     assert!(
         frontier_text.contains("portfolio-scope"),
@@ -1236,18 +687,6 @@ fn summary_frontier_section_opens_with_repo_scope_banner() {
     );
     // Legend covers the per-entry annotation shapes used in the
     // rendered frontier.
-    assert!(
-        frontier_text.contains("`checkpoint`"),
-        "legend must define the `checkpoint` annotation; got:\n{frontier_text}"
-    );
-    assert!(
-        frontier_text.contains("verify-kind"),
-        "legend must explain that checkpoints are verify-kind targets; got:\n{frontier_text}"
-    );
-    assert!(
-        frontier_text.contains("`dist=N`"),
-        "legend must define the `dist=N` annotation; got:\n{frontier_text}"
-    );
     assert!(
         frontier_text.contains("`fanout=N`"),
         "legend must define the `fanout=N` annotation; got:\n{frontier_text}"
@@ -1266,23 +705,15 @@ fn summary_shows_blocked_targets() {
 }
 
 #[test]
-fn summary_frontier_ordered_by_distance_and_fanout() {
-    // Repo-level ordering (🎯T7): ascending distance-to-observable,
-    // tiebroken by descending unblocking fanout, then by ID.
+fn summary_frontier_ordered_by_fanout() {
+    // Repo-level ordering (v5/🎯T25): descending unblocking fanout,
+    // then ascending target ID.
     //
-    // The fixture's frontier is T1, T2, T3. T5 is a verify target
-    // that covers T1 and T3 (distance 1 for both), and both are in
-    // T5's depends_on so both have fanout 1. T2 has no observable
-    // reachable and no dependants at all — tunnel. Expected order:
-    // T1, T3, T2 (T1 and T3 tie on (dist=1, fanout=1) with T1 < T3
-    // by ID; T2 sorts last because it extends a tunnel).
+    // The fixture's frontier is T1, T2, T3. T5 depends on T1 and T3
+    // (fanout=1 each). T2 has no dependants (fanout=0). Expected order:
+    // T1, T3 (both fanout=1, T1 < T3 by ID), then T2 (fanout=0).
     //
-    // Value/cost intentionally have no effect on this ordering;
-    // they're portfolio-scope inputs. This test used to assert a
-    // value-desc order that happened to produce the same top
-    // target — the new assertions lock in the *reason* so a future
-    // refactor that reintroduces value-based ordering at repo
-    // scope would fail explicitly.
+    // Value/cost have no effect on repo-level ordering.
     let file = load_fixture();
     let out = graph::summary(&file, "test", None, false);
 
@@ -1301,17 +732,16 @@ fn summary_frontier_ordered_by_distance_and_fanout() {
 
     assert!(
         t1_pos < t3_pos,
-        "T1 (dist=1, fanout=1, id=T1) should rank above T3 (dist=1, fanout=1, id=T3); got: {frontier_text}"
+        "T1 (fanout=1, id=T1) should rank above T3 (fanout=1, id=T3); got: {frontier_text}"
     );
     assert!(
         t3_pos < t2_pos,
-        "T3 (dist=1) should rank above T2 (dist=None, tunnel); got: {frontier_text}"
+        "T3 (fanout=1) should rank above T2 (fanout=0); got: {frontier_text}"
     );
 
-    // Annotation format exposes dist/fanout, not value/focus/momentum.
-    assert!(frontier_text.contains("dist=1"));
-    assert!(frontier_text.contains("fanout=1"));
-    assert!(frontier_text.contains("no checkpoint reachable"));
+    // Annotation format exposes only fanout, not dist/value/focus/momentum.
+    assert!(frontier_text.contains("fanout="));
+    assert!(!frontier_text.contains("dist="));
     assert!(!frontier_text.contains("v=8"));
     assert!(!frontier_text.contains("focus"));
     assert!(!frontier_text.contains("momentum"));
@@ -1351,7 +781,7 @@ fn text_from_call_result(result: rust_mcp_sdk::schema::CallToolResult) -> String
 }
 
 const SIMPLE_TARGETS_YAML: &str = r#"
-schema_version: 4
+schema_version: 5
 targets:
   T1:
     name: Primary deliverable
@@ -1365,15 +795,12 @@ targets:
     discovered: 2026-04-01
   T1.v:
     name: Verify primary deliverable
-    kind: verify
     status: identified
     value: 1
     cost: 1
     acceptance:
       - T1 passes
     depends_on:
-      - T1
-    verifies:
       - T1
     discovered: 2026-04-01
   T2:
@@ -1859,191 +1286,6 @@ targets:
     );
 }
 
-#[test]
-fn checkpoint_distance_finds_nearest_checkpoint() {
-    // Fixture graph:
-    //   T1 (work)   ← T5 (verify covers T1, T3) — dist=1
-    //   T2 (work)   — no forward path to any verify — dist=None
-    //   T3 (work)   ← T5                            — dist=1
-    //   T5 (verify) — itself a checkpoint           — dist=0
-    let file = load_fixture();
-    assert_eq!(graph::checkpoint_distance(&file, "T1", 4), Some(1));
-    assert_eq!(graph::checkpoint_distance(&file, "T3", 4), Some(1));
-    assert_eq!(graph::checkpoint_distance(&file, "T5", 4), Some(0));
-    assert_eq!(graph::checkpoint_distance(&file, "T2", 4), None);
-
-    // Wiring T5 to also depend on T2 closes T2's tunnel — T2 now
-    // reaches the existing verify-kind checkpoint at distance 1.
-    let mut downstream = load_fixture();
-    downstream
-        .targets
-        .get_mut("T5")
-        .unwrap()
-        .depends_on
-        .push("T2".to_string());
-    assert_eq!(
-        graph::checkpoint_distance(&downstream, "T2", 4),
-        Some(1),
-        "T2 should see T5 once T5 depends on T2"
-    );
-}
-
-#[test]
-fn frontier_ordering_prefers_checkpoint_then_fanout() {
-    use bullseye::schema::Target;
-    use chrono::NaiveDate;
-
-    // Hand-rolled scenario exercising every sort key in turn:
-    //   T99  (achieved work)              → not in frontier (terminal)
-    //   T100 (verify, verifies T99)       → dist=0 itself        → rank 1
-    //   T101 (work, T102 depends on it)   → dist=2 via T102→T103 → rank 3
-    //   T102 (work, blocked by T101)      → not in frontier
-    //   T103 (verify, verifies T102)      → dist=0 itself, blocked
-    //   T104 (work, dependants = T105,
-    //         T106 both depend on it,
-    //         downstream reaches T107
-    //         verify)                    → dist=1, fanout=3 → rank 2
-    //   T105 (work, deps [T104])         → blocked
-    //   T106 (work, deps [T104])         → blocked
-    //   T107 (verify, verifies T104,
-    //         deps [T104])                → blocked
-    //   T108 (work, tunnel)               → dist=None, fanout=0 → last
-    //
-    // Expected frontier sort: T100 (dist=0), T104 (dist=1, fanout=3),
-    // T101 (dist=2, fanout=1), T108 (dist=None).
-    let date = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
-    let mut file = TargetsFile {
-        schema_version: Some(1),
-        last_evaluated: None,
-        targets: Default::default(),
-    };
-
-    let mk = |name: &str, kind: Kind, status: Status, deps: &[&str], verifies: &[&str]| -> Target {
-        Target {
-            name: name.to_string(),
-            kind,
-            status,
-            value: 1.0,
-            cost: 1.0,
-            actual_cost: None,
-            set_aside_reason: None,
-            acceptance: vec!["done".to_string()],
-            checks: vec![],
-            context: String::new(),
-            gates: vec![],
-            depends_on: deps.iter().map(|s| s.to_string()).collect(),
-            cross_depends: vec![],
-            cross_enables: vec![],
-            verifies: verifies.iter().map(|s| s.to_string()).collect(),
-            rework: None,
-            retry_budget: None,
-            retries: 0,
-            tags: vec![],
-            strategy: None,
-
-            origin: "test".to_string(),
-            discovered: date,
-            achieved: if status == Status::Achieved {
-                Some(date)
-            } else {
-                None
-            },
-        }
-    };
-
-    // T99 is an achieved upstream so T100's `verifies` slot is satisfied
-    // without putting another active target in the frontier.
-    file.targets.insert(
-        "T99".into(),
-        mk("Done upstream", Kind::Work, Status::Achieved, &[], &[]),
-    );
-    file.targets.insert(
-        "T100".into(),
-        mk(
-            "Standalone verify",
-            Kind::Verify,
-            Status::Identified,
-            &[],
-            &["T99"],
-        ),
-    );
-    file.targets.insert(
-        "T101".into(),
-        mk("Two hops", Kind::Work, Status::Identified, &[], &[]),
-    );
-    file.targets.insert(
-        "T102".into(),
-        mk("Bridge", Kind::Work, Status::Identified, &["T101"], &[]),
-    );
-    file.targets.insert(
-        "T103".into(),
-        mk(
-            "Verify T102",
-            Kind::Verify,
-            Status::Identified,
-            &["T102"],
-            &["T102"],
-        ),
-    );
-    file.targets.insert(
-        "T104".into(),
-        mk("Two deps", Kind::Work, Status::Identified, &[], &[]),
-    );
-    file.targets.insert(
-        "T105".into(),
-        mk("A of T104", Kind::Work, Status::Identified, &["T104"], &[]),
-    );
-    file.targets.insert(
-        "T106".into(),
-        mk("B of T104", Kind::Work, Status::Identified, &["T104"], &[]),
-    );
-    file.targets.insert(
-        "T107".into(),
-        mk(
-            "Verify T104",
-            Kind::Verify,
-            Status::Identified,
-            &["T104"],
-            &["T104"],
-        ),
-    );
-    file.targets.insert(
-        "T108".into(),
-        mk("Tunnel", Kind::Work, Status::Identified, &[], &[]),
-    );
-
-    let errors = graph::validate(&file);
-    assert!(errors.is_empty(), "fixture invalid: {errors:?}");
-
-    let front = graph::frontier(&file);
-    let ranked = graph::rank_frontier(&file, &front);
-    let ids: Vec<&str> = ranked.iter().map(|r| r.target.id.as_str()).collect();
-
-    // T100 is observable (dist=0). T104 has dist=1 via T107 and
-    // fanout=2 (T105, T106, T107 all depend on it). T101 has
-    // dist=2 via T102 → T103 and fanout=1. T108 is a tunnel.
-    assert_eq!(
-        ids,
-        vec!["T100", "T104", "T101", "T108"],
-        "repo-level ordering mismatch; ranked entries:\n{:?}",
-        ranked
-            .iter()
-            .map(|r| (r.target.id.clone(), r.distance, r.fanout))
-            .collect::<Vec<_>>()
-    );
-
-    // Inspect each signal explicitly so a future refactor that
-    // accidentally swaps the sort order fails loudly.
-    let by_id = |id: &str| ranked.iter().find(|r| r.target.id == id).unwrap();
-    assert_eq!(by_id("T100").distance, Some(0));
-    assert_eq!(by_id("T100").fanout, 0);
-    assert_eq!(by_id("T104").distance, Some(1));
-    assert_eq!(by_id("T104").fanout, 3);
-    assert_eq!(by_id("T101").distance, Some(2));
-    assert_eq!(by_id("T101").fanout, 1);
-    assert_eq!(by_id("T108").distance, None);
-}
-
 // --- Phase-boundary tests (🎯T11): value/cost optional at repo scope ---
 
 /// Creating a repo-scope target without value or cost must succeed.
@@ -2072,11 +1314,9 @@ fn put_create_without_value_cost_succeeds() {
         cost: None,
         acceptance: Some(vec!["CI green".to_string()]),
         context: None,
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
         origin: None,
         tags: None,
     });
@@ -2110,172 +1350,6 @@ fn put_create_without_value_cost_succeeds() {
     config::set_external_root_override(None);
 }
 
-/// Repo-scope frontier ordering (observable distance + fanout) must be
-/// invariant under value/cost mutation. Changing a target's portfolio
-/// metadata must not change where it appears in the repo frontier.
-#[test]
-fn frontier_order_invariant_under_value_cost_mutation() {
-    use bullseye::schema::Target;
-    use chrono::NaiveDate;
-
-    let date = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
-
-    let mk_work = |name: &str, deps: &[&str], v: f64, c: f64| -> Target {
-        Target {
-            name: name.to_string(),
-            kind: Kind::Work,
-            status: Status::Identified,
-            value: v,
-            cost: c,
-            actual_cost: None,
-            set_aside_reason: None,
-            acceptance: vec!["done".to_string()],
-            checks: vec![],
-            context: String::new(),
-            gates: vec![],
-            depends_on: deps.iter().map(|s| s.to_string()).collect(),
-            cross_depends: vec![],
-            cross_enables: vec![],
-            verifies: vec![],
-            rework: None,
-            retry_budget: None,
-            retries: 0,
-            tags: vec![],
-            strategy: None,
-
-            origin: "test".to_string(),
-            discovered: date,
-            achieved: None,
-        }
-    };
-
-    // Build a graph: T200(verified by T200.v) and T201(verified by
-    // T203), plus T202 which has no checkpoint reachable (tunnel). All
-    // have value=1, cost=1 initially.
-    let mut file = TargetsFile {
-        schema_version: Some(1),
-        last_evaluated: None,
-        targets: Default::default(),
-    };
-    file.targets
-        .insert("T200".into(), mk_work("Near checkpoint A", &[], 1.0, 1.0));
-    file.targets
-        .insert("T201".into(), mk_work("Near checkpoint B", &[], 1.0, 1.0));
-    file.targets
-        .insert("T202".into(), mk_work("Tunnel", &[], 1.0, 1.0));
-
-    // Add a verify target for each of T200 and T201 so both have a
-    // checkpoint at distance 1.
-    let verify = |verifies_id: &str| Target {
-        name: format!("Verify {verifies_id}"),
-        kind: Kind::Verify,
-        status: Status::Identified,
-        value: 1.0,
-        cost: 1.0,
-        actual_cost: None,
-        set_aside_reason: None,
-        acceptance: vec!["verified".to_string()],
-        checks: vec![],
-        context: String::new(),
-        gates: vec![],
-        depends_on: vec![verifies_id.to_string()],
-        cross_depends: vec![],
-        cross_enables: vec![],
-        verifies: vec![verifies_id.to_string()],
-        rework: None,
-        retry_budget: None,
-        retries: 0,
-        tags: vec![],
-        strategy: None,
-        origin: "test".to_string(),
-        discovered: date,
-        achieved: None,
-    };
-    file.targets.insert("T200.v".into(), verify("T200"));
-    file.targets.insert("T203".into(), verify("T201"));
-
-    let front = graph::frontier(&file);
-    let ranked_before: Vec<&str> = graph::rank_frontier(&file, &front)
-        .iter()
-        .map(|r| {
-            // Leak the string to extend lifetime — OK in tests.
-            Box::leak(r.target.id.clone().into_boxed_str()) as &str
-        })
-        .collect();
-
-    // Now mutate value/cost dramatically on all targets.
-    // Portfolio-scope numbers that vary by orders of magnitude.
-    for (i, t) in file.targets.values_mut().enumerate() {
-        t.value = (i as f64 + 1.0) * 100.0;
-        t.cost = (i as f64 + 1.0) * 0.01;
-    }
-
-    let front2 = graph::frontier(&file);
-    let ranked_after: Vec<&str> = graph::rank_frontier(&file, &front2)
-        .iter()
-        .map(|r| Box::leak(r.target.id.clone().into_boxed_str()) as &str)
-        .collect();
-
-    assert_eq!(
-        ranked_before, ranked_after,
-        "repo-level frontier order changed after value/cost mutation — \
-         ordering must depend only on observable distance and fanout"
-    );
-}
-
-#[test]
-fn convergence_blocks_on_tunnel_when_top_frontier_unreachable() {
-    // A project whose entire frontier is a tunnel (no checkpoint
-    // reachable anywhere) must trigger the reshape recommendation
-    // instead of auto-selecting. Uses the `**Blocked**:` prefix so
-    // `/cv`'s auto-execute branch pauses. See 🎯T7 acceptance #5.
-    let tmp = tempfile::tempdir().unwrap();
-    let makefile = "bullseye:\n\t@true\n";
-    // Two plain work targets, no verify target anywhere — every
-    // frontier candidate is a tunnel.
-    let targets = r#"
-schema_version: 4
-targets:
-  T1:
-    name: Opaque work
-    status: identified
-    value: 8
-    cost: 3
-    acceptance:
-      - done
-    discovered: 2026-04-01
-  T2:
-    name: More opaque work
-    status: identified
-    value: 3
-    cost: 2
-    acceptance:
-      - done
-    discovered: 2026-04-01
-"#;
-    write_project(tmp.path(), makefile, targets);
-    let path = tmp.path().join("bullseye.yaml");
-    let file = store::load(&path).unwrap();
-    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
-
-    let next = out.split("## Next action").nth(1).expect("next action");
-    assert!(
-        next.contains("**Blocked**"),
-        "expected blocked recommendation; got:\n{next}"
-    );
-    assert!(
-        next.contains("tunnel"),
-        "expected tunnel language; got:\n{next}"
-    );
-    assert!(
-        next.contains("verify target"),
-        "expected reshape guidance pointing at adding a verify target; got:\n{next}"
-    );
-    // Crucially: no Execute now dispatch — the /cv skill relies on
-    // this to pause for human reshaping.
-    assert!(!next.contains("**Execute now**"));
-}
-
 #[test]
 fn summary_stale_parent_all_children_achieved() {
     use bullseye::schema::Target;
@@ -2290,7 +1364,6 @@ fn summary_stale_parent_all_children_achieved() {
             sub.to_string(),
             Target {
                 name: format!("Sub {sub}"),
-                kind: Kind::Work,
                 status: Status::Achieved,
                 value: 2.0,
                 cost: 1.0,
@@ -2303,10 +1376,6 @@ fn summary_stale_parent_all_children_achieved() {
                 depends_on: vec![],
                 cross_depends: vec![],
                 cross_enables: vec![],
-                verifies: vec![],
-                rework: None,
-                retry_budget: None,
-                retries: 0,
                 tags: vec![],
                 strategy: None,
 
@@ -2336,7 +1405,6 @@ fn summary_shows_grouped_children() {
         "T1.1".to_string(),
         Target {
             name: "Sub-target of T1".to_string(),
-            kind: Kind::Work,
             status: Status::Identified,
             value: 2.0,
             cost: 1.0,
@@ -2349,10 +1417,6 @@ fn summary_shows_grouped_children() {
             depends_on: vec![],
             cross_depends: vec![],
             cross_enables: vec![],
-            verifies: vec![],
-            rework: None,
-            retry_budget: None,
-            retries: 0,
             tags: vec![],
             strategy: None,
 
@@ -2946,7 +2010,7 @@ fn in_repo_wins_when_both_locations_have_files() {
     let in_repo_path = work.path().join("bullseye.yaml");
     std::fs::write(
         &in_repo_path,
-        "schema_version: 1\ntargets:\n  T1:\n    name: IN_REPO_WINS\n    kind: work\n    status: identified\n    value: 5\n    cost: 3\n    acceptance:\n      - a\n    origin: manual\n    discovered: 2026-01-01\n",
+        "schema_version: 1\ntargets:\n  T1:\n    name: IN_REPO_WINS\n    status: identified\n    value: 5\n    cost: 3\n    acceptance:\n      - a\n    origin: manual\n    discovered: 2026-01-01\n",
     )
     .unwrap();
 
@@ -2955,7 +2019,7 @@ fn in_repo_wins_when_both_locations_have_files() {
     shadow_file.push("bullseye.yaml");
     std::fs::write(
         &shadow_file,
-        "schema_version: 1\ntargets:\n  T1:\n    name: SHADOW_SHOULD_LOSE\n    kind: work\n    status: identified\n    value: 5\n    cost: 3\n    acceptance:\n      - a\n    origin: manual\n    discovered: 2026-01-01\n",
+        "schema_version: 1\ntargets:\n  T1:\n    name: SHADOW_SHOULD_LOSE\n    status: identified\n    value: 5\n    cost: 3\n    acceptance:\n      - a\n    origin: manual\n    discovered: 2026-01-01\n",
     )
     .unwrap();
 
@@ -3124,7 +2188,6 @@ fn concurrent_mutations_do_not_lose_updates() {
                             new_id.clone(),
                             bullseye::schema::Target {
                                 name: format!("Concurrent target {i}"),
-                                kind: Kind::Work,
                                 status: Status::Identified,
                                 value: 1.0,
                                 cost: 1.0,
@@ -3137,10 +2200,6 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 depends_on: Vec::new(),
                                 cross_depends: Vec::new(),
                                 cross_enables: Vec::new(),
-                                verifies: Vec::new(),
-                                rework: None,
-                                retry_budget: None,
-                                retries: 0,
                                 tags: Vec::new(),
                                 strategy: None,
 
@@ -3591,11 +2650,9 @@ fn put_rejects_envelope_markers_in_name() {
             cost: None,
             acceptance: Some(vec!["CI green".to_string()]),
             context: None,
-            kind: None,
             status: None,
             depends_on: None,
             blocks: None,
-            verifies: None,
             origin: None,
             tags: None,
         });
@@ -3640,11 +2697,9 @@ fn put_rejects_envelope_markers_in_other_fields() {
         cost: None,
         acceptance: Some(vec!["CI green".to_string()]),
         context: Some(format!("context with {marker} leaked")),
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
         origin: None,
         tags: None,
     });
@@ -3663,11 +2718,9 @@ fn put_rejects_envelope_markers_in_other_fields() {
         cost: None,
         acceptance: Some(vec![format!("criterion {marker} bad")]),
         context: None,
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
         origin: None,
         tags: None,
     });
@@ -3689,11 +2742,9 @@ fn put_rejects_envelope_markers_in_other_fields() {
         cost: None,
         acceptance: Some(vec!["CI green".to_string()]),
         context: None,
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
         origin: None,
         tags: Some(vec![format!("bad{marker}tag")]),
     });
@@ -3712,11 +2763,9 @@ fn put_rejects_envelope_markers_in_other_fields() {
         cost: None,
         acceptance: Some(vec!["CI green".to_string()]),
         context: None,
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
 
         origin: Some(format!("{marker}bad-origin")),
         tags: None,
@@ -3757,11 +2806,9 @@ fn put_allows_legitimate_angle_bracket_prose() {
             "No <tags> leakage".to_string(),
         ]),
         context: Some("<context> See design doc </context> for details".to_string()),
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
 
         origin: Some("<manual> 2026-04-26".to_string()),
         tags: Some(vec!["<visual>".to_string()]),
@@ -3800,11 +2847,9 @@ fn put_file_unchanged_on_envelope_rejection() {
         cost: None,
         acceptance: Some(vec!["<invoke bad".to_string()]),
         context: None,
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
         origin: None,
         tags: None,
     });
@@ -3888,7 +2933,6 @@ fn store_load_still_loads_corrupted_files() {
          targets:\n  \
            T1:\n    \
              name: Pre-corrupted target\n    \
-             kind: work\n    \
              status: identified\n    \
              value: 1\n    \
              cost: 1\n    \
@@ -3949,13 +2993,9 @@ fn set_aside_rejects_envelope_marker_in_reason() {
 #[test]
 fn non_conforming_id_is_warning_not_blocking_error() {
     let mut file = load_fixture();
-    // Inject a verify target with a non-conforming ID. Use one of the
-    // existing targets as the verifies anchor so the verify-must-have-
-    // verifies invariant doesn't trip.
+    // Inject a target with a non-conforming ID.
     let mut t = file.targets["T1"].clone();
-    t.kind = bullseye::schema::Kind::Verify;
-    t.verifies = vec!["T1".to_string()];
-    t.name = "Verify: stand-in for an arbitrary check".to_string();
+    t.name = "Stand-in for an arbitrary check".to_string();
     file.targets.insert("T1.v1".to_string(), t);
 
     let warnings = graph::validate_warnings(&file);
@@ -4197,7 +3237,6 @@ const T24_FIXTURE_YAML: &str = r#"schema_version: 1
 targets:
   T1:
     name: Example target
-    kind: work
     status: identified
     value: 1
     cost: 1
@@ -4282,11 +3321,9 @@ fn t24_mutation_refused_in_submodule_replica() {
         cost: None,
         acceptance: None,
         context: None,
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
         origin: None,
         tags: None,
     });
@@ -4365,11 +3402,9 @@ fn t24_mutation_refused_in_detached_head() {
         cost: None,
         acceptance: None,
         context: None,
-        kind: None,
         status: None,
         depends_on: None,
         blocks: None,
-        verifies: None,
         origin: None,
         tags: None,
     });

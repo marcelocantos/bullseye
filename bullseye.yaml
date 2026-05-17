@@ -1,4 +1,4 @@
-schema_version: 4
+schema_version: 5
 targets:
   T1:
     name: MCP triad integration (targets + sawmill + mnemo)
@@ -717,7 +717,7 @@ targets:
     achieved: 2026-05-11
   T25:
     name: 'Schema v5: target nodes are uniform — kind, verify edges, and rework apparatus are removed'
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -734,6 +734,7 @@ targets:
     context: 'Verify-kind targets have the same structural problem showcase had: they''re an arbitrary declaration that the graph and ordering should not have required. Acceptance criteria already carry the verification contract — whether the pass signal comes from CI, a human thumbs-up, a smoke test, or a design review is free-text on the acceptance, not a node-type property. Topologically a human ack and a CI green are identical: an assertion held, the node retires. The `kind` enum encodes shape into types when shape is a property of subgraphs, not nodes. Confusing the two is how showcase happened, and `kind: verify` is the same mistake with a different name. Collapsing the apparatus clears the substrate so graph-shape-as-design-vocabulary can carry the weight that the kind enum was trying to. The collapse also resolves the tool/agent split: bullseye-the-tool becomes minimal substrate (like Make), and the leverage moves to bullseye-the-practice — graph-shaping discipline carried by the agent.'
     origin: manual
     discovered: 2026-05-17
+    achieved: 2026-05-17
   T26:
     name: Bullseye has a documented vocabulary of graph-shape patterns plus an agent discipline for using them
     status: identified

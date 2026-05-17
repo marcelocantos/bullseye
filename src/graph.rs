@@ -1,9 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet};
 
-use crate::schema::{Kind, Status, Target, TargetsFile};
+use crate::schema::{Status, TargetsFile};
 
 /// Banner + legend describing repo-scope frontier ordering. Rendered
 /// at the top of the frontier section in every repo-scope output
@@ -12,32 +12,28 @@ use crate::schema::{Kind, Status, Target, TargetsFile};
 /// and don't default to WSJF/SAFe reasoning from training-data habit.
 /// Portfolio-scope ranking lives in [`crate::portfolio`] and *does*
 /// use WSJF — the banner exists to stop that framing leaking into
-/// repo-scope decisions. See 🎯T16.
+/// repo-scope decisions.
+///
+/// Schema v5 (🎯T25) collapsed the verify / checkpoint / tunnel
+/// apparatus. The frontier is now the parallelisable set, ordered by
+/// `depends_on` shape alone: a target's unblocking fanout (how many
+/// active targets depend on it) is the only ranking signal, with the
+/// target ID as a deterministic tiebreak.
 pub const REPO_SCOPE_BANNER: &str = "\
-> **Repo-scope ordering**: min distance-to-checkpoint, then max unblocking fanout. \
+> **Repo-scope ordering**: max unblocking fanout, then target ID. The frontier is the \
+parallelisable set — work it in parallel where possible. \
 WSJF/value/cost/SAFe framing is portfolio-scope only — do not use it at repo scope.
 >
-> **Legend**: `checkpoint` = target is itself a checkpoint (verify-kind) · `dist=N` = N hops to nearest checkpoint · `no checkpoint reachable` = tunnel, reshape the graph by adding a verify target · `fanout=N` = downstream targets unblocked by this one.
+> **Legend**: `fanout=N` = N active downstream target(s) blocked by this one.
 
 ";
-
-/// Default maximum BFS depth for checkpoint reachability. Tunnel
-/// detection uses [`tunnels`]'s own `max_depth` parameter; this
-/// constant is the upper bound the repo-level frontier ordering
-/// uses when computing distance-to-nearest-checkpoint as a sort
-/// key. Chosen generously so virtually any realistic repo-level
-/// graph is fully explored; anything beyond is reported as "no
-/// checkpoint reachable" (i.e. `None`) and steered away from.
-pub const CHECKPOINT_REACH_LIMIT: usize = 16;
 
 /// A target in the frontier: unblocked and ready for work.
 #[derive(Debug, Clone)]
 pub struct FrontierTarget {
     pub id: String,
     pub name: String,
-    pub kind: Kind,
     pub status: Status,
-    pub verifies: Vec<String>,
     pub tags: Vec<String>,
 }
 
@@ -64,446 +60,21 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
         .map(|(id, t)| FrontierTarget {
             id: id.to_string(),
             name: t.name.clone(),
-            kind: t.kind,
             status: t.status,
-            verifies: t.verifies.clone(),
             tags: t.tags.clone(),
         })
         .collect()
 }
 
-/// Is this target a **checkpoint** — a moment of progress where the
-/// human decision-maker gets a signal they can react to?
-///
-/// As of schema v4, only verify-kind targets are checkpoints: their
-/// whole purpose is to emit a pass/fail signal. The earlier
-/// `showcase: true` flag on work targets was retired in 🎯T23 — in
-/// practice it never carried its weight, and the cleaner rule is
-/// "want a checkpoint? add a verify target above the work".
-///
-/// Repo-level prioritisation (🎯T7) uses checkpoint reachability as
-/// its primary sort signal: the frontier is ordered to move the
-/// project toward the *next* checkpoint as quickly as possible, and
-/// chains of non-checkpoint targets (tunnels) are flagged so the
-/// user can reshape the graph rather than blunder through them.
-pub fn is_checkpoint(target: &Target) -> bool {
-    target.kind == Kind::Verify
-}
-
-/// Build the forward adjacency map used by both tunnel detection
-/// and checkpoint-distance computation. An edge `a → b` means "b
-/// sits downstream of a in the convergence graph": either b depends
-/// on a (standard structural edge), or b is a verify target whose
-/// `verifies` list includes a (the verification-covers-me relation).
-///
-/// Both tunnel detection and repo-level frontier ordering need this
-/// traversal direction, so factoring it out keeps the two callers in
-/// lockstep: generalising the checkpoint predicate automatically
-/// generalises tunnel detection the same way.
-fn forward_adjacency<'a>(
-    active: &BTreeMap<&'a str, &'a Target>,
-) -> BTreeMap<&'a str, Vec<&'a str>> {
-    let mut forward: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-
-    for (id, t) in active {
-        for dep in &t.depends_on {
-            if let Some((dep_key, _)) = active.get_key_value(dep.as_str()) {
-                forward.entry(*dep_key).or_default().push(id);
-            }
-        }
-    }
-
-    for (id, t) in active {
-        if t.kind == Kind::Verify {
-            for v in &t.verifies {
-                if let Some((v_key, _)) = active.get_key_value(v.as_str()) {
-                    forward.entry(*v_key).or_default().push(id);
-                }
-            }
-        }
-    }
-
-    forward
-}
-
-/// Shortest hop count from `start_id` to the nearest checkpoint
-/// along the forward-reachability graph, or `None` when no
-/// checkpoint is reachable within `max_depth` hops.
-///
-/// Returns `Some(0)` when `start_id` is itself a checkpoint (a
-/// verify-kind target). That's the base case and the thing
-/// repo-level ordering wants to reward: working on a checkpoint
-/// directly produces a signal with zero intermediate hops.
-///
-/// Walks the same forward graph [`tunnels`] uses. The two functions
-/// share this traversal so a change in the checkpoint predicate
-/// lands in both paths at once.
-pub fn checkpoint_distance(file: &TargetsFile, start_id: &str, max_depth: usize) -> Option<usize> {
-    let active = file.active();
-    // If the caller asks about a target that isn't active, treat as
-    // unreachable — we don't BFS through achieved nodes because the
-    // frontier discussion is entirely about active work.
-    if !active.contains_key(start_id) {
-        return None;
-    }
-
-    let forward = forward_adjacency(&active);
-
-    let mut visited: HashSet<&str> = HashSet::new();
-    let mut queue: VecDeque<(&str, usize)> = VecDeque::new();
-    queue.push_back((start_id, 0));
-    visited.insert(start_id);
-
-    while let Some((current, depth)) = queue.pop_front() {
-        if let Some(target) = active.get(current)
-            && is_checkpoint(target)
-        {
-            return Some(depth);
-        }
-        if depth >= max_depth {
-            continue;
-        }
-        if let Some(neighbors) = forward.get(current) {
-            for &next in neighbors {
-                if visited.insert(next) {
-                    queue.push_back((next, depth + 1));
-                }
-            }
-        }
-    }
-
-    None
-}
-
 /// Number of currently-active targets that list `id` in their
-/// `depends_on` — the "unblocking fanout" score used as the first
-/// tiebreaker in repo-level frontier ordering. Higher means
-/// finishing this target unblocks more downstream work.
+/// `depends_on` — the "unblocking fanout" score used as the primary
+/// signal in repo-level frontier ordering. Higher means finishing
+/// this target unblocks more downstream work.
 pub fn unblocking_fanout(file: &TargetsFile, id: &str) -> usize {
     file.active()
         .values()
         .filter(|t| t.depends_on.iter().any(|d| d == id))
         .count()
-}
-
-/// A tunnel warning: a work target that is too far from any
-/// checkpoint.
-#[derive(Debug, Clone)]
-pub struct TunnelWarning {
-    /// The work target at the start of the unchecked chain.
-    pub target_id: String,
-    pub target_name: String,
-    /// Minimum hops to the nearest checkpoint (None = no checkpoint
-    /// reachable at all within the BFS horizon).
-    pub depth: Option<usize>,
-    /// The nearest checkpoint, if one was reachable beyond
-    /// `max_depth` but within the BFS horizon. When `depth` is
-    /// `None`, no checkpoint was reachable at all.
-    pub nearest_verify: Option<String>,
-}
-
-/// Detect tunnels: active non-checkpoint work targets that are
-/// far from any checkpoint.
-///
-/// A tunnel exists when a work target has no checkpoint reachable
-/// within `max_depth` hops along the forward dependency graph
-/// (targets that depend on it, or verify targets whose `verifies`
-/// list includes it). As of schema v4 a checkpoint is exclusively a
-/// verify-kind target — see [`is_checkpoint`].
-///
-/// Default max_depth is 2.
-pub fn tunnels(file: &TargetsFile, max_depth: usize) -> Vec<TunnelWarning> {
-    let active = file.active();
-    let forward = forward_adjacency(&active);
-
-    let mut warnings = Vec::new();
-
-    for (id, t) in &active {
-        // Only flag work targets. Verify targets are always
-        // checkpoints, so they can never themselves be tunnels.
-        if t.kind != Kind::Work {
-            continue;
-        }
-
-        // BFS from this work target through forward edges, looking
-        // for a checkpoint beyond the start node. The start node is
-        // already known non-checkpoint (checked above), so any hit
-        // has depth >= 1.
-        let mut visited: HashSet<&str> = HashSet::new();
-        let mut queue: VecDeque<(&str, usize)> = VecDeque::new();
-        queue.push_back((id, 0));
-        visited.insert(id);
-
-        let mut nearest: Option<(usize, String)> = None;
-
-        while let Some((current, depth)) = queue.pop_front() {
-            if depth > 0
-                && let Some(ct) = active.get(current)
-                && is_checkpoint(ct)
-            {
-                nearest = Some((depth, current.to_string()));
-                break;
-            }
-
-            // Don't expand beyond max_depth + 1 (we need to check
-            // nodes at depth max_depth+1 to decide whether they're
-            // in-range or just outside).
-            if depth > max_depth {
-                continue;
-            }
-
-            if let Some(neighbors) = forward.get(current) {
-                for &next in neighbors {
-                    if visited.insert(next) {
-                        queue.push_back((next, depth + 1));
-                    }
-                }
-            }
-        }
-
-        match nearest {
-            Some((depth, checkpoint_id)) if depth > max_depth => {
-                warnings.push(TunnelWarning {
-                    target_id: id.to_string(),
-                    target_name: t.name.clone(),
-                    depth: Some(depth),
-                    nearest_verify: Some(checkpoint_id),
-                });
-            }
-            None => {
-                warnings.push(TunnelWarning {
-                    target_id: id.to_string(),
-                    target_name: t.name.clone(),
-                    depth: None,
-                    nearest_verify: None,
-                });
-            }
-            _ => {} // Within max_depth, no warning.
-        }
-    }
-
-    warnings
-}
-
-/// Why a target was suggested as a candidate location for a verify
-/// target when resolving a tunnel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CandidateReason {
-    /// Multiple chains in the active graph converge into this node
-    /// (forward in-degree ≥ 2). The user's mental model places
-    /// verify targets here naturally — it's where work fans in.
-    Convergence,
-    /// No active target depends on this node (forward out-degree 0).
-    /// The dependency-graph root of the path; the integrated state
-    /// the orphan ultimately rolls up into.
-    Root,
-    /// The orphan target itself. Always offered as a fallback —
-    /// add a verify target directly above the leaf when nothing
-    /// better fits.
-    Self_,
-    /// On the orphan's forward path but not a convergence or root.
-    /// Last-resort suggestion for a mid-chain verify target.
-    OnPath,
-}
-
-impl CandidateReason {
-    fn label(self) -> &'static str {
-        match self {
-            CandidateReason::Convergence => "convergence",
-            CandidateReason::Root => "root",
-            CandidateReason::Self_ => "self",
-            CandidateReason::OnPath => "on-path",
-        }
-    }
-
-    fn priority(self) -> u8 {
-        match self {
-            CandidateReason::Convergence => 0,
-            CandidateReason::Root => 1,
-            CandidateReason::Self_ => 2,
-            CandidateReason::OnPath => 3,
-        }
-    }
-}
-
-/// A candidate node for resolving a tunnel by adding a checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckpointCandidate {
-    pub target_id: String,
-    pub target_name: String,
-    pub reason: CandidateReason,
-    /// Forward distance from the orphan target (0 for self).
-    pub distance: usize,
-}
-
-/// For an orphaned (tunneled) target, suggest candidate locations
-/// where adding a verify target above would resolve the tunnel.
-/// Walks the same forward graph that tunnel detection uses, so a
-/// candidate marked here is guaranteed to be reachable from the
-/// orphan.
-///
-/// Suggestions are ordered by usefulness: convergence nodes first
-/// (where the user's mental model places verify targets), then
-/// roots (the integrated top-level state), then self (always works
-/// as a fallback), then mid-chain on-path nodes (last resort).
-/// Within each category, ordered by distance ascending then ID for
-/// determinism.
-///
-/// Returns an empty vector when `orphan_id` is not active.
-pub fn suggest_checkpoint_candidates(
-    file: &TargetsFile,
-    orphan_id: &str,
-) -> Vec<CheckpointCandidate> {
-    let active = file.active();
-    if !active.contains_key(orphan_id) {
-        return Vec::new();
-    }
-    let forward = forward_adjacency(&active);
-
-    // BFS forward from the orphan; collect all reachable active
-    // nodes with their distance.
-    let mut distances: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut queue: VecDeque<(&str, usize)> = VecDeque::new();
-    queue.push_back((orphan_id, 0));
-    distances.insert(orphan_id, 0);
-    while let Some((cur, depth)) = queue.pop_front() {
-        if let Some(neighbors) = forward.get(cur) {
-            for &next in neighbors {
-                if !distances.contains_key(next) {
-                    distances.insert(next, depth + 1);
-                    queue.push_back((next, depth + 1));
-                }
-            }
-        }
-    }
-
-    // Forward in-degree per node — how many edges point AT it.
-    // Convergence nodes have in-degree ≥ 2.
-    let mut indegree: BTreeMap<&str, usize> = BTreeMap::new();
-    for ys in forward.values() {
-        for &y in ys {
-            *indegree.entry(y).or_default() += 1;
-        }
-    }
-
-    let mut candidates: Vec<CheckpointCandidate> = Vec::new();
-    for (&id, &distance) in &distances {
-        let Some((&id_key, target)) = active.get_key_value(id) else {
-            continue;
-        };
-        // Already a checkpoint? Skip — it can't be a candidate, the
-        // tunnel detection would not have fired if it was reachable.
-        // But the orphan path may include nodes whose own checkpoint
-        // status is irrelevant to *this* tunnel; for safety we skip
-        // any pre-existing checkpoint to avoid suggesting a no-op.
-        if is_checkpoint(target) {
-            continue;
-        }
-
-        let in_deg = indegree.get(id_key).copied().unwrap_or(0);
-        let out_deg = forward.get(id_key).map(|v| v.len()).unwrap_or(0);
-
-        let reason = if id_key == orphan_id {
-            CandidateReason::Self_
-        } else if in_deg >= 2 {
-            CandidateReason::Convergence
-        } else if out_deg == 0 {
-            CandidateReason::Root
-        } else {
-            CandidateReason::OnPath
-        };
-
-        candidates.push(CheckpointCandidate {
-            target_id: id_key.to_string(),
-            target_name: target.name.clone(),
-            reason,
-            distance,
-        });
-    }
-
-    // Sort: reason priority, then distance, then ID.
-    candidates.sort_by(|a, b| {
-        a.reason
-            .priority()
-            .cmp(&b.reason.priority())
-            .then_with(|| a.distance.cmp(&b.distance))
-            .then_with(|| a.target_id.cmp(&b.target_id))
-    });
-
-    candidates
-}
-
-/// Render a markdown warning section for any tunnels in `file`, or
-/// `None` when the graph has no tunnels at `max_depth`.
-///
-/// The section names each orphaned target with its
-/// distance-to-checkpoint result (or "no checkpoint reachable") and
-/// lists candidate checkpoint locations from
-/// [`suggest_checkpoint_candidates`]. Designed to be appended to
-/// mutation responses (`bullseye_put`, `bullseye_retire`,
-/// `bullseye_set_aside`) and to `bullseye_validate` so the agent
-/// learns about the tunnel at the moment of the relevant edit, not
-/// three operations later when convergence finally trips on it.
-///
-/// The warning is informational — bullseye does *not* reject the
-/// mutation that produced the tunnel. The agent reads the warning
-/// and adds a verify target above one of the listed candidates in a
-/// follow-up call. 🎯T21 in `bullseye.yaml` records the design
-/// rationale.
-pub fn format_tunnel_warnings(file: &TargetsFile, max_depth: usize) -> Option<String> {
-    let warnings = tunnels(file, max_depth);
-    if warnings.is_empty() {
-        return None;
-    }
-
-    // Render. Cap candidate display per orphan to keep the warning
-    // tractable on busy graphs — agents that want the full list can
-    // call `bullseye_tunnels` or read the YAML.
-    const MAX_CANDIDATES_PER_ORPHAN: usize = 4;
-
-    let mut out = format!(
-        "\n\n## ⚠ Tunnel warnings ({n} target{s})\n\n\
-         Mutation persisted; this is informational. The graph has \
-         work targets with no checkpoint reachable within {max_depth} hop(s), \
-         so distance-to-checkpoint ordering can't steer toward them. \
-         Add a verify target above one of the listed candidates to resolve.\n\n",
-        n = warnings.len(),
-        s = if warnings.len() == 1 { "" } else { "s" },
-    );
-
-    for w in &warnings {
-        let dist_label = match w.depth {
-            Some(d) => format!("nearest checkpoint at {d} hops"),
-            None => "no checkpoint reachable".to_string(),
-        };
-        out.push_str(&format!(
-            "- 🎯{id} \"{name}\" — {dist}\n",
-            id = w.target_id,
-            name = w.target_name,
-            dist = dist_label,
-        ));
-        let cands = suggest_checkpoint_candidates(file, &w.target_id);
-        if cands.is_empty() {
-            out.push_str("    (no candidates found — graph may be disconnected)\n");
-            continue;
-        }
-        out.push_str("    Candidates: ");
-        let shown: Vec<String> = cands
-            .iter()
-            .take(MAX_CANDIDATES_PER_ORPHAN)
-            .map(|c| format!("🎯{} ({})", c.target_id, c.reason.label()))
-            .collect();
-        out.push_str(&shown.join(", "));
-        if cands.len() > MAX_CANDIDATES_PER_ORPHAN {
-            out.push_str(&format!(
-                ", … +{} more",
-                cands.len() - MAX_CANDIDATES_PER_ORPHAN
-            ));
-        }
-        out.push('\n');
-    }
-
-    Some(out)
 }
 
 /// Generate a Mermaid dependency graph of active targets.
@@ -518,7 +89,7 @@ pub fn mermaid(file: &TargetsFile) -> String {
         lines.push(format!("    {node}[\"{label}\"]"));
     }
 
-    // Depends-on edges.
+    // Depends-on edges — the only structural edge type in v5.
     for (id, t) in &active {
         for dep in &t.depends_on {
             if active.contains_key(dep.as_str()) {
@@ -528,32 +99,6 @@ pub fn mermaid(file: &TargetsFile) -> String {
                     mermaid_node(dep)
                 ));
             }
-        }
-    }
-
-    // Verifies edges.
-    for (id, t) in &active {
-        for v in &t.verifies {
-            if active.contains_key(v.as_str()) {
-                lines.push(format!(
-                    "    {} -.->|verifies| {}",
-                    mermaid_node(id),
-                    mermaid_node(v)
-                ));
-            }
-        }
-    }
-
-    // Rework edges (backward, shown in red).
-    for (id, t) in &active {
-        if let Some(ref rework) = t.rework
-            && active.contains_key(rework.as_str())
-        {
-            lines.push(format!(
-                "    {} -.->|rework| {}",
-                mermaid_node(id),
-                mermaid_node(rework)
-            ));
         }
     }
 
@@ -585,11 +130,11 @@ pub fn validate_warnings(file: &TargetsFile) -> Vec<String> {
     for id in file.targets.keys() {
         // ID format. Bullseye keys the entire graph by the ID string
         // itself; non-conforming IDs render fine and participate in
-        // depends_on / verifies / cross-edge resolution like any other
-        // string. The only thing the format buys is consistency in
-        // displays. Treat as advisory so a user who ended up with a
-        // non-conforming ID (bad tool call, hand edit, import quirk)
-        // can still retire or set-aside it via the normal tools.
+        // depends_on / cross-edge resolution like any other string.
+        // The only thing the format buys is consistency in displays.
+        // Treat as advisory so a user who ended up with a non-conforming
+        // ID (bad tool call, hand edit, import quirk) can still retire
+        // or set-aside it via the normal tools.
         if !id.starts_with('T') || id[1..].split('.').any(|p| p.parse::<u32>().is_err()) {
             warnings.push(format!(
                 "{id}: invalid target ID format (expected T<N> or T<N>.<M>) — \
@@ -639,13 +184,6 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
             }
         }
 
-        // Verifies references must exist.
-        for v in &t.verifies {
-            if !file.targets.contains_key(v) {
-                errors.push(format!("{id}: verifies target {v} does not exist"));
-            }
-        }
-
         // Cross-repo edges: format-only validation. We intentionally
         // do NOT check that the referenced repo or target exists — the
         // whole point of cross-repo edges is to track references that
@@ -665,14 +203,6 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
                     edge.repo,
                 ));
             }
-        }
-
-        // Verify targets must have verifies non-empty; work targets must not.
-        if t.kind == Kind::Verify && t.verifies.is_empty() {
-            errors.push(format!("{id}: verify target must have non-empty verifies"));
-        }
-        if t.kind == Kind::Work && !t.verifies.is_empty() {
-            errors.push(format!("{id}: work target must not have verifies"));
         }
 
         // Set-aside disposition requires a non-empty rationale (🎯T18).
@@ -712,23 +242,6 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
                 errors.push(format!("{id}: strategy.trigger must not be empty"));
             }
         }
-
-        // Rework validation.
-        if let Some(ref rework) = t.rework {
-            if t.kind != Kind::Verify {
-                errors.push(format!("{id}: only verify targets can have rework"));
-            }
-            if !file.targets.contains_key(rework) {
-                errors.push(format!("{id}: rework target {rework} does not exist"));
-            } else if !t.verifies.contains(rework) {
-                errors.push(format!(
-                    "{id}: rework target {rework} must be in verifies list"
-                ));
-            }
-        }
-
-        // Retry budget only on targets that could be rework destinations.
-        // (Advisory — we don't enforce this strictly, just warn if retries > budget.)
     }
 
     // Cycle detection on depends_on graph (DFS).
@@ -793,12 +306,6 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
         .collect();
     recent_achieved.sort_by_key(|b| std::cmp::Reverse(b.1.achieved));
 
-    let tuns = if errors.is_empty() {
-        tunnels(file, 2)
-    } else {
-        Vec::new()
-    };
-
     let mut out = String::new();
 
     out.push_str(&format!(
@@ -809,11 +316,7 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
     if !front.is_empty() {
         out.push_str("## Frontier (unblocked, ready for work)\n\n");
         for ft in &front {
-            let kind_label = match ft.kind {
-                Kind::Work => "",
-                Kind::Verify => " [verify]",
-            };
-            out.push_str(&format!("🎯{} {}{kind_label}\n", ft.id, ft.name));
+            out.push_str(&format!("🎯{} {}\n", ft.id, ft.name));
             if !ft.tags.is_empty() {
                 out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
             }
@@ -835,16 +338,6 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
     if !errors.is_empty() {
         out.push_str("## Warnings\n\n");
         out.push_str(&format!("Validation errors: {}\n\n", errors.join("; ")));
-    }
-
-    if !tuns.is_empty() {
-        if errors.is_empty() {
-            out.push_str("## Warnings\n\n");
-        }
-        out.push_str(&format!(
-            "Tunnels: {} work target(s) lack nearby verification\n",
-            tuns.len()
-        ));
     }
 
     out
@@ -889,38 +382,29 @@ pub fn startup_context_broken_file(file_path: &str, error: &str) -> String {
 }
 
 /// An annotated frontier entry in repo-level ordering. Carries the
-/// two sort signals (distance-to-checkpoint, unblocking fanout) so
-/// renderers can display them without recomputing.
+/// unblocking fanout score so renderers can display it without
+/// recomputing.
 pub struct RankedFrontier<'a> {
     pub target: &'a FrontierTarget,
-    /// Hop count to the nearest checkpoint (0 when the target itself
-    /// is a checkpoint). `None` means no checkpoint reachable within
-    /// [`CHECKPOINT_REACH_LIMIT`] — in other words, picking this
-    /// target would extend a tunnel.
-    pub distance: Option<usize>,
     /// Count of active targets that have this one in their
     /// `depends_on` list — the "unblocking fanout" score.
     pub fanout: usize,
 }
 
-/// Order a frontier by repo-level prioritisation (🎯T7).
+/// Order a frontier by repo-level prioritisation.
 ///
 /// Sort keys, in order:
-///   1. Ascending distance to the nearest checkpoint — get the
-///      human to a signal as fast as possible.
-///   2. Descending unblocking fanout — finishing a high-fanout
+///   1. Descending unblocking fanout — finishing a high-fanout
 ///      target frees more downstream work.
-///   3. Ascending target ID — pure determinism for reproducible
+///   2. Ascending target ID — pure determinism for reproducible
 ///      output.
-///
-/// Targets with no reachable checkpoint (distance `None`) sort
-/// **after** all finite-distance targets — they extend a tunnel
-/// and should only be considered when nothing better exists.
 ///
 /// This function intentionally does NOT consume `value`, `cost`, or
 /// `momentum`. Those are portfolio-scope inputs (see
-/// [`crate::schema::Target::value`] and `docs/mcp-triad.md` §9);
-/// repo-level ordering is driven purely by the graph shape.
+/// [`crate::schema::Target::value`]); repo-level ordering is driven
+/// purely by the graph shape, and within the frontier the agent is
+/// expected to fan work out in parallel rather than execute
+/// strictly in rank order.
 pub fn rank_frontier<'a>(
     file: &TargetsFile,
     frontier_targets: &'a [FrontierTarget],
@@ -929,21 +413,11 @@ pub fn rank_frontier<'a>(
         .iter()
         .map(|ft| RankedFrontier {
             target: ft,
-            distance: checkpoint_distance(file, &ft.id, CHECKPOINT_REACH_LIMIT),
             fanout: unblocking_fanout(file, &ft.id),
         })
         .collect();
 
-    ranked.sort_by(|a, b| {
-        // Treat None as "worse than any finite distance" by mapping
-        // to usize::MAX for comparison — anything reachable beats
-        // something unreachable.
-        let da = a.distance.unwrap_or(usize::MAX);
-        let db = b.distance.unwrap_or(usize::MAX);
-        da.cmp(&db)
-            .then(b.fanout.cmp(&a.fanout))
-            .then(a.target.id.cmp(&b.target.id))
-    });
+    ranked.sort_by(|a, b| b.fanout.cmp(&a.fanout).then(a.target.id.cmp(&b.target.id)));
 
     ranked
 }
@@ -1085,10 +559,10 @@ pub fn summary(
 
     // --- 2. Frontier (ordered by repo-level prioritisation) ---
     //
-    // Ascending distance-to-checkpoint, tiebroken by descending
-    // unblocking fanout, then by ID. See [`rank_frontier`] for the
-    // full rule and rationale. Value/cost/momentum intentionally
-    // not consumed here — those are portfolio-scope signals.
+    // Descending unblocking fanout, then by ID. See [`rank_frontier`]
+    // for the full rule and rationale. Value/cost/momentum
+    // intentionally not consumed here — those are portfolio-scope
+    // signals.
     if errors.is_empty() {
         let front = frontier(file);
         let ranked = rank_frontier(file, &front);
@@ -1100,22 +574,11 @@ pub fn summary(
         } else {
             for rf in &ranked {
                 let ft = rf.target;
-                let kind_label = match ft.kind {
-                    Kind::Work => "",
-                    Kind::Verify => " [verify]",
-                };
-                let distance_label = match rf.distance {
-                    Some(0) => "checkpoint".to_string(),
-                    Some(d) => format!("dist={d}"),
-                    None => "no checkpoint reachable".to_string(),
-                };
                 out.push_str(&format!(
-                    "🎯{id} {name}{kind}  [{status:?}] — {dist}, fanout={fan}\n",
+                    "🎯{id} {name}  [{status:?}] — fanout={fan}\n",
                     id = ft.id,
                     name = ft.name,
-                    kind = kind_label,
                     status = ft.status,
-                    dist = distance_label,
                     fan = rf.fanout,
                 ));
                 if frontier_details {
@@ -1279,13 +742,6 @@ fn render_frontier_detail(
     if !t.depends_on.is_empty() {
         let deps: Vec<String> = t.depends_on.iter().map(|d| format!("🎯{d}")).collect();
         out.push_str(&format!("    Depends on: {}\n", deps.join(", ")));
-    }
-    if !t.verifies.is_empty() {
-        let vs: Vec<String> = t.verifies.iter().map(|v| format!("🎯{v}")).collect();
-        out.push_str(&format!("    Verifies: {}\n", vs.join(", ")));
-    }
-    if let Some(ref rework) = t.rework {
-        out.push_str(&format!("    Rework: 🎯{rework}\n"));
     }
     if !t.tags.is_empty() {
         out.push_str(&format!("    Tags: {}\n", t.tags.join(", ")));

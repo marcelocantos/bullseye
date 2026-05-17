@@ -140,18 +140,17 @@ Bullseye exposes 17 MCP tools. All target-operating tools accept a
 | `bullseye_get` | Get a single target by ID with full detail |
 | `bullseye_put` | Upsert a target — create (auto- or explicit ID) or patch in one call. Rejects content patches on achieved targets unless re-opened in the same call. |
 | `bullseye_retire` | Mark a target achieved |
+| `bullseye_revert` | Move a target from achieved back to converging (e.g. a regression proves the achievement was premature). Clears the achieved date and appends a timestamped revert note to the target's context. |
 | `bullseye_set_aside` | Set a target aside (parked / deferred / wont-fix) with a required rationale. Distinct from retirement: the target was not delivered, but it's removed from the active set and unblocks dependents the same way an achieved target does. |
 | `bullseye_verify` | Emit a structured plan that maps each of a target's `checks` to a sawmill tool invocation. Plan-only — the calling agent runs the checks and folds results back. |
-| `bullseye_frontier` | Unblocked leaf targets ready for work, ordered by distance-to-nearest-checkpoint then unblocking fanout |
-| `bullseye_rework` | Trigger rework from a failed verification |
-| `bullseye_tunnels` | Detect work targets with no checkpoint reachable within N hops |
+| `bullseye_frontier` | Unblocked leaf targets ready for work, ordered by maximum unblocking fanout then target ID |
 | `bullseye_validate` | Check schema conformance |
 | `bullseye_graph` | Generate Mermaid dependency graph |
 | `bullseye_import` | Import targets from markdown into YAML |
 | `bullseye_init` | Create starter bullseye.yaml with sample target |
 | `bullseye_startup_context` | Session startup context (frontier, recent achievements, warnings) |
 | `bullseye_portfolio` | Cross-repo portfolio summary with frontier targets, including cross-repo edges |
-| `bullseye_summary` | Consolidated status overview: groups, frontier ordered by distance + fanout, blocked, stale |
+| `bullseye_summary` | Consolidated status overview: groups, frontier ordered by unblocking fanout, blocked, stale |
 | `bullseye_convergence` | End-to-end convergence evaluation: runs `make bullseye` for invariants, scans git for unreleased fixes, emits summary with frontier detail inline, and computes a deterministic next-action recommendation. Single call, replaces the old multi-tool `/cv` worker. |
 
 See [agents-guide.md](docs/agents-guide.md) for detailed tool
@@ -180,23 +179,25 @@ Run `bullseye sync-priorities --help` for flags (`--db`, `--root`,
 ## Key concepts
 
 - **Frontier**: The set of unblocked leaf targets that can be worked
-  on right now, in parallel.
-- **Checkpoint**: A target whose completion produces a signal the
-  human decision-maker can react to. Only **verify-kind targets**
-  qualify — their whole purpose is to emit a pass/fail signal.
-  Repo-level frontier ordering rewards shortest-path-to-nearest-
-  checkpoint, so chains of opaque work targets get flagged rather
-  than ordered.
-- **Tunnels**: Work targets with no checkpoint reachable within N
-  hops — a signal to reshape the graph by adding a verify target
-  above the offending work.
+  on right now, in parallel. The frontier is the *parallelisable set*
+  — agents are expected to fan out across it rather than pick a single
+  item at a time.
+- **Frontier ordering**: Within a repo, frontier targets are ordered
+  by descending unblocking fanout (count of active targets that depend
+  on this one), tiebroken by ascending target ID. Per-target
+  `value`/`cost` are not consumed by repo-level ordering — those are
+  portfolio-scope inputs only.
 - **Phase boundary**: Bullseye uses different prioritisation engines
   at repo and portfolio scopes. Inside a repo (sub-week horizon,
-  human as decision-maker), ordering is driven by distance-to-
-  nearest-checkpoint — `value`/`cost` are not consumed. Across
-  repos (weekly-plus horizon, human as bottleneck allocator), WSJF
-  with momentum and cross-repo enabler propagation earns its keep.
-  See `docs/mcp-triad.md` §9.
+  human as decision-maker), ordering is driven by unblocking fanout.
+  Across repos (weekly-plus horizon, human as bottleneck allocator),
+  WSJF with momentum and cross-repo enabler propagation earns its
+  keep. See `docs/mcp-triad.md` §9.
+- **Verification**: The acceptance criteria on every target *are* the
+  verification contract. Whether the pass signal comes from CI, a
+  human review, a smoke test, or a design walkthrough is free text on
+  the acceptance field — not a property of the node type. Every target
+  is structurally identical; there is no separate "verify-kind".
 
 ## Development
 

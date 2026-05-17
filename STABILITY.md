@@ -9,29 +9,45 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.27.0. Changes since v0.26.0 affecting the
-interaction surface:
+Snapshot as of the 🎯T25 schema v5 migration (next release after
+v0.27.0). Changes since v0.27.0 affecting the interaction surface:
 
-- **The `showcase` construct is removed** (🎯T23). Schema bumps to
-  `schema_version: 4`. The boolean `showcase` field on `Target` (and
-  its legacy `observable` alias), the `demonstration` field on
-  `Target`, the `showcase` parameter on `bullseye_put`, and the
-  `demonstration` parameter on `bullseye_retire` are all gone. Pre-v4
-  yaml files continue to load — `showcase`, `demonstration`, and
-  `observable` keys are silently dropped on parse and stripped on
-  the next save (one-shot migration). `is_checkpoint` returns true
-  only for verify-kind targets now, so the only way to add a
-  checkpoint is to add a verify target above the work that needs
-  one. Tunnel-warning text and the convergence reshape recommendation
-  describe "add a verify target above this candidate" rather than
-  "flip showcase: true". Filed because the obligation half of the
-  flag never carried its weight in practice — agents skipped the
-  demonstration step the field was supposed to force, while the
-  field added schema, doc, and tool-parameter surface that callers
-  had to reason about. Older binaries reading a v4 file fail loudly
-  via the existing schema-version check. Hard reset of the settling
-  clock to v0.27.0 — schema bump, removed parameters on two mutating
-  tools.
+- **Schema v5: uniform-node model — `kind`, `verifies`, `rework`,
+  `retry_budget`, `retries` removed; `bullseye_revert` added;
+  `bullseye_rework` and `bullseye_tunnels` removed** (🎯T25). Schema
+  bumps to `schema_version: 5`. The `kind` enum (`work` / `verify`),
+  `verifies` edges, `rework` edges, `retry_budget`, and `retries`
+  are all gone from the `Target` struct. Every target is now a plain
+  target with `acceptance` criteria and a `depends_on` list — there
+  is no structural difference between a "work" target and a "verify"
+  target. The acceptance criteria *are* the verification contract;
+  the source of the pass signal (CI, human review, smoke test, design
+  walkthrough) is free text on the acceptance field, not encoded as a
+  node type. Pre-v5 yaml files continue to load — `kind`, `verifies`,
+  `rework`, `retry_budget`, and `retries` keys are silently dropped
+  by serde on parse and stripped on the next save (one-shot
+  migration, same shape as the v3→v4 showcase removal). The entire
+  checkpoint / tunnel apparatus (`is_checkpoint`, `checkpoint_distance`,
+  `format_tunnel_warnings`, `suggest_checkpoint_candidates`,
+  tunnel-warning auto-append on mutations, tunnel warnings in
+  `bullseye_validate` output) is gone alongside the verify-kind
+  distinction that made it meaningful. `bullseye_rework` is removed —
+  use `bullseye_revert` for achievement reversal. `bullseye_tunnels`
+  is removed — the tunnel concept has no meaning in the uniform-node
+  model. New tool `bullseye_revert(cwd, id, reason)` moves an achieved
+  target back to converging, clears the achieved date, and appends
+  `Reverted YYYY-MM-DD: <reason>` to the target's context.
+  Frontier ordering simplifies from `(distance-to-checkpoint,
+  descending-fanout, ascending-ID)` to `(descending-fanout,
+  ascending-ID)` — the checkpoint-distance term drops because there
+  are no longer any checkpoints as a structural concept. The
+  `bullseye_summary` frontier annotation changes from `dist=N,
+  fanout=M` to `fanout=M`. Older binaries reading a v5 file fail
+  loudly via the existing schema-version check. Hard reset of the
+  settling clock to the next release tag — schema bump, two tools
+  removed, one tool added, one tool's parameter set narrowed.
+
+Earlier v0.27.0 changes still in effect:
 
 - **Mutating operations refuse submodule replicas and detached HEAD**
   (🎯T24). `bullseye_put`, `bullseye_retire`, `bullseye_set_aside`,
@@ -380,20 +396,24 @@ Earlier structural changes still in effect:
 3. **`bullseye_convergence`** (v0.11.0). Single-call convergence
    evaluation; absorbs the old multi-call `/cv` worker pattern.
 
-**Phase-boundary hypothesis** (new in v0.13.0, `docs/mcp-triad.md`
-§9): Bullseye now has two prioritisation scopes with different
-objective functions. Repo-level (sub-week, human as decision-maker)
-uses shortest-path-to-next-checkpoint, tiebroken by unblocking
-fanout; per-target `value`/`cost` are **not consumed** by repo-level
-ordering. Portfolio-level (weekly-plus, human as
-bottleneck allocator) will use WSJF + momentum + cross-repo value
+**Phase-boundary hypothesis** (`docs/mcp-triad.md` §9): Bullseye
+has two prioritisation scopes with different objective functions.
+Repo-level (sub-week, human as decision-maker) uses descending
+unblocking fanout; per-target `value`/`cost` are **not consumed** by
+repo-level ordering. The earlier checkpoint-distance signal is gone
+(🎯T25) — the uniform-node model removes the verify-kind distinction
+that made it meaningful. Portfolio-level (weekly-plus, human as
+bottleneck allocator) uses WSJF + momentum + cross-repo value
 propagation (🎯T2.3, pending). The repo/portfolio split means per-
-target `value`/`cost` are now documented as portfolio-scope inputs
-only.
+target `value`/`cost` are documented as portfolio-scope inputs only.
 
-The settling clock for 1.0 eligibility restarts from v0.14.0
-(removing `bullseye_render` is a tool-surface break; file rename
-from `targets.yaml` to `bullseye.yaml` is a file-format break).
+The settling clock for 1.0 eligibility was last hard-reset at
+v0.27.0 (schema bump 3→4, removed parameters on two mutating tools).
+🎯T25 resets it again — schema bump 4→5, two tools removed
+(`bullseye_rework`, `bullseye_tunnels`), one tool added
+(`bullseye_revert`), `bullseye_put` parameter set narrowed (`kind`
+and `verifies` dropped). Settling clock resets at the next release
+tag after 🎯T25.
 
 ### MCP tools
 
@@ -401,21 +421,24 @@ from `targets.yaml` to `bullseye.yaml` is a file-format break).
 |------|--------|-------|
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
-| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 added an `observable` parameter (renamed to `showcase` in v0.19.0) and refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. v0.20.0 rejects `status: set_aside` and routes callers to `bullseye_set_aside` so the rationale is always recorded — see 🎯T18. v0.27.0 removes the `showcase` parameter — see 🎯T23. |
-| `bullseye_retire(cwd, id, actual_cost?)` | Needs review | v0.19.0 added a `demonstration` parameter — **required** when the target carried `showcase: true` and ignored otherwise — to enforce the showcase obligation (🎯T14). v0.27.0 removes that parameter alongside the showcase construct itself; retirement is achievement-only, with no demonstration string — see 🎯T23. |
+| `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. v0.20.0 rejects `status: set_aside` and routes callers to `bullseye_set_aside` so the rationale is always recorded — see 🎯T18. v0.27.0 removes the `showcase` parameter — see 🎯T23. 🎯T25 drops the `kind` and `verifies` parameters — every target is now structurally uniform. |
+| `bullseye_retire(cwd, id, actual_cost?)` | Needs review | v0.27.0 removes the `demonstration` parameter alongside the showcase construct; retirement is achievement-only. See 🎯T23. |
+| `bullseye_revert(cwd, id, reason)` | Fluid | New in 🎯T25. Moves an achieved target back to `converging`, clears the achieved date, and appends `Reverted YYYY-MM-DD: <reason>` to the target's context. Achievement-only — to resume a set-aside target use `bullseye_put` with `status: identified`. |
 | `bullseye_set_aside(cwd, id, reason)` | Needs review | New in v0.20.0. Sets the target's status to `set_aside` and records the rationale (parked / deferred / wont_fix — the schema deliberately doesn't taxonomise; the free-text reason carries the nuance). Refuses already-achieved targets and is idempotent on already-set-aside targets (original reason wins). Empty / whitespace-only reasons are rejected — the rationale is the load-bearing artefact of the disposition. See 🎯T18. |
-| `bullseye_frontier(cwd)` | Stable | v0.13.0 ordering: ascending distance-to-nearest-checkpoint, tiebroken by unblocking fanout, then ID. Per-target value/cost are NOT consumed. |
-| `bullseye_rework(cwd, id, diagnosis, sawmill_failure?, mnemo_history?)` | Needs review | v0.21.0 adds two optional JSON-encoded payload parameters that are validated and persisted into the rework target's context as labelled fenced JSON blocks. The string-encoded shape is a workaround for the rust-mcp-sdk JsonSchema derive emitting `type: "unknown"` for `serde_json::Value` (which the Anthropic API rejects); a typed wrapper may emerge once sawmill's and mnemo's payload schemas settle. The mnemo half waits on an upstream rework-aware query — see 🎯T1.5. |
-| `bullseye_tunnels(cwd, max_depth)` | Needs review | v0.13.0 generalised from "no verify within N hops" to "no checkpoint within N hops" (verify-kind targets, plus work-kind targets with `showcase: true` as of v0.19.0). v0.27.0 narrows the predicate back to verify-kind only after the showcase construct retired (🎯T23) — output format unchanged, candidate-suggestion text now reads "add a verify target above this candidate". |
+| `bullseye_frontier(cwd)` | Stable | 🎯T25 ordering: descending unblocking fanout, then ascending ID. Per-target value/cost are NOT consumed. The checkpoint-distance term is gone alongside the verify-kind distinction that made it meaningful. |
 | `bullseye_verify(cwd, id)` | Fluid | New in v0.13.0. Emits a structured plan (markdown + JSON) mapping each check on the target to a sawmill tool invocation. Bullseye does not execute the plan — the calling agent runs it against sawmill and folds results back into a report. The plan-only (no result-feedback) shape may evolve once we see how `/cv` or similar wrappers consume it. |
-| `bullseye_validate(cwd)` | Needs review | v0.24.0 surfaces tunnel warnings (with ranked candidate checkpoint locations) alongside the existing structural-error and stylistic-warning sections — see 🎯T21. Output gains a `## ⚠ Tunnel warnings` block when the active graph has any tunnels. Validation rules will continue to grow; existing rules unchanged. |
+| `bullseye_validate(cwd)` | Needs review | Validates ID format, dependency references, and cycle detection. Validation rules will continue to grow; existing rules unchanged. |
 | `bullseye_graph(cwd)` | Stable | |
 | `bullseye_import(cwd, path, force)` | Stable | Markdown-to-YAML migration. `path` is now required (auto-discovery removed in v0.14.0). |
 | `bullseye_init(cwd, project_name)` | Stable | Refuses to overwrite existing file |
 | `bullseye_startup_context(cwd, recent_days)` | Needs review | v0.9.0 degrades gracefully on missing / unreadable / unparsable files; still fails loudly on `schema_version` mismatch. |
 | `bullseye_portfolio(root, max_depth)` | Needs review | v0.9.0 surfaces load warnings (especially `schema_version` mismatches) under a `## ⚠ Warnings` section instead of silently dropping affected repos. |
-| `bullseye_summary(cwd, momentum?, frontier_details?)` | Needs review | `momentum` added in v0.9.0, reshaped in v0.10.0 to a list of `{id, multiplier}` entries. WSJF-ranking section removed in v0.11.0 — frontier-first scheduling is the model, and the frontier section itself is the prioritised list (ordered by `value × momentum`). `frontier_details: true` expands each frontier entry with full acceptance, context, and edges. Composition happens at the skill layer; bullseye never calls mnemo. |
+| `bullseye_summary(cwd, momentum?, frontier_details?)` | Needs review | `momentum` added in v0.9.0, reshaped in v0.10.0 to a list of `{id, multiplier}` entries. `frontier_details: true` expands each frontier entry with full acceptance, context, and edges. 🎯T25: frontier annotation changes from `dist=N, fanout=M` to `fanout=M`; the checkpoint-distance term drops with the uniform-node model. Composition happens at the skill layer; bullseye never calls mnemo. |
 | `bullseye_convergence(cwd, momentum?, skip_invariants?)` | Needs review | New in v0.11.0. Single-call convergence evaluation: invariants via `make bullseye` / `mk bullseye`, git-based unreleased-fix detection, summary with inline frontier details, and a deterministic next-action recommendation. Absorbs most of the old `/cv` worker logic into a stateless tool call. Missing hook degrades gracefully with embedded setup instructions; frontier recommendation still fires. |
+
+**Removed in 🎯T25** (breaking):
+- `bullseye_rework` — replaced by `bullseye_revert` for achievement reversal; the rework-cycle pattern (verify target → rework edge → work target) no longer exists in the uniform-node model.
+- `bullseye_tunnels` — the tunnel concept has no meaning without the verify-kind / checkpoint distinction.
 
 **Removed in v0.8.0** (breaking):
 - `bullseye_add` — replaced by the upsert tool (`bullseye_put` as of v0.12.0; was `bullseye_assert` in v0.8.0–v0.11.0)
@@ -448,11 +471,11 @@ Planned additions (not yet implemented):
 
 | Field | Status | Notes |
 |-------|--------|-------|
-| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `4` (v0.27.0). Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. v0.19.0 bumped 1→2 for the `observable` → `showcase` rename + retire-demo obligation; v0.20.0 bumped 2→3 for the new `set_aside` status enum value (🎯T18); v0.27.0 bumps 3→4 for the removal of `showcase` and `demonstration` (🎯T23). Pre-v4 yaml files load unchanged — the retired keys are silently dropped on parse and stripped on the next save. |
+| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `5` (🎯T25). Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. v0.19.0 bumped 1→2 for the `observable` → `showcase` rename + retire-demo obligation; v0.20.0 bumped 2→3 for the new `set_aside` status enum value (🎯T18); v0.27.0 bumps 3→4 for the removal of `showcase` and `demonstration` (🎯T23); 🎯T25 bumps 4→5 for the removal of `kind`, `verifies`, `rework`, `retry_budget`, and `retries` (uniform-node model). Pre-v5 yaml files load unchanged — the retired keys are silently dropped on parse and stripped on the next save. |
 | `targets` (map) | Stable | |
 | `last_evaluated` | Stable | |
 | `name` | Stable | |
-| `kind` (work/verify) | Stable | |
+| `kind` (removed) | Removed in 🎯T25 | Was `work` or `verify`. Every target is now structurally uniform — there is no node-type distinction. Pre-v5 yaml files with `kind:` keys load unchanged; the key is silently dropped on parse and stripped on the next save. |
 | `status` (identified/converging/achieved/set_aside) | Stable | v0.20.0 adds `set_aside` as a fourth terminal disposition for parked / deferred / wont-fix targets. The set-aside transition is performed via `bullseye_set_aside(cwd, id, reason)` rather than `bullseye_put` so the rationale is always recorded. Set-aside targets unblock dependents like achieved targets (terminal for graph traversal) but render in a separate group in summary output. See 🎯T18. |
 | `set_aside_reason` | Needs review | New in v0.20.0. Optional string at the schema level; **required and non-empty** at validation time when `status == set_aside`. Validation flags missing or whitespace-only reasons, and flags stale `set_aside_reason` values left on non-set-aside statuses. See 🎯T18. |
 | `value`, `cost` | Stable | Fibonacci scale |
@@ -465,9 +488,9 @@ Planned additions (not yet implemented):
 | `showcase` (removed) | Removed in v0.27.0 | Was a boolean flag introduced in v0.13.0 as `observable`, renamed to `showcase` in v0.19.0. Removed entirely in v0.27.0 (🎯T23) — only verify-kind targets are checkpoints now. Pre-v4 yaml files with `showcase:` (or the legacy `observable:` alias) keys load unchanged; the keys are silently dropped on parse and stripped on the next save. |
 | `demonstration` (removed) | Removed in v0.27.0 | Was an optional string introduced in v0.19.0, populated by `bullseye_retire` when the retired target carried `showcase: true`. Removed alongside the showcase construct in v0.27.0 (🎯T23). Pre-v4 yaml files with `demonstration:` keys load unchanged; the keys are silently dropped on parse and stripped on the next save. |
 | `strategy` | Fluid | New in v0.23.0. Optional `Strategy { command: String, trigger: String, timeout: Option<String>, retry: Option<RetryPolicy> }`; `RetryPolicy { max_attempts: Option<u32>, backoff: Option<String> }`. Targets that declare a strategy will be converged mechanically by the future bullseye-native executor (🎯T15, lives in a separate repo). Bullseye persists and validates (rejects empty `command` / `trigger` after trim) but does not execute. `trigger` is free-form for now (`cron:0 * * * *`, `fswatch:/path`, `on_wake`, `manual`) — the executor parses it. Expected churn as the executor lands and real-world use clarifies which sub-fields need to become structured. |
-| `verifies` | Stable | |
-| `rework` | Stable | |
-| `retry_budget`, `retries` | Stable | |
+| `verifies` (removed) | Removed in 🎯T25 | Was a list of target IDs that a verify-kind target validated. Removed alongside the verify-kind distinction. Pre-v5 yaml files with `verifies:` keys load unchanged; the key is silently dropped on parse and stripped on the next save. |
+| `rework` (removed) | Removed in 🎯T25 | Was a back-edge from a verify target to a work target for failure re-entry. Removed alongside the rework-cycle pattern. Pre-v5 yaml files with `rework:` keys load unchanged; the key is silently dropped on parse and stripped on the next save. |
+| `retry_budget`, `retries` (removed) | Removed in 🎯T25 | Were the max retry count and current retry counter for rework cycles. Removed alongside the rework-cycle pattern. Pre-v5 yaml files with these keys load unchanged; the keys are silently dropped on parse and stripped on the next save. |
 | `tags` | Stable | |
 | `origin` | Stable | |
 | `discovered`, `achieved` | Stable | |
@@ -493,7 +516,6 @@ Planned additions:
 |--------|--------|-------|
 | Mermaid graph output | Needs review | Node/edge styling may change |
 | Tool response text format | Fluid | Not yet formalised; consumers should parse loosely |
-| `## ⚠ Tunnel warnings` section in mutating-tool / validate responses | Fluid | New in v0.24.0. Appended to `bullseye_put` / `bullseye_retire` / `bullseye_set_aside` / `bullseye_validate` output when the post-mutation active graph contains tunnels. Format and candidate-ranking heuristic (Convergence > Root > Self > OnPath) may evolve as real usage clarifies what nudges actually drive the right reshape. See 🎯T21. |
 | `targets_priorities` SQLite schema | Fluid | New in v0.24.0. Written by `bullseye sync-priorities`, replicated to the Protocol app via sqlpipe-over-pigeon. Columns: `id` PRIMARY KEY (`"{repo}/{target_id}"`), `repo` TEXT NOT NULL, `name` TEXT NOT NULL, `priority` REAL NOT NULL, `context` TEXT, `horizon` TEXT NOT NULL DEFAULT `'today'`, `updated_at` TEXT NOT NULL. Schema is laptop-owned (Protocol is read-only). Column set may evolve as the phone-side rendering settles — particularly whether `priority` should carry richer banding info or whether `horizon` should be auto-assigned by rank. See 🎯T3.1, `docs/mcp-triad.md` §7. |
 
 ## Gaps and prerequisites for 1.0
@@ -503,8 +525,8 @@ Planned additions:
 - **`bullseye_verify` feedback loop**: The plan-only shape shipped in
   v0.13.0 has no mechanism to fold sawmill results back into a
   structured pass/fail report on the target. Before 1.0 this should
-  either be added (so verification can auto-trigger `bullseye_rework`)
-  or the decision to stay plan-only should be documented as deliberate.
+  either be added or the decision to stay plan-only should be
+  documented as deliberate.
 - **`bullseye_startup_context`, `bullseye_portfolio`, `bullseye_summary`
   stabilisation**: All three are new and their output formats may evolve
   with real-world usage.
@@ -562,7 +584,13 @@ Planned additions:
   `showcase` parameter, `bullseye_retire` loses its `demonstration`
   parameter, and the corresponding `Target` fields are gone.
   Schema bump + breaking parameter removals on two mutating tools —
-  hard reset of the settling clock to v0.27.0.
+  hard reset of the settling clock to v0.27.0. 🎯T25 removes `kind`,
+  `verifies`, `rework`, `retry_budget`, and `retries` from the schema
+  (uniform-node model), bumps schema 4→5, removes `bullseye_rework`
+  and `bullseye_tunnels`, adds `bullseye_revert`, and narrows
+  `bullseye_put`'s parameter set. Schema bump + two tools removed +
+  one tool added — hard reset of the settling clock to the next
+  release tag.
 - **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
 
 ## Out of scope for 1.0
