@@ -138,35 +138,38 @@ the language of the target graph. A new session calling
 `mnemo_restore` gets structured target context it can immediately
 act on.
 
-### 4. Rework diagnosis (all three)
+### 4. Revert and re-entry (all three)
 
-When a verify target fails and triggers `targets_rework`:
+When a target turns out not to be as achieved as it looked — a
+regression surfaces, an acceptance criterion that wasn't fully
+checked fails later — `bullseye_revert` moves it back to converging
+and records a timestamped note. The three servers then contribute:
 
-1. **targets** records the backward edge with a diagnosis payload
-   (already implemented).
+1. **targets** records the revert with a reason and clears the
+   achieved date (already implemented in `bullseye_revert`).
 2. **sawmill** identifies *what* failed — which convention was
    violated, which structural invariant broke, with line-level
    precision.
-3. **mnemo** surfaces *prior attempts* — "this target was reworked
+3. **mnemo** surfaces *prior attempts* — "this target was worked
    once before in session X; here's what was tried and why it
-   failed."
+   didn't hold."
 
-The rework diagnosis is the concatenation of all three signals:
+The re-entry diagnosis is the concatenation of all three signals:
 structural failure (sawmill) + historical context (mnemo) +
-retry budget status (targets). This gives the rework agent
-maximum context for the next attempt.
+revert reason (targets). This gives the agent maximum context for
+the next attempt.
 
 **Data flow:**
 
 ```
-verify target fails
+target regresses after retirement
   → sawmill check_conventions / check_invariants
     → structured failure report (which checks, which files, which lines)
-  → mnemo_search("T5 rework" OR "platform isolation failure")
-    → prior rework attempts and their outcomes
-  → targets_rework(verify: "T5", diagnosis: combined_report)
-    → resets upstream target, increments retry counter
-    → agent resumes work with full diagnosis context
+  → mnemo_search("T5 prior work" OR "platform isolation failure")
+    → prior sessions and their outcomes
+  → bullseye_revert(cwd, "T5", diagnosis: combined_report)
+    → moves target to converging, records revert note
+    → agent resumes work with full context
 ```
 
 ### 5. What `/cv` becomes
@@ -214,10 +217,10 @@ improvement).
 ### The two-tier attention model
 
 Within a single repo, agent capacity is effectively unlimited. The
-state machine model optimises for parallel throughput — frontier
-computation, fan-out, verification checkpoints. Priority ranking is
-unnecessary within a repo because agents can work everything on the
-frontier simultaneously.
+model optimises for parallel throughput — frontier computation and
+fan-out across all unblocked targets simultaneously. Priority ranking
+is unnecessary within a repo because agents can work everything on
+the frontier in parallel.
 
 Across repos, the constraint changes. Human attention is finite.
 You can't review, steer, and unblock work in 15 repos at once. The
@@ -484,7 +487,7 @@ This immediately answers "where was I?" without running `/waw` or
 `/cv`. The agent sees it in context and can decide whether to
 continue prior work or start something new.
 
-## 9. Repo-level prioritisation: the phase-boundary hypothesis
+## 9. Repo-level prioritisation: the phase-boundary hypothesis (updated for 🎯T25)
 
 Bullseye runs two distinct prioritisation engines with *different
 objective functions*. The split isn't a layering accident; it
@@ -498,44 +501,24 @@ Throughput optimisation through value/cost weighting is *noise* at
 this scale — agents can work every frontier target in parallel, so
 there's no throughput to optimise in the first place.
 
-What actually matters is how quickly the work moves the human
-decision-maker to the next *checkpoint*: the next moment where they
-can look at something and react. The human's role inside a repo is
-to steer, not to execute. They need fast feedback loops on which
-branches of the target graph are paying off, which assumptions were
-wrong, and where intervention is needed.
+What actually matters is moving as much of the graph as possible per
+unit of agent effort. The frontier is the *parallelisable set*:
+agents fan out across all of it, not just the top-ranked item. The
+repo-level ordering is therefore a guide for prioritising within the
+fan-out, not a serialisation constraint.
 
-This decomposes into two sub-objectives:
+The repo-level frontier is sorted by (🎯T25, v0.28.0):
 
-1. **Unblocking flow.** Targets that unblock the most downstream
-   work move more of the graph per unit effort. This is the
-   "unblocking fanout" score — count of active targets listing
-   this one in `depends_on`.
-2. **Uncertainty reduction.** Every intermediate target is a
-   prediction that might be wrong. Producing a checkpoint early
-   prunes the wrong predictions before they cost more work.
+1. **Descending unblocking fanout.** Targets that free the most
+   downstream work move more of the graph per unit effort. This is
+   the count of active targets listing this one in `depends_on`.
+2. **Ascending target ID.** Pure determinism.
 
-The signal for both is the same: **distance to the nearest
-checkpoint**. A checkpoint is a target whose completion produces a
-signal the human can react to — a verify-kind target by definition
-(its whole purpose is to emit a pass/fail signal). The earlier
-`showcase: true` flag on work targets (v0.13.0–v0.26.0) carried the
-same checkpoint role with an additional retire-time demonstration
-obligation; it was retired in v0.27.0 (🎯T23) after the obligation
-half failed to change agent behaviour in practice. Long chains of
-non-checkpoint targets are **tunnels**, and repo-level ordering
-actively steers away from them.
-
-The repo-level frontier is therefore sorted by:
-
-1. **Ascending distance-to-checkpoint.** Get to a checkpoint fast.
-2. **Descending unblocking fanout.** All else equal, prefer
-   targets that free more downstream work.
-3. **Ascending target ID.** Pure determinism.
-
-`value`, `cost`, and `momentum` do not enter this ordering. They
-are consumed only by the portfolio engine (§6) where the horizon
-is different.
+`value`, `cost`, `momentum`, and the earlier distance-to-checkpoint
+signal do not enter this ordering. The distance-to-checkpoint and
+tunnel apparatus was retired in 🎯T25 — the uniform-node model
+removes the verify-kind distinction that made checkpoints a
+structural concept, and the ordering simplifies accordingly.
 
 ### Across repos: the human as bottleneck allocator (weekly-plus horizon)
 
@@ -547,26 +530,13 @@ cross-repo enablement. That's what `src/portfolio.rs` implements,
 and it's the correct scope for those signals.
 
 The two engines use the same target graph but ask different
-questions. Repo scope asks "Which branch of this graph reaches a
-checkpoint fastest?". Portfolio scope asks "Which repo should I
-enter at all this week?". Mixing the signals in either direction
+questions. Repo scope asks "Which of these unblocked targets frees
+the most downstream work?". Portfolio scope asks "Which repo should
+I enter at all this week?". Mixing the signals in either direction
 corrupts both answers — that's why `Target::value` and
 `Target::cost` carry explicit doc comments declaring them
-portfolio-scope, and why [`graph::rank_frontier`] takes `file` but
-no momentum parameter.
-
-### Tunnel warnings and the reshape recommendation
-
-When the top-ranked frontier candidate has *no* checkpoint
-reachable at all, `bullseye_convergence` refuses to auto-select it.
-Instead it emits a `**Blocked**:` next-action line recommending the
-user reshape the graph by adding a verify target above one of the
-tunneled work targets. The `**Blocked**:` prefix triggers the `/cv`
-skill's existing pause-for-human branch, so the agent doesn't
-blunder forward into a tunnel it can't see the end of. See
-[`graph::tunnels`] for the flag-on-detection side and
-`convergence::render_next_action` for the block-on-selection side;
-they share the same `is_checkpoint` predicate.
+portfolio-scope, and why repo-level frontier ranking takes no
+momentum parameter.
 
 ### Why value/cost still exist
 
@@ -574,9 +544,8 @@ They remain on every target because the portfolio engine consumes
 them, and because the human uses them as shorthand when sketching
 new targets (they're quick fields to fill in and carry useful
 signal at the portfolio level). Dropping them would break the
-portfolio view. What changed in 🎯T7 is that the repo-level code
-paths stop consuming them — they're portfolio-scope inputs, not
-universal sort keys.
+portfolio view. The repo-level code paths do not consume them —
+they're portfolio-scope inputs, not universal sort keys.
 
 ## Open questions
 

@@ -10,7 +10,6 @@ targets:
       - CI green on all platforms
       - No test skips without documented reason
     context: Cross-platform CI is a project goal.
-    retry_budget: 3
     discovered: 2026-03-01
 
   T2:
@@ -48,7 +47,6 @@ targets:
 
   T5:
     name: CI and platform isolation verified
-    kind: verify
     status: identified
     value: 3
     cost: 1
@@ -56,10 +54,6 @@ targets:
       - Tests pass on all platforms
       - No platform leakage outside src/platform/
     context: Verification checkpoint for T1 and T3.
-    verifies:
-      - T1
-      - T3
-    rework: T1
     depends_on:
       - T1
       - T3

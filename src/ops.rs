@@ -1,97 +1,79 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::schema::{Check, Kind, QueryCheck, Status, TargetsFile};
+use crate::schema::{Check, QueryCheck, Status, TargetsFile};
 
-/// Result of a rework operation.
+/// Result of a revert operation.
 #[derive(Debug)]
-pub struct ReworkResult {
-    /// The rework destination target ID.
-    pub rework_id: String,
-    /// Name of the rework destination.
-    pub rework_name: String,
-    /// New retry count after this rework.
-    pub retries: u32,
-    /// Retry budget (if set).
-    pub budget: Option<u32>,
-    /// Whether the retry budget is exhausted.
-    pub budget_exhausted: bool,
+pub struct RevertResult {
+    /// Name of the target that was reopened (for display).
+    pub name: String,
 }
 
-/// Error from a rework operation.
+/// Error from a revert operation.
 #[derive(Debug, PartialEq)]
-pub enum ReworkError {
+pub enum RevertError {
     TargetNotFound(String),
-    NotVerifyTarget(String),
-    NoReworkTarget(String),
-    ReworkDestNotFound(String),
+    NotAchieved(String),
 }
 
-impl std::fmt::Display for ReworkError {
+impl std::fmt::Display for RevertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReworkError::TargetNotFound(id) => write!(f, "target {id} not found"),
-            ReworkError::NotVerifyTarget(id) => write!(f, "🎯{id} is not a verify target"),
-            ReworkError::NoReworkTarget(id) => write!(f, "🎯{id} has no rework target"),
-            ReworkError::ReworkDestNotFound(id) => write!(f, "rework target {id} does not exist"),
+            RevertError::TargetNotFound(id) => write!(f, "target {id} not found"),
+            RevertError::NotAchieved(id) => write!(
+                f,
+                "🎯{id} is not achieved — `bullseye_revert` re-opens previously-retired targets. \
+                 To resume a set-aside target use `bullseye_put` with `status: identified`; to \
+                 move an active target backwards, patch its status directly."
+            ),
         }
     }
 }
 
-/// Execute a rework cycle: reset verify target to identified, reset
-/// rework destination to converging, increment retries, append diagnosis.
+/// Re-open a previously-retired target: status moves Achieved →
+/// Converging, the achieved date is cleared, and the reason is
+/// appended to the target's context with today's date as a Revert
+/// label so the audit trail survives in-place. Does NOT save to disk.
 ///
-/// Returns information about the rework for display. Does NOT save to disk.
-pub fn rework(
+/// Replaces the v4 verify→rework retry-budget loop. The v4 model
+/// modelled validation failure as a graph edge with a counter; v5
+/// treats it as a direct mutation on the affected target. If a
+/// retirement turns out to have been wrong (regression, missed
+/// acceptance criterion, externally-detected breakage), the agent
+/// (or human) calls `bullseye_revert` with a reason describing what
+/// changed.
+pub fn revert(
     file: &mut TargetsFile,
-    verify_id: &str,
-    diagnosis: &str,
-) -> Result<ReworkResult, ReworkError> {
-    // Validate the verify target.
-    let verify = file
+    target_id: &str,
+    reason: &str,
+) -> Result<RevertResult, RevertError> {
+    let target = file
         .targets
-        .get(verify_id)
-        .ok_or_else(|| ReworkError::TargetNotFound(verify_id.to_string()))?;
+        .get_mut(target_id)
+        .ok_or_else(|| RevertError::TargetNotFound(target_id.to_string()))?;
 
-    if verify.kind != Kind::Verify {
-        return Err(ReworkError::NotVerifyTarget(verify_id.to_string()));
+    if target.status != Status::Achieved {
+        return Err(RevertError::NotAchieved(target_id.to_string()));
     }
 
-    let rework_id = verify
-        .rework
-        .clone()
-        .ok_or_else(|| ReworkError::NoReworkTarget(verify_id.to_string()))?;
+    target.status = Status::Converging;
+    target.achieved = None;
 
-    if !file.targets.contains_key(&rework_id) {
-        return Err(ReworkError::ReworkDestNotFound(rework_id));
-    }
-
-    // Reset the verify target to identified.
-    file.targets.get_mut(verify_id).unwrap().status = Status::Identified;
-
-    // Reset the rework target to converging and increment retries.
-    let rework_target = file.targets.get_mut(&rework_id).unwrap();
-    rework_target.status = Status::Converging;
-    rework_target.retries += 1;
-    let retries = rework_target.retries;
-    let budget = rework_target.retry_budget;
-    let rework_name = rework_target.name.clone();
-
-    // Append diagnosis to rework target's context if provided.
-    if !diagnosis.is_empty() {
-        let ctx = &mut file.targets.get_mut(&rework_id).unwrap().context;
-        if !ctx.is_empty() {
-            ctx.push_str("\n\n");
+    let trimmed = reason.trim();
+    if !trimmed.is_empty() {
+        let today = chrono::Local::now().date_naive();
+        let entry = format!("Reverted {today}: {trimmed}");
+        if target.context.is_empty() {
+            target.context = entry;
+        } else {
+            target.context.push_str("\n\n");
+            target.context.push_str(&entry);
         }
-        ctx.push_str(&format!("Rework #{retries}: {diagnosis}"));
     }
 
-    Ok(ReworkResult {
-        rework_id,
-        rework_name,
-        retries,
-        budget,
-        budget_exhausted: budget.is_some_and(|b| retries >= b),
+    Ok(RevertResult {
+        name: target.name.clone(),
     })
 }
 

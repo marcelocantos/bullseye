@@ -478,14 +478,12 @@ fn render_next_action(
         return;
     }
 
-    // Priority 3 — repo-level frontier ordering (🎯T7).
+    // Priority 3 — repo-level frontier ordering.
     //
-    // Distance-to-nearest-checkpoint is the primary sort signal,
-    // with unblocking fanout as tiebreaker and ID as final tiebreak.
-    // See `graph::rank_frontier` for the full rule. `momentum` is
-    // intentionally not consumed here — it's a portfolio-scope
-    // input, not a repo-level signal. See 🎯T7 in `bullseye.yaml`
-    // and §9 of `docs/mcp-triad.md`.
+    // Unblocking fanout is the primary sort signal, with target ID
+    // as the deterministic tiebreak. See `graph::rank_frontier` for
+    // the full rule. `momentum` is intentionally not consumed here —
+    // it's a portfolio-scope input, not a repo-level signal.
     let _ = momentum;
     let errors = graph::validate_blocking(file);
     if !errors.is_empty() {
@@ -507,74 +505,36 @@ fn render_next_action(
 
     let ranked = graph::rank_frontier(file, &front);
 
-    // Tunnel reshape guard: if the top-ranked frontier candidate has
-    // no checkpoint reachable at all, selecting it would extend a
-    // tunnel — a chain of non-checkpoint targets with no
-    // human-visible signal at the end. Recommend reshaping the graph
-    // (adding a verify target above the candidate) rather than
-    // blundering forward. Uses the `**Blocked**:` prefix so the `/cv`
-    // skill's existing auto-execute branch correctly pauses instead
-    // of dispatching to an agent. See acceptance #5 on 🎯T7.
+    // Collect top-tier ties — frontier targets sharing the same
+    // unblocking fanout as the top candidate. These are all equally-
+    // good choices from repo-level ordering's point of view and can
+    // be fanned out to parallel agents.
     let top = &ranked[0];
-    if top.distance.is_none() {
-        let tun_len = ranked.iter().take_while(|rf| rf.distance.is_none()).count();
-        out.push_str(&format!(
-            "**Blocked**: top frontier target 🎯{id} \"{name}\" would extend a tunnel with \
-             no checkpoint reachable downstream. {tun_len} of {total} frontier \
-             target(s) have no checkpoint reachable at all.\n\n\
-             Reshape the graph before proceeding — add a verify target above one of the \
-             tunneled work targets so the decision-maker gets a checkpoint within a few \
-             hops. See the ## Frontier section above for the full target list and the \
-             🎯T7 rationale in `docs/mcp-triad.md` §9.\n",
-            id = top.target.id,
-            name = top.target.name,
-            total = ranked.len(),
-        ));
-        if hook_missing_note {
-            out.push_str(
-                "\n⚠ Note: standing invariants are **unknown** for this run — the project \
-                 has no `bullseye` rule in its Makefile/mkfile. See the ## Invariants section \
-                 for setup instructions.\n",
-            );
-        }
-        return;
-    }
-
-    // Collect top-tier ties — frontier targets sharing the exact same
-    // (distance, fanout) pair as the top candidate. These are all
-    // equally-good choices from repo-level ordering's point of view
-    // and can be fanned out to parallel agents.
-    let top_key = (top.distance, top.fanout);
+    let top_fanout = top.fanout;
     let ties: Vec<&graph::RankedFrontier<'_>> = ranked
         .iter()
-        .take_while(|rf| (rf.distance, rf.fanout) == top_key)
+        .take_while(|rf| rf.fanout == top_fanout)
         .collect();
 
     if ties.len() == 1 {
         let t = ties[0];
         out.push_str(&format!(
             "**Execute now**: Work on 🎯{} {}\n\n\
-             Distance to nearest checkpoint: {}. Unblocking fanout: {}. \
-             See the ## Frontier section above for this target's acceptance criteria and \
-             context.\n",
-            t.target.id,
-            t.target.name,
-            describe_distance(t.distance),
-            t.fanout,
+             Unblocking fanout: {}. See the ## Frontier section above for this target's \
+             acceptance criteria and context.\n",
+            t.target.id, t.target.name, t.fanout,
         ));
     } else {
         let ids: Vec<String> = ties.iter().map(|t| format!("🎯{}", t.target.id)).collect();
         out.push_str(&format!(
             "**Execute now**: Work in parallel on {} frontier targets sharing the top \
              repo-level rank — {}.\n\n\
-             All tied on distance-to-checkpoint = {} and unblocking fanout = {}. Each \
-             target's acceptance criteria and context are in the ## Frontier section \
-             above. Fan out via parallel Agent calls, one per target, per the Teams \
-             directive in CLAUDE.md.\n",
+             All tied on unblocking fanout = {}. Each target's acceptance criteria and \
+             context are in the ## Frontier section above. Fan out via parallel Agent \
+             calls, one per target, per the Teams directive in CLAUDE.md.\n",
             ties.len(),
             ids.join(", "),
-            describe_distance(top_key.0),
-            top_key.1,
+            top_fanout,
         ));
     }
 
@@ -588,17 +548,6 @@ fn render_next_action(
 
     // Suppress unused-parameter warning for file_path in release builds.
     let _ = file_path;
-}
-
-/// Human-readable distance for the next-action text. Collapses the
-/// `Some(0)` case to "checkpoint" so the copy reads naturally when
-/// the top candidate is itself a checkpoint.
-fn describe_distance(distance: Option<usize>) -> String {
-    match distance {
-        Some(0) => "checkpoint (0)".to_string(),
-        Some(n) => n.to_string(),
-        None => "unreachable".to_string(),
-    }
 }
 
 /// Example `make bullseye` rule shown in the setup instructions.

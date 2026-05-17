@@ -53,10 +53,9 @@ impl ServerHandler for TargetHandler {
             TargetTools::GetTool(t) => handle_get(t),
             TargetTools::PutTool(t) => handle_put(t),
             TargetTools::RetireTool(t) => handle_retire(t),
+            TargetTools::RevertTool(t) => handle_revert(t),
             TargetTools::SetAsideTool(t) => handle_set_aside(t),
             TargetTools::FrontierTool(t) => handle_frontier(t),
-            TargetTools::ReworkTool(t) => handle_rework(t),
-            TargetTools::TunnelsTool(t) => handle_tunnels(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
             TargetTools::InitTool(t) => handle_init(t),
@@ -295,11 +294,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             check_no_envelope_leak(&format!("blocks[{i}]"), s).map_err(tool_err)?;
         }
     }
-    if let Some(items) = &t.verifies {
-        for (i, s) in items.iter().enumerate() {
-            check_no_envelope_leak(&format!("verifies[{i}]"), s).map_err(tool_err)?;
-        }
-    }
 
     struct Outcome {
         id: String,
@@ -324,13 +318,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             )),
         }
     };
-    let parse_kind_s = |s: &str| -> Result<crate::schema::Kind, String> {
-        match s {
-            "work" => Ok(crate::schema::Kind::Work),
-            "verify" => Ok(crate::schema::Kind::Verify),
-            other => Err(format!("unknown kind: {other} (use work or verify)")),
-        }
-    };
 
     let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
         // Resolve target ID. None → auto-assign a new top-level ID.
@@ -346,7 +333,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             // Creation path — name and acceptance are required.
             // value and cost are optional at repo scope (they are portfolio-scope
             // metadata consumed by cross-repo WSJF ranking, not by the repo-level
-            // frontier ordering which uses distance-to-checkpoint instead).
+            // frontier ordering which uses `depends_on` shape only).
             // Omitting them defaults to 0.0, which signals "not set at repo scope"
             // and is skipped by portfolio WSJF scoring.
             let name = t
@@ -361,10 +348,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 .filter(|a| !a.is_empty())
                 .ok_or_else(|| "acceptance is required when creating a target".to_string())?;
 
-            let kind = match t.kind.as_deref() {
-                Some(k) => parse_kind_s(k)?,
-                None => crate::schema::Kind::Work,
-            };
             let status = match t.status.as_deref() {
                 Some(s) => parse_status_s(s)?,
                 None => Status::Identified,
@@ -372,7 +355,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
 
             let target = Target {
                 name,
-                kind,
                 status,
                 value,
                 cost,
@@ -385,10 +367,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 depends_on: t.depends_on.clone().unwrap_or_default(),
                 cross_depends: Vec::new(),
                 cross_enables: Vec::new(),
-                verifies: t.verifies.clone().unwrap_or_default(),
-                rework: None,
-                retry_budget: None,
-                retries: 0,
                 tags: t.tags.clone().unwrap_or_default(),
                 strategy: None,
                 origin: t.origin.clone().unwrap_or_else(|| "manual".to_string()),
@@ -402,12 +380,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             file.targets.insert(id.clone(), target);
         } else {
             // Patch path — only provided fields change.
-
-            // Kind is creation-only; reject early so the error surfaces
-            // regardless of any other field state.
-            if t.kind.is_some() {
-                return Err("kind can only be set when creating a target".to_string());
-            }
 
             // Parse the optional new status upfront so the
             // achieved-immutability check below and the field application
@@ -435,8 +407,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 || t.context.is_some()
                 || t.tags.is_some()
                 || t.origin.is_some()
-                || t.depends_on.is_some()
-                || t.verifies.is_some();
+                || t.depends_on.is_some();
             if target_currently_achieved && would_remain_achieved && content_edits_present {
                 return Err(format!(
                     "🎯{id} is achieved — its content is immutable. Re-open it first by \
@@ -468,9 +439,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             }
             if let Some(ref deps) = t.depends_on {
                 target.depends_on = deps.clone();
-            }
-            if let Some(ref verifies) = t.verifies {
-                target.verifies = verifies.clone();
             }
             if let Some(status) = new_status {
                 target.status = status;
@@ -540,7 +508,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         ));
     }
     out.push_str(&format!("\nFile: {}", path.display()));
-    append_tunnel_warnings(&mut out, &path);
     text_result(out)
 }
 
@@ -582,10 +549,49 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             if let Some(actual) = t.actual_cost {
                 out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
             }
-            append_tunnel_warnings(&mut out, &path);
             text_result(out)
         }
     }
+}
+
+/// Re-open a previously-retired target (🎯T25). Replaces the v4
+/// verify→rework retry-budget loop. Refuses to revert a target that
+/// is not currently achieved — the operation is achievement-only;
+/// to resume a set-aside target use `bullseye_put` with
+/// `status: identified`, and to move an active target backwards
+/// patch its status directly.
+pub fn handle_revert(t: crate::tools::RevertTool) -> ToolResult {
+    let path = discover_path(&t.cwd)?;
+    ensure_mutation_allowed(&path, &t.cwd)?;
+
+    // Envelope-leak guard (🎯T20). Validate before trim/empty check
+    // so a reason that's "just a leaked tag" reports the leak (more
+    // actionable) rather than the empty-after-trim error.
+    check_no_envelope_leak("reason", &t.reason).map_err(tool_err)?;
+
+    let reason = t.reason.trim().to_string();
+    if reason.is_empty() {
+        return Err(tool_err(
+            "bullseye_revert requires a non-empty `reason` describing what changed since \
+             retirement (e.g. \"regression detected in CI run 42\", \"acceptance criterion \
+             #3 was never actually checked\")."
+                .to_string(),
+        ));
+    }
+
+    let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
+        ops::revert(file, &t.id, &reason).map_err(|e| e.to_string())
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
+
+    git_commit::auto_commit_yaml(&path);
+
+    text_result(format!(
+        "Reverted 🎯{} \"{}\" — status moved Achieved → Converging.\nReason: {reason}\nFile: {}",
+        t.id,
+        result.name,
+        path.display(),
+    ))
 }
 
 /// Set a target aside (🎯T18). Distinct from retirement: the target
@@ -657,28 +663,12 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
         Outcome::SetAside { name, prior } => {
             git_commit::auto_commit_yaml(&path);
 
-            let mut out = format!(
+            let out = format!(
                 "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
                 id = t.id,
             );
-            append_tunnel_warnings(&mut out, &path);
             text_result(out)
         }
-    }
-}
-
-/// Reload the post-mutation file and append a tunnel-warning section
-/// to `out` if the graph has any tunnels at the default max_depth (2,
-/// matching `bullseye_tunnels`'s default and the value
-/// `bullseye_convergence` uses for its block decision). Silently
-/// no-ops when the file fails to reload — the mutation already
-/// persisted, and a transient read error shouldn't masquerade as a
-/// missing warning.
-fn append_tunnel_warnings(out: &mut String, path: &Path) {
-    if let Ok(file) = store::load(path)
-        && let Some(section) = graph::format_tunnel_warnings(&file, 2)
-    {
-        out.push_str(&section);
     }
 }
 
@@ -700,28 +690,13 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
     }
     for rf in &ranked {
         let ft = rf.target;
-        let kind_label = match ft.kind {
-            crate::schema::Kind::Work => "",
-            crate::schema::Kind::Verify => " [verify]",
-        };
-        let distance_label = match rf.distance {
-            Some(0) => "checkpoint".to_string(),
-            Some(d) => format!("dist={d}"),
-            None => "no checkpoint reachable".to_string(),
-        };
         out.push_str(&format!(
-            "🎯{id} {name}{kind}  [{status:?}] — {dist}, fanout={fan}\n",
+            "🎯{id} {name}  [{status:?}] — fanout={fan}\n",
             id = ft.id,
             name = ft.name,
-            kind = kind_label,
             status = ft.status,
-            dist = distance_label,
             fan = rf.fanout,
         ));
-        if !ft.verifies.is_empty() {
-            let vs: Vec<String> = ft.verifies.iter().map(|v| format!("🎯{v}")).collect();
-            out.push_str(&format!("  verifies: {}\n", vs.join(", ")));
-        }
         if !ft.tags.is_empty() {
             out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
         }
@@ -732,137 +707,12 @@ fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
     text_result(out)
 }
 
-fn handle_rework(t: crate::tools::ReworkTool) -> ToolResult {
-    let path = discover_path(&t.cwd)?;
-    ensure_mutation_allowed(&path, &t.cwd)?;
-
-    // Envelope-leak guard (🎯T20). Check each input separately so the
-    // error names the offending field; check before composing so the
-    // pretty-printed JSON doesn't mask whichever payload was malformed.
-    check_no_envelope_leak("diagnosis", &t.diagnosis).map_err(tool_err)?;
-    if let Some(s) = &t.sawmill_failure {
-        check_no_envelope_leak("sawmill_failure", s).map_err(tool_err)?;
-    }
-    if let Some(s) = &t.mnemo_history {
-        check_no_envelope_leak("mnemo_history", s).map_err(tool_err)?;
-    }
-
-    let diagnosis = compose_rework_diagnosis(
-        &t.diagnosis,
-        t.sawmill_failure.as_deref(),
-        t.mnemo_history.as_deref(),
-    )
-    .map_err(tool_err)?;
-
-    let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
-        ops::rework(file, &t.id, &diagnosis).map_err(|e| e.to_string())
-    })
-    .map_err(|e| tool_err(e.to_string()))?;
-
-    git_commit::auto_commit_yaml(&path);
-
-    let mut out = format!(
-        "Rework triggered: 🎯{} → 🎯{} \"{}\"\nRetry {}",
-        t.id, result.rework_id, result.rework_name, result.retries,
-    );
-    if let Some(budget) = result.budget {
-        out.push_str(&format!(" of {budget}"));
-        if result.budget_exhausted {
-            out.push_str("\n\n⚠ RETRY BUDGET EXHAUSTED — escalate to human review");
-        }
-    }
-
-    text_result(out)
-}
-
-/// Compose the rework diagnosis string from the free-form prose plus
-/// optional structured payloads (sawmill failure, mnemo prior-attempt
-/// history). Each structured payload is validated as JSON, pretty-
-/// printed, and emitted as a fenced ```json block under a labelled
-/// `##` header so the resulting context blob remains readable to a
-/// human and re-parseable by tooling. Returns an error if either
-/// payload fails to parse — better to reject early than persist
-/// garbage into the target file.
-fn compose_rework_diagnosis(
-    prose: &str,
-    sawmill_failure: Option<&str>,
-    mnemo_history: Option<&str>,
-) -> Result<String, String> {
-    let mut sections: Vec<String> = Vec::new();
-    let trimmed_prose = prose.trim();
-    if !trimmed_prose.is_empty() {
-        sections.push(trimmed_prose.to_string());
-    }
-
-    let mut append_json_section = |label: &str, raw: &str| -> Result<(), String> {
-        let parsed: serde_json::Value =
-            serde_json::from_str(raw).map_err(|e| format!("{label} is not valid JSON: {e}"))?;
-        let pretty = serde_json::to_string_pretty(&parsed)
-            .map_err(|e| format!("{label}: failed to serialise: {e}"))?;
-        sections.push(format!("## {label}\n```json\n{pretty}\n```"));
-        Ok(())
-    };
-
-    if let Some(raw) = sawmill_failure
-        && !raw.trim().is_empty()
-    {
-        append_json_section("Sawmill failure", raw)?;
-    }
-    if let Some(raw) = mnemo_history
-        && !raw.trim().is_empty()
-    {
-        append_json_section("Prior attempts (mnemo)", raw)?;
-    }
-
-    Ok(sections.join("\n\n"))
-}
-
-fn handle_tunnels(t: crate::tools::TunnelsTool) -> ToolResult {
-    let (path, file) = load_file(&t.cwd)?;
-
-    let max_depth = t.max_depth.unwrap_or(2) as usize;
-    let warnings = graph::tunnels(&file, max_depth);
-
-    let mut out = format!(
-        "# Tunnel Detection\nFile: {}\nMax depth: {max_depth}\n\n",
-        path.display()
-    );
-
-    if warnings.is_empty() {
-        out.push_str("No tunnels detected — all work targets have verification within range.\n");
-    } else {
-        for w in &warnings {
-            match (&w.depth, &w.nearest_verify) {
-                (None, _) => {
-                    out.push_str(&format!(
-                        "⚠ 🎯{} \"{}\" — no verification target covers this work\n\
-                         \x20\x20Suggestion: add a verify target that checks this work\n\n",
-                        w.target_id, w.target_name,
-                    ));
-                }
-                (Some(depth), Some(verify)) => {
-                    out.push_str(&format!(
-                        "⚠ 🎯{} \"{}\" — nearest verification is 🎯{} ({depth} hops, max {max_depth})\n\
-                         \x20\x20Suggestion: insert a verification checkpoint closer to this work\n\n",
-                        w.target_id, w.target_name, verify,
-                    ));
-                }
-                _ => {}
-            }
-        }
-        out.push_str(&format!("{} tunnel(s) detected", warnings.len()));
-    }
-
-    text_result(out)
-}
-
 fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
 
     let errors = graph::validate_blocking(&file);
     let warnings = graph::validate_warnings(&file);
-    let tunnel_section = graph::format_tunnel_warnings(&file, 2);
-    if errors.is_empty() && warnings.is_empty() && tunnel_section.is_none() {
+    if errors.is_empty() && warnings.is_empty() {
         return text_result(format!(
             "Valid: {} ({} targets)",
             path.display(),
@@ -881,9 +731,6 @@ fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
             "\n## Warnings (advisory; non-blocking)\n\n{}\n",
             warnings.join("\n")
         ));
-    }
-    if let Some(section) = tunnel_section {
-        out.push_str(&section);
     }
     text_result(out)
 }
@@ -1210,11 +1057,10 @@ mod tests {
     /// Minimal targets.yaml with one achieved target (T1) and one
     /// identified target (T2). Exercises the achieved-immutability
     /// rule in [`handle_put`] (see 🎯T8).
-    const FIXTURE_YAML: &str = r#"schema_version: 1
+    const FIXTURE_YAML: &str = r#"schema_version: 5
 targets:
   T1:
     name: Old achieved target
-    kind: work
     status: achieved
     value: 5
     cost: 3
@@ -1226,7 +1072,6 @@ targets:
     achieved: 2026-02-01
   T2:
     name: Active target
-    kind: work
     status: identified
     value: 8
     cost: 5
@@ -1277,11 +1122,9 @@ targets:
             cost: None,
             acceptance: None,
             context: None,
-            kind: None,
             status: None,
             depends_on: None,
             blocks: None,
-            verifies: None,
             origin: None,
             tags: None,
         }
@@ -1372,21 +1215,6 @@ targets:
     }
 
     #[test]
-    fn kind_patch_is_still_rejected() {
-        // Regression: the pre-existing "kind only on create" rule
-        // must still fire on the patch path. This test also pins
-        // the error ordering — kind rejection should happen before
-        // the achieved-immutability check.
-        let (_tmp, _cfg, cwd) = fixture();
-        let mut t = put(&cwd, "T2");
-        t.kind = Some("verify".to_string());
-        let result = handle_put(t);
-        let err = result.expect_err("kind patch must be rejected");
-        let msg = format!("{err:?}");
-        assert!(msg.contains("kind"), "error should mention kind: {msg}");
-    }
-
-    #[test]
     fn repo_root_is_parent_of_bullseye_yaml() {
         let path = Path::new("/tmp/myrepo/bullseye.yaml");
         let fallback = Path::new("/tmp/myrepo");
@@ -1394,176 +1222,56 @@ targets:
         assert_eq!(repo_root, Path::new("/tmp/myrepo"));
     }
 
-    // --- compose_rework_diagnosis (🎯T1.5) ---------------------------------
+    // --- revert (🎯T25) ----------------------------------------------------
 
     #[test]
-    fn compose_rework_prose_only() {
-        let out = compose_rework_diagnosis("linker error on arm64", None, None).unwrap();
-        assert_eq!(out, "linker error on arm64");
-    }
-
-    #[test]
-    fn compose_rework_trims_prose() {
-        let out = compose_rework_diagnosis("  hello  \n", None, None).unwrap();
-        assert_eq!(out, "hello");
-    }
-
-    #[test]
-    fn compose_rework_all_empty_returns_empty() {
-        // ops::rework treats empty diagnosis as "don't append" — preserve that.
-        let out = compose_rework_diagnosis("", None, None).unwrap();
-        assert!(out.is_empty());
-        let out = compose_rework_diagnosis("   ", Some("   "), Some("")).unwrap();
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn compose_rework_with_sawmill() {
-        let sawmill = r#"{"violations":[{"file":"src/lib.rs","line":42,"message":"x"}]}"#;
-        let out = compose_rework_diagnosis("checks failed", Some(sawmill), None).unwrap();
-        assert!(out.starts_with("checks failed\n\n## Sawmill failure\n```json\n"));
-        assert!(out.contains("\"file\": \"src/lib.rs\""));
-        assert!(out.trim_end().ends_with("```"));
-    }
-
-    #[test]
-    fn compose_rework_with_mnemo() {
-        let mnemo = r#"[{"attempt":1,"diagnosis":"timeout"}]"#;
-        let out = compose_rework_diagnosis("retry needed", None, Some(mnemo)).unwrap();
-        assert!(out.contains("## Prior attempts (mnemo)\n```json\n"));
-        assert!(out.contains("\"attempt\": 1"));
-    }
-
-    #[test]
-    fn compose_rework_full_payload_order_is_stable() {
-        // Sawmill section precedes mnemo section so the most actionable
-        // ("what failed") sits closest to the prose.
-        let out = compose_rework_diagnosis("fail", Some("{\"a\":1}"), Some("[{\"b\":2}]")).unwrap();
-        let saw = out.find("## Sawmill failure").expect("sawmill section");
-        let mnemo = out
-            .find("## Prior attempts (mnemo)")
-            .expect("mnemo section");
-        assert!(saw < mnemo, "sawmill should appear before mnemo");
-    }
-
-    #[test]
-    fn compose_rework_rejects_invalid_sawmill_json() {
-        let err = compose_rework_diagnosis("", Some("not-json"), None).unwrap_err();
-        assert!(err.contains("Sawmill failure"), "error: {err}");
-    }
-
-    #[test]
-    fn compose_rework_rejects_invalid_mnemo_json() {
-        let err = compose_rework_diagnosis("", None, Some("[")).unwrap_err();
-        assert!(err.contains("Prior attempts (mnemo)"), "error: {err}");
-    }
-
-    #[test]
-    fn handle_rework_persists_structured_payload() {
-        // End-to-end: drive handle_rework with both structured fields
-        // and confirm the rework destination's context contains the
-        // labelled fenced JSON blocks. Uses a fixture with a verify
-        // target (V1) pointing at a work target (W1) it reworks.
-        const FIXTURE: &str = r#"schema_version: 1
-targets:
-  W1:
-    name: Work target
-    kind: work
-    status: converging
-    value: 5
-    cost: 3
-    acceptance: [does the thing]
-    origin: manual
-    discovered: 2026-01-01
-  V1:
-    name: Verify target
-    kind: verify
-    status: identified
-    value: 1
-    cost: 1
-    acceptance: [W1 passes]
-    verifies: [W1]
-    rework: W1
-    origin: manual
-    discovered: 2026-01-01
-"#;
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
-        let cwd = tmp.path().to_string_lossy().to_string();
-
-        let shadow_tmp = tempfile::tempdir().unwrap();
-        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
-        let _guard = ShadowScope {
-            _shadow_tmp: shadow_tmp,
-        };
-
-        let tool = crate::tools::ReworkTool {
+    fn revert_reopens_achieved_target() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let tool = crate::tools::RevertTool {
             cwd: cwd.clone(),
-            id: "V1".to_string(),
-            diagnosis: "linker error".to_string(),
-            sawmill_failure: Some(r#"{"file":"src/lib.rs","line":12}"#.to_string()),
-            mnemo_history: Some(r#"[{"attempt":1}]"#.to_string()),
+            id: "T1".to_string(),
+            reason: "regression detected in nightly run".to_string(),
         };
-        handle_rework(tool).expect("rework should succeed");
-
-        let w1 = load_target(&cwd, "W1");
-        assert!(w1.context.contains("Rework #1: linker error"));
-        assert!(w1.context.contains("## Sawmill failure"));
-        assert!(w1.context.contains("\"file\": \"src/lib.rs\""));
-        assert!(w1.context.contains("## Prior attempts (mnemo)"));
-        assert!(w1.context.contains("\"attempt\": 1"));
+        handle_revert(tool).expect("revert should succeed");
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.status, Status::Converging);
+        assert!(t1.achieved.is_none(), "achieved date should be cleared");
+        assert!(
+            t1.context.contains("Reverted ") && t1.context.contains("regression detected"),
+            "context should record the reason: {:?}",
+            t1.context,
+        );
+        // Earlier context is preserved (appended, not replaced).
+        assert!(t1.context.contains("Historical target"));
     }
 
     #[test]
-    fn handle_rework_rejects_invalid_json_payload() {
-        const FIXTURE: &str = r#"schema_version: 1
-targets:
-  W1:
-    name: Work target
-    kind: work
-    status: converging
-    value: 5
-    cost: 3
-    acceptance: [does the thing]
-    origin: manual
-    discovered: 2026-01-01
-  V1:
-    name: Verify target
-    kind: verify
-    status: identified
-    value: 1
-    cost: 1
-    acceptance: [W1 passes]
-    verifies: [W1]
-    rework: W1
-    origin: manual
-    discovered: 2026-01-01
-"#;
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
-        let cwd = tmp.path().to_string_lossy().to_string();
-
-        let shadow_tmp = tempfile::tempdir().unwrap();
-        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
-        let _guard = ShadowScope {
-            _shadow_tmp: shadow_tmp,
+    fn revert_rejects_active_target() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let tool = crate::tools::RevertTool {
+            cwd,
+            id: "T2".to_string(),
+            reason: "trying to revert an active target".to_string(),
         };
-
-        let tool = crate::tools::ReworkTool {
-            cwd: cwd.clone(),
-            id: "V1".to_string(),
-            diagnosis: String::new(),
-            sawmill_failure: Some("not-json".to_string()),
-            mnemo_history: None,
-        };
-        let err = handle_rework(tool).expect_err("invalid JSON should be rejected");
+        let err = handle_revert(tool).expect_err("revert of active target must be rejected");
         let msg = format!("{err:?}");
-        assert!(msg.contains("Sawmill failure"), "got: {msg}");
+        assert!(
+            msg.contains("not achieved"),
+            "error should mention `not achieved`: {msg}"
+        );
+    }
 
-        // File should be unchanged: W1 still converging, no context appended.
-        let w1 = load_target(&cwd, "W1");
-        assert_eq!(w1.status, Status::Converging);
-        assert!(!w1.context.contains("Sawmill failure"));
+    #[test]
+    fn revert_requires_reason() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let tool = crate::tools::RevertTool {
+            cwd,
+            id: "T1".to_string(),
+            reason: "   ".to_string(),
+        };
+        let err = handle_revert(tool).expect_err("empty reason must be rejected");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("reason"), "error should mention reason: {msg}");
     }
 
     // --- envelope-leak guard (🎯T20) -------------------------------------
@@ -1646,116 +1354,27 @@ targets:
     }
 
     #[test]
-    fn envelope_leak_in_rework_diagnosis_is_rejected() {
-        const FIXTURE: &str = r#"schema_version: 1
-targets:
-  W1:
-    name: Work
-    kind: work
-    status: converging
-    value: 5
-    cost: 3
-    acceptance: [does the thing]
-    origin: manual
-    discovered: 2026-01-01
-  V1:
-    name: Verify
-    kind: verify
-    status: identified
-    value: 1
-    cost: 1
-    acceptance: [W1 passes]
-    verifies: [W1]
-    rework: W1
-    origin: manual
-    discovered: 2026-01-01
-"#;
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
-        let cwd = tmp.path().to_string_lossy().to_string();
-        let shadow_tmp = tempfile::tempdir().unwrap();
-        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
-        let _guard = ShadowScope {
-            _shadow_tmp: shadow_tmp,
-        };
-
-        let tool = crate::tools::ReworkTool {
+    fn envelope_leak_in_revert_reason_is_rejected() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let tool = crate::tools::RevertTool {
             cwd: cwd.clone(),
-            id: "V1".to_string(),
-            diagnosis: "linker error </invoke>".to_string(),
-            sawmill_failure: None,
-            mnemo_history: None,
+            id: "T1".to_string(),
+            reason: "regression </invoke>".to_string(),
         };
-        let err = handle_rework(tool).expect_err("envelope leak in diagnosis must be rejected");
+        let err = handle_revert(tool).expect_err("envelope leak in reason must be rejected");
         let msg = format!("{err:?}");
-        assert!(msg.contains("diagnosis"), "error should name field: {msg}");
+        assert!(msg.contains("reason"), "error should name field: {msg}");
         assert!(msg.contains("</invoke>"), "error should name marker: {msg}");
-
-        // W1 unchanged.
-        let w1 = load_target(&cwd, "W1");
-        assert_eq!(w1.status, Status::Converging);
-        assert!(!w1.context.contains("</invoke>"));
-    }
-
-    #[test]
-    fn envelope_leak_in_rework_sawmill_payload_is_rejected() {
-        const FIXTURE: &str = r#"schema_version: 1
-targets:
-  W1:
-    name: Work
-    kind: work
-    status: converging
-    value: 5
-    cost: 3
-    acceptance: [does the thing]
-    origin: manual
-    discovered: 2026-01-01
-  V1:
-    name: Verify
-    kind: verify
-    status: identified
-    value: 1
-    cost: 1
-    acceptance: [W1 passes]
-    verifies: [W1]
-    rework: W1
-    origin: manual
-    discovered: 2026-01-01
-"#;
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("bullseye.yaml"), FIXTURE).unwrap();
-        let cwd = tmp.path().to_string_lossy().to_string();
-        let shadow_tmp = tempfile::tempdir().unwrap();
-        config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
-        let _guard = ShadowScope {
-            _shadow_tmp: shadow_tmp,
-        };
-
-        // Note: the sawmill_failure value here is also invalid JSON,
-        // but the envelope check fires first because it sits ahead of
-        // compose_rework_diagnosis in the handler.
-        let tool = crate::tools::ReworkTool {
-            cwd,
-            id: "V1".to_string(),
-            diagnosis: "fail".to_string(),
-            sawmill_failure: Some("<invoke name=\"x\">stuff</invoke>".to_string()),
-            mnemo_history: None,
-        };
-        let err =
-            handle_rework(tool).expect_err("envelope leak in sawmill payload must be rejected");
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("sawmill_failure"),
-            "error should name field: {msg}"
-        );
+        // T1 unchanged — still achieved with original context.
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.status, Status::Achieved);
     }
 
     #[test]
     fn check_target_walker_finds_leak_in_cross_depends_note() {
-        use crate::schema::{CrossEdge, Kind, Status, Target};
+        use crate::schema::{CrossEdge, Status, Target};
         let target = Target {
             name: "ok".into(),
-            kind: Kind::Work,
             status: Status::Identified,
             value: 0.0,
             cost: 0.0,
@@ -1773,10 +1392,6 @@ targets:
                 note: Some("</parameter> leaked".into()),
             }],
             cross_enables: Vec::new(),
-            verifies: Vec::new(),
-            rework: None,
-            retry_budget: None,
-            retries: 0,
             tags: Vec::new(),
             strategy: None,
             origin: "manual".into(),

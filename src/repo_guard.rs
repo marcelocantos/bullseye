@@ -3,7 +3,7 @@
 
 //! Refuse mutations in unsafe repo states (🎯T24).
 //!
-//! When `bullseye_put`/`_retire`/`_rework`/`_set_aside` (or any other
+//! When `bullseye_put`/`_retire`/`_revert`/`_set_aside` (or any other
 //! tool that calls [`crate::git_commit::auto_commit_yaml`]) runs from
 //! a directory that turns out to be a *submodule* clone of the target
 //! repo — or a working tree with detached HEAD — the auto-commit step

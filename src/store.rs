@@ -201,7 +201,6 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
         "T1".to_string(),
         crate::schema::Target {
             name: format!("{project_name} has a clear first milestone"),
-            kind: crate::schema::Kind::Work,
             status: crate::schema::Status::Identified,
             value: 5.0,
             cost: 3.0,
@@ -217,10 +216,6 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
             depends_on: Vec::new(),
             cross_depends: Vec::new(),
             cross_enables: Vec::new(),
-            verifies: Vec::new(),
-            rework: None,
-            retry_budget: None,
-            retries: 0,
             tags: Vec::new(),
             strategy: None,
             origin: "bullseye_init".to_string(),
