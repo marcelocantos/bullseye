@@ -2,6 +2,47 @@
 
 Reference for AI agents using Bullseye as an MCP server.
 
+## Installation
+
+Bullseye runs as an MCP server. Installation is a **multi-step
+process** — the install is not complete until every step has
+succeeded. If you stop after `brew install`, the binary is on disk
+but no MCP client can talk to it.
+
+1. **Install the binary.**
+   ```bash
+   brew install marcelocantos/tap/bullseye
+   ```
+2. **Register the MCP server with your agent.**
+   For Claude Code:
+   ```bash
+   claude mcp add --scope user bullseye -- bullseye
+   ```
+   For other MCP clients, add this block to the client's config
+   (usually `.mcp.json` at project scope or the equivalent user-scope
+   file):
+   ```json
+   {
+     "mcpServers": {
+       "bullseye": {
+         "command": "bullseye",
+         "args": []
+       }
+     }
+   }
+   ```
+3. **Restart the agent session.** MCP server registration only takes
+   effect on the next session start. Tools added in this step are not
+   visible to the running session.
+4. **Verify end-to-end.** In a fresh session, call
+   `bullseye_startup_context` with `cwd` set to any project — it
+   should return either a context summary, an init prompt for repos
+   with no `bullseye.yaml`, or a graceful "no targets file found"
+   notice. Any of those confirms the server is responding through
+   the MCP transport.
+
+Repository: <https://github.com/marcelocantos/bullseye>
+
 ## What Bullseye does
 
 Bullseye manages **targets** — desired project states expressed as

@@ -13,15 +13,36 @@ Discovery checks both locations and uses whichever already exists. See
 
 ## Installation
 
+Recommended (Homebrew, macOS / Linux):
+
 ```bash
-cargo install --path .
+brew install marcelocantos/tap/bullseye
 ```
 
-Or build from source:
+Or from source:
 
 ```bash
-cargo build --release
-# Binary at target/release/bullseye
+cargo install --path .
+# or
+cargo build --release   # binary at target/release/bullseye
+```
+
+Repository: <https://github.com/marcelocantos/bullseye>
+
+### Quick start (for an agent)
+
+If you'd rather have your coding agent set this up, paste the
+following prompt into the agent:
+
+```
+Install bullseye from https://github.com/marcelocantos/bullseye:
+1. brew install marcelocantos/tap/bullseye
+2. claude mcp add --scope user bullseye -- bullseye
+3. Restart this session (the MCP registration only takes effect on the next session start).
+4. Verify by calling bullseye_startup_context with cwd set to my current project.
+
+Then read https://raw.githubusercontent.com/marcelocantos/bullseye/master/docs/agents-guide.md
+for the full agent guide.
 ```
 
 ## MCP client configuration
@@ -131,7 +152,7 @@ After that, every other bullseye tool just works.
 
 ## Tools
 
-Bullseye exposes 17 MCP tools. All target-operating tools accept a
+Bullseye exposes 16 MCP tools. All target-operating tools accept a
 `cwd` parameter; discovery resolves the targets file automatically.
 
 | Tool | Description |
