@@ -55,6 +55,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::RetireTool(t) => handle_retire(t),
             TargetTools::RevertTool(t) => handle_revert(t),
             TargetTools::SetAsideTool(t) => handle_set_aside(t),
+            TargetTools::SubdivideTool(t) => handle_subdivide(t),
             TargetTools::FrontierTool(t) => handle_frontier(t),
             TargetTools::ValidateTool(t) => handle_validate(t),
             TargetTools::GraphTool(t) => handle_graph(t),
@@ -670,6 +671,105 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
             text_result(out)
         }
     }
+}
+
+/// Split a parent target into children with one of three dependent
+/// -rewiring modes (🎯T27.1). See `ops::subdivide` for full semantics.
+pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
+    let path = discover_path(&t.cwd)?;
+    ensure_mutation_allowed(&path, &t.cwd)?;
+
+    // Envelope-leak guard (🎯T20): every caller-controlled string,
+    // including those nested inside child specs, must be clean before
+    // we enter the locked mutation.
+    check_no_envelope_leak("parent", &t.parent).map_err(tool_err)?;
+    check_no_envelope_leak("mode", &t.mode).map_err(tool_err)?;
+    if let Some(s) = &t.retire_reason {
+        check_no_envelope_leak("retire_reason", s).map_err(tool_err)?;
+    }
+    for (idx, child) in t.children.iter().enumerate() {
+        if let Some(s) = &child.id {
+            check_no_envelope_leak(&format!("children[{idx}].id"), s).map_err(tool_err)?;
+        }
+        check_no_envelope_leak(&format!("children[{idx}].name"), &child.name).map_err(tool_err)?;
+        for (j, a) in child.acceptance.iter().enumerate() {
+            check_no_envelope_leak(&format!("children[{idx}].acceptance[{j}]"), a)
+                .map_err(tool_err)?;
+        }
+        if let Some(s) = &child.context {
+            check_no_envelope_leak(&format!("children[{idx}].context"), s).map_err(tool_err)?;
+        }
+        if let Some(items) = &child.tags {
+            for (j, s) in items.iter().enumerate() {
+                check_no_envelope_leak(&format!("children[{idx}].tags[{j}]"), s)
+                    .map_err(tool_err)?;
+            }
+        }
+        if let Some(items) = &child.depends_on {
+            for (j, s) in items.iter().enumerate() {
+                check_no_envelope_leak(&format!("children[{idx}].depends_on[{j}]"), s)
+                    .map_err(tool_err)?;
+            }
+        }
+    }
+
+    let mode = ops::SubdivideMode::parse(&t.mode).map_err(tool_err)?;
+
+    let child_specs: Vec<ops::ChildSpec> = t
+        .children
+        .into_iter()
+        .map(|c| ops::ChildSpec {
+            id: c.id,
+            name: c.name,
+            acceptance: c.acceptance,
+            context: c.context,
+            tags: c.tags,
+            depends_on: c.depends_on,
+        })
+        .collect();
+    let retire_reason = t.retire_reason.clone();
+
+    let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
+        ops::subdivide(file, &t.parent, mode, child_specs, retire_reason.as_deref())
+            .map_err(|e| e.to_string())
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
+
+    git_commit::auto_commit_yaml(&path);
+
+    let mut out = format!(
+        "Subdivided 🎯{parent} \"{name}\" — mode `{mode}`\nCreated: {created}",
+        parent = result.parent_id,
+        name = result.parent_name,
+        mode = result.mode.as_str(),
+        created = result
+            .created_children
+            .iter()
+            .map(|id| format!("🎯{id}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    if !result.rewired_dependents.is_empty() {
+        out.push_str(&format!(
+            "\nRewired dependents: {}",
+            result
+                .rewired_dependents
+                .iter()
+                .map(|id| format!("🎯{id}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    if result.parent_status_changed {
+        let new_status = match result.mode {
+            ops::SubdivideMode::Aggregate => "converging",
+            ops::SubdivideMode::Retire => "achieved",
+            ops::SubdivideMode::Add => "(no change)",
+        };
+        out.push_str(&format!("\nParent status: {new_status}"));
+    }
+    out.push_str(&format!("\nFile: {}", path.display()));
+    text_result(out)
 }
 
 fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {

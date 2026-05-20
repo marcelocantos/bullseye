@@ -3494,3 +3494,419 @@ fn t24_read_only_ops_unaffected_in_submodule() {
     })
     .expect("read-only list should succeed inside a submodule");
 }
+
+// --- bullseye_subdivide (🎯T27.1) -----------------------------------------
+
+/// Stand up a fresh tempdir with three targets in a chain so each
+/// subdivide test starts from the same shape:
+///
+///   T1 (identified, no deps)
+///   T2 (identified, depends_on: [T1])
+///   T3 (identified, depends_on: [T1])
+///
+/// T1 has two dependents. Subdivision against T1 in any mode is
+/// observable as a change in how T2/T3 wire to whatever replaces T1.
+fn subdivide_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    use bullseye::config::{self, Location};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "subdivide-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    // The starter file already seeded T1; add T2 and T3 depending on T1.
+    let mut file = store::load(&path).unwrap();
+    let today = chrono::Local::now().date_naive();
+    for id in ["T2", "T3"] {
+        file.targets.insert(
+            id.to_string(),
+            bullseye::schema::Target {
+                name: format!("Dependent {id}"),
+                status: bullseye::schema::Status::Identified,
+                value: 0.0,
+                cost: 0.0,
+                actual_cost: None,
+                set_aside_reason: None,
+                acceptance: vec!["done".to_string()],
+                checks: vec![],
+                context: String::new(),
+                gates: vec![],
+                depends_on: vec!["T1".to_string()],
+                cross_depends: vec![],
+                cross_enables: vec![],
+                tags: vec![],
+                strategy: None,
+                origin: "test".to_string(),
+                discovered: today,
+                achieved: None,
+            },
+        );
+    }
+    store::save(&path, &file).unwrap();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    (tmp, shadow_tmp, cwd)
+}
+
+fn child_spec(name: &str, acceptance: &[&str]) -> bullseye::tools::SubdivisionChild {
+    bullseye::tools::SubdivisionChild {
+        id: None,
+        name: name.to_string(),
+        acceptance: acceptance.iter().map(|s| s.to_string()).collect(),
+        context: None,
+        tags: None,
+        depends_on: None,
+    }
+}
+
+#[test]
+fn subdivide_add_mode_leaves_parent_and_extends_dependents() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::SubdivideTool;
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    handle_subdivide(SubdivideTool {
+        cwd: cwd.clone(),
+        parent: "T1".to_string(),
+        mode: "add".to_string(),
+        children: vec![
+            child_spec("Spillover A", &["does A"]),
+            child_spec("Spillover B", &["does B"]),
+        ],
+        retire_reason: None,
+    })
+    .expect("add-mode subdivide should succeed");
+
+    let file = store::load(&path).unwrap();
+
+    // Two children created as sub-targets of T1.
+    assert!(file.targets.contains_key("T1.1"));
+    assert!(file.targets.contains_key("T1.2"));
+    assert_eq!(file.targets["T1.1"].name, "Spillover A");
+    assert_eq!(file.targets["T1.2"].name, "Spillover B");
+    assert_eq!(file.targets["T1.1"].origin, "subdivide(🎯T1)");
+
+    // Parent untouched.
+    let t1 = &file.targets["T1"];
+    assert_eq!(t1.status, Status::Identified);
+    assert!(
+        t1.depends_on.is_empty(),
+        "add mode must not touch parent depends_on; got {:?}",
+        t1.depends_on
+    );
+
+    // Dependents gain the new children alongside T1.
+    let t2 = &file.targets["T2"];
+    assert_eq!(t2.depends_on, vec!["T1", "T1.1", "T1.2"]);
+    let t3 = &file.targets["T3"];
+    assert_eq!(t3.depends_on, vec!["T1", "T1.1", "T1.2"]);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_aggregate_mode_makes_parent_umbrella() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::SubdivideTool;
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "aggregate".to_string(),
+        children: vec![
+            child_spec("Sub A", &["does A"]),
+            child_spec("Sub B", &["does B"]),
+        ],
+        retire_reason: None,
+    })
+    .expect("aggregate-mode subdivide should succeed");
+
+    let file = store::load(&path).unwrap();
+    let t1 = &file.targets["T1"];
+
+    // Parent now depends on the new children and moves to converging.
+    assert_eq!(t1.depends_on, vec!["T1.1", "T1.2"]);
+    assert_eq!(t1.status, Status::Converging);
+
+    // Dependents untouched (still pointing at T1 only).
+    let t2 = &file.targets["T2"];
+    assert_eq!(t2.depends_on, vec!["T1"]);
+    let t3 = &file.targets["T3"];
+    assert_eq!(t3.depends_on, vec!["T1"]);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_retire_mode_retires_parent_and_rewires_dependents() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::SubdivideTool;
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "retire".to_string(),
+        children: vec![
+            child_spec("Spillover A", &["does A"]),
+            child_spec("Spillover B", &["does B"]),
+        ],
+        retire_reason: Some("original scope met; A and B emerged during work".to_string()),
+    })
+    .expect("retire-mode subdivide should succeed");
+
+    let file = store::load(&path).unwrap();
+    let t1 = &file.targets["T1"];
+
+    // Parent retired with today's date and audit line in context.
+    assert_eq!(t1.status, Status::Achieved);
+    assert_eq!(t1.achieved, Some(chrono::Local::now().date_naive()));
+    assert!(
+        t1.context.contains("Subdivided ") && t1.context.contains("A and B emerged"),
+        "retire-mode audit line missing or malformed; context: {:?}",
+        t1.context,
+    );
+
+    // Dependents had T1 replaced by the children — original order
+    // preserved, just spliced.
+    let t2 = &file.targets["T2"];
+    assert_eq!(t2.depends_on, vec!["T1.1", "T1.2"]);
+    let t3 = &file.targets["T3"];
+    assert_eq!(t3.depends_on, vec!["T1.1", "T1.2"]);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_supports_explicit_child_ids() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::{SubdivideTool, SubdivisionChild};
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "add".to_string(),
+        children: vec![SubdivisionChild {
+            id: Some("T42".to_string()),
+            name: "Top-level spillover".to_string(),
+            acceptance: vec!["explicit ID".to_string()],
+            context: None,
+            tags: None,
+            depends_on: None,
+        }],
+        retire_reason: None,
+    })
+    .expect("explicit-id subdivide should succeed");
+
+    let file = store::load(&path).unwrap();
+    assert!(
+        file.targets.contains_key("T42"),
+        "explicit child id T42 should be created"
+    );
+    // Dependents pick up T42 alongside T1.
+    assert_eq!(file.targets["T2"].depends_on, vec!["T1", "T42"]);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_rejects_id_collision() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::{SubdivideTool, SubdivisionChild};
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    let err = handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "add".to_string(),
+        children: vec![SubdivisionChild {
+            id: Some("T2".to_string()), // already exists
+            name: "Collider".to_string(),
+            acceptance: vec!["nope".to_string()],
+            context: None,
+            tags: None,
+            depends_on: None,
+        }],
+        retire_reason: None,
+    })
+    .expect_err("id collision must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("T2"),
+        "error should name the colliding id: {msg}"
+    );
+
+    // File untouched.
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T2"].name, "Dependent T2");
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_rejects_terminal_parent() {
+    use bullseye::config;
+    use bullseye::handler::{handle_set_aside, handle_subdivide};
+    use bullseye::tools::{SetAsideTool, SubdivideTool};
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    // Retire T2 directly (achieved).
+    {
+        let mut file = store::load(&path).unwrap();
+        file.targets.get_mut("T2").unwrap().status = Status::Achieved;
+        file.targets.get_mut("T2").unwrap().achieved = Some(chrono::Local::now().date_naive());
+        store::save(&path, &file).unwrap();
+    }
+
+    // Achieved parent: rejected.
+    let err = handle_subdivide(SubdivideTool {
+        cwd: cwd.clone(),
+        parent: "T2".to_string(),
+        mode: "add".to_string(),
+        children: vec![child_spec("nope", &["nope"])],
+        retire_reason: None,
+    })
+    .expect_err("subdivide on achieved parent must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("Achieved") && msg.contains("bullseye_revert"),
+        "error should mention Achieved + bullseye_revert hint: {msg}"
+    );
+
+    // Set aside T3 and check the same rejection path.
+    handle_set_aside(SetAsideTool {
+        cwd: cwd.clone(),
+        id: "T3".to_string(),
+        reason: "deferred for the test".to_string(),
+    })
+    .unwrap();
+    let err = handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T3".to_string(),
+        mode: "add".to_string(),
+        children: vec![child_spec("nope", &["nope"])],
+        retire_reason: None,
+    })
+    .expect_err("subdivide on set-aside parent must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("SetAside") && msg.contains("bullseye_put"),
+        "error should mention SetAside + bullseye_put hint: {msg}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_rejects_empty_children() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::SubdivideTool;
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    let err = handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "add".to_string(),
+        children: vec![],
+        retire_reason: None,
+    })
+    .expect_err("empty children must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("at least one child"),
+        "error should explain the empty-children rule: {msg}"
+    );
+
+    // File untouched — T1 still has no sub-targets.
+    let file = store::load(&path).unwrap();
+    assert!(!file.targets.contains_key("T1.1"));
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_rejects_invalid_mode() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::SubdivideTool;
+
+    let (_tmp, _shadow, cwd) = subdivide_fixture();
+
+    let err = handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "replace".to_string(),
+        children: vec![child_spec("nope", &["nope"])],
+        retire_reason: None,
+    })
+    .expect_err("invalid mode must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("replace") && msg.contains("add"),
+        "error should name the offending mode and list valid choices: {msg}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_auto_assigns_unique_ids_for_multiple_children() {
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::SubdivideTool;
+
+    // If T1.1 already exists (e.g. earlier sub-target), auto-assignment
+    // must skip past it instead of colliding.
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+    {
+        let mut file = store::load(&path).unwrap();
+        let mut t11 = file.targets["T1"].clone();
+        t11.name = "Pre-existing T1.1".to_string();
+        t11.status = Status::Identified;
+        t11.depends_on = vec![];
+        file.targets.insert("T1.1".to_string(), t11);
+        store::save(&path, &file).unwrap();
+    }
+
+    handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "add".to_string(),
+        children: vec![child_spec("First", &["a"]), child_spec("Second", &["b"])],
+        retire_reason: None,
+    })
+    .expect("auto-assign past T1.1 should succeed");
+
+    let file = store::load(&path).unwrap();
+    // Existing T1.1 untouched.
+    assert_eq!(file.targets["T1.1"].name, "Pre-existing T1.1");
+    // New children start at T1.2 and continue from there.
+    assert_eq!(file.targets["T1.2"].name, "First");
+    assert_eq!(file.targets["T1.3"].name, "Second");
+
+    config::set_external_root_override(None);
+}

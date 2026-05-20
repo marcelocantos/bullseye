@@ -220,6 +220,58 @@ target use `bullseye_put` with `status: identified`.
 | `id` | string | required | The achieved target to revert |
 | `reason` | string | required | Why the achievement is being reversed |
 
+### bullseye_subdivide
+
+Split a parent target into one or more children in a single call,
+rewiring the parent's existing dependents per `mode`. Use this when
+work inside a target proves bigger than scoped and you want to spawn
+sub-work without losing the dependency edges that already point at
+the parent — the typical alternative (a bare `bullseye_put` for the
+new piece) leaves dependents wired only to the parent, so the parent
+retires prematurely once the easy half is done.
+
+Three modes:
+
+- **`add`** (safest default): parent untouched. Every existing
+  dependent of the parent gains the new children as additional
+  `depends_on` entries alongside the parent. Strictly tightens the
+  graph, destroys no information.
+- **`aggregate`**: parent becomes a converging umbrella — each new
+  child is appended to the parent's `depends_on`, and the parent
+  moves to `converging` if previously `identified`. Dependents are
+  not touched; the parent retires automatically once all children
+  retire.
+- **`retire`**: parent transitions to `achieved` (today's date,
+  content preserved). Each dependent's `depends_on` is rewired by
+  replacing the parent ID with the new child IDs. Use when the
+  parent's original acceptance is met and the new children carry
+  spillover work the original scope didn't anticipate.
+
+Child IDs default to auto-assigned sub-target slots of the parent
+(e.g. parent `T15` → `T15.1`, `T15.2`, skipping any existing). Pass
+an explicit `id` per child to override. Refuses to operate on
+terminal parents (achieved or set_aside) with a hint to revert or
+re-open first.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `parent` | string | required | ID of the target to subdivide; must exist and not be terminal |
+| `mode` | string | required | `add`, `aggregate`, or `retire` (see above) |
+| `children` | array | required (non-empty) | New child specs (see below) |
+| `retire_reason` | string | optional | Only consumed in `retire` mode; when supplied, appended to the parent's context as `Subdivided YYYY-MM-DD: <reason>` |
+
+Each entry in `children` has:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | string | auto-assigned next sub-target slot | Explicit child ID (e.g. `T28` for a top-level slot) |
+| `name` | string | required | Short assertion describing the child's desired state |
+| `acceptance` | array | required (non-empty) | Acceptance criteria for the child |
+| `context` | string | empty | Optional context paragraph |
+| `tags` | array | empty | Optional tags |
+| `depends_on` | array | empty | Optional explicit dependencies in addition to any implicit edges added by the mode |
+
 ### bullseye_frontier
 
 Compute unblocked leaf targets ready for work. Validates the target

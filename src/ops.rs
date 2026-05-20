@@ -1,7 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::schema::{Check, QueryCheck, Status, TargetsFile};
+use chrono::Local;
+
+use crate::schema::{Check, QueryCheck, Status, Target, TargetsFile};
 
 /// Result of a revert operation.
 #[derive(Debug)]
@@ -74,6 +76,390 @@ pub fn revert(
 
     Ok(RevertResult {
         name: target.name.clone(),
+    })
+}
+
+// --- subdivide ------------------------------------------------------------
+
+/// How a `subdivide` call should treat the parent target and its
+/// existing dependents.
+///
+/// All three modes create the new children. They differ in what
+/// happens to the *parent* and to any existing targets that already
+/// list the parent in their `depends_on`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubdivideMode {
+    /// Safest default: parent untouched. For every target that listed
+    /// the parent in `depends_on`, the new children are appended
+    /// alongside the parent (the dependent now blocks on both). No
+    /// information is destroyed; the graph strictly tightens.
+    Add,
+    /// Parent becomes a converging umbrella: each new child is
+    /// appended to the parent's own `depends_on`. The parent moves to
+    /// `Converging` if previously `Identified`. Dependents are not
+    /// touched — they continue to depend on the parent, which only
+    /// retires once all its children do.
+    Aggregate,
+    /// Parent retires as-scoped (status → `Achieved`, today's date).
+    /// For every existing dependent, the parent ID is removed from
+    /// `depends_on` and the new child IDs are inserted in its place.
+    /// Use this when the parent's original acceptance is genuinely
+    /// met and the new children carry spillover work the original
+    /// scope didn't anticipate.
+    Retire,
+}
+
+impl SubdivideMode {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "add" => Ok(SubdivideMode::Add),
+            "aggregate" => Ok(SubdivideMode::Aggregate),
+            "retire" => Ok(SubdivideMode::Retire),
+            other => Err(format!(
+                "unknown subdivide mode `{other}` — use `add`, `aggregate`, or `retire`"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubdivideMode::Add => "add",
+            SubdivideMode::Aggregate => "aggregate",
+            SubdivideMode::Retire => "retire",
+        }
+    }
+}
+
+/// Spec for a single new child target produced by `subdivide`.
+///
+/// `id` is optional — when omitted the child is auto-assigned the next
+/// sub-target slot under the parent (e.g. parent T15 → T15.1, T15.2,
+/// skipping any IDs that already exist). Supply `id` explicitly to
+/// place the child at a top-level slot or at a specific sub-target ID.
+#[derive(Debug, Clone)]
+pub struct ChildSpec {
+    pub id: Option<String>,
+    pub name: String,
+    pub acceptance: Vec<String>,
+    pub context: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub depends_on: Option<Vec<String>>,
+}
+
+/// Outcome of a successful `subdivide` call. The handler renders this
+/// into the tool response text.
+#[derive(Debug)]
+pub struct SubdivideResult {
+    pub parent_id: String,
+    pub parent_name: String,
+    pub mode: SubdivideMode,
+    pub created_children: Vec<String>,
+    pub rewired_dependents: Vec<String>,
+    pub parent_status_changed: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SubdivideError {
+    ParentNotFound(String),
+    ParentTerminal {
+        id: String,
+        status: Status,
+    },
+    NoChildren,
+    /// A child's explicit `id` collides with an existing target.
+    IdCollision(String),
+    /// Two children in the same call asked for the same explicit ID.
+    DuplicateChildId(String),
+    EmptyChildField {
+        index: usize,
+        field: &'static str,
+    },
+    /// `retire` mode received an empty reason after trimming. The
+    /// reason is optional, but if supplied it must be substantive.
+    EmptyRetireReason,
+}
+
+impl std::fmt::Display for SubdivideError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubdivideError::ParentNotFound(id) => write!(f, "parent target {id} not found"),
+            SubdivideError::ParentTerminal { id, status } => write!(
+                f,
+                "🎯{id} is {status:?} — subdivision is rejected on terminal targets. \
+                 If a regression makes the parent's achievement premature, run \
+                 `bullseye_revert` first; if the parent was set aside, re-open it via \
+                 `bullseye_put` with `status: identified` before subdividing.",
+            ),
+            SubdivideError::NoChildren => write!(
+                f,
+                "subdivide requires at least one child target — supply `children: [...]`"
+            ),
+            SubdivideError::IdCollision(id) => write!(
+                f,
+                "child id {id} collides with an existing target — pick a different id or omit it to auto-assign"
+            ),
+            SubdivideError::DuplicateChildId(id) => write!(
+                f,
+                "two children in this call asked for id {id} — child ids must be unique within the call"
+            ),
+            SubdivideError::EmptyChildField { index, field } => write!(
+                f,
+                "child at index {index} is missing required field `{field}`"
+            ),
+            SubdivideError::EmptyRetireReason => write!(
+                f,
+                "`retire_reason` was supplied but is empty after trimming — omit it or write a real reason"
+            ),
+        }
+    }
+}
+
+/// Auto-assign the next sub-target ID under `parent` (e.g. parent
+/// `T15` → `T15.1`, `T15.2`, …). Only direct numeric children count;
+/// deeper paths like `T15.1.3` are ignored when picking the next slot.
+fn next_subtarget_id(file: &TargetsFile, parent: &str) -> String {
+    let prefix = format!("{parent}.");
+    let max_num = file
+        .targets
+        .keys()
+        .filter_map(|k| {
+            let suffix = k.strip_prefix(&prefix)?;
+            if suffix.contains('.') {
+                None
+            } else {
+                suffix.parse::<u32>().ok()
+            }
+        })
+        .max()
+        .unwrap_or(0);
+    format!("{parent}.{}", max_num + 1)
+}
+
+/// Split a parent target into one or more children, optionally
+/// rewiring or retiring the parent. See [`SubdivideMode`] for the
+/// per-mode semantics.
+///
+/// Does NOT save to disk; the caller is expected to run this under
+/// `with_locked_mutation` so the read-modify-write is atomic.
+pub fn subdivide(
+    file: &mut TargetsFile,
+    parent_id: &str,
+    mode: SubdivideMode,
+    children: Vec<ChildSpec>,
+    retire_reason: Option<&str>,
+) -> Result<SubdivideResult, SubdivideError> {
+    if children.is_empty() {
+        return Err(SubdivideError::NoChildren);
+    }
+
+    // Validate each child spec eagerly so we never half-create on a
+    // later failure.
+    for (idx, child) in children.iter().enumerate() {
+        if child.name.trim().is_empty() {
+            return Err(SubdivideError::EmptyChildField {
+                index: idx,
+                field: "name",
+            });
+        }
+        if child.acceptance.is_empty() || child.acceptance.iter().all(|a| a.trim().is_empty()) {
+            return Err(SubdivideError::EmptyChildField {
+                index: idx,
+                field: "acceptance",
+            });
+        }
+    }
+
+    let parent = file
+        .targets
+        .get(parent_id)
+        .ok_or_else(|| SubdivideError::ParentNotFound(parent_id.to_string()))?;
+
+    if parent.status.is_terminal() {
+        return Err(SubdivideError::ParentTerminal {
+            id: parent_id.to_string(),
+            status: parent.status,
+        });
+    }
+
+    // Resolve child IDs: explicit ones get checked for collisions
+    // (both against existing targets and against each other); the rest
+    // get auto-assigned next-slot sub-target IDs under the parent.
+    // Auto-assignment scans the in-progress assignment list so two
+    // auto-assigned children in the same call don't both pick the
+    // same slot.
+    let mut assigned_ids: Vec<String> = Vec::with_capacity(children.len());
+    for child in &children {
+        match &child.id {
+            Some(explicit) => {
+                if file.targets.contains_key(explicit) {
+                    return Err(SubdivideError::IdCollision(explicit.clone()));
+                }
+                if assigned_ids.contains(explicit) {
+                    return Err(SubdivideError::DuplicateChildId(explicit.clone()));
+                }
+                assigned_ids.push(explicit.clone());
+            }
+            None => {
+                // next_subtarget_id only sees IDs already in the file;
+                // when we auto-assign multiple children in one call we
+                // need to also avoid the ones we just queued.
+                let mut candidate = next_subtarget_id(file, parent_id);
+                while assigned_ids.contains(&candidate) {
+                    // Bump by appending — extremely defensive; the
+                    // first auto-assigned ID per call is always free,
+                    // and subsequent ones step past prior assignments.
+                    let next_num: u32 = candidate
+                        .rsplit('.')
+                        .next()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0)
+                        + 1;
+                    candidate = format!("{parent_id}.{next_num}");
+                }
+                assigned_ids.push(candidate);
+            }
+        }
+    }
+
+    // Trim and validate the retire reason up front so the failure
+    // path never produces a partial mutation.
+    let trimmed_reason = match (mode, retire_reason) {
+        (SubdivideMode::Retire, Some(r)) => {
+            let t = r.trim();
+            if t.is_empty() {
+                return Err(SubdivideError::EmptyRetireReason);
+            }
+            Some(t.to_string())
+        }
+        _ => None,
+    };
+
+    // Snapshot the parent's name and original status before we touch
+    // anything. Parent retirement (Retire mode) and umbrella promotion
+    // (Aggregate mode) both inspect the prior status.
+    let parent_name = parent.name.clone();
+    let parent_prior_status = parent.status;
+
+    // Create the children.
+    let today = Local::now().date_naive();
+    for (child, id) in children.iter().zip(assigned_ids.iter()) {
+        let target = Target {
+            name: child.name.clone(),
+            status: Status::Identified,
+            value: 0.0,
+            cost: 0.0,
+            actual_cost: None,
+            set_aside_reason: None,
+            acceptance: child.acceptance.clone(),
+            checks: Vec::new(),
+            context: child.context.clone().unwrap_or_default(),
+            gates: Vec::new(),
+            depends_on: child.depends_on.clone().unwrap_or_default(),
+            cross_depends: Vec::new(),
+            cross_enables: Vec::new(),
+            tags: child.tags.clone().unwrap_or_default(),
+            strategy: None,
+            origin: format!("subdivide(🎯{parent_id})"),
+            discovered: today,
+            achieved: None,
+        };
+        file.targets.insert(id.clone(), target);
+    }
+
+    // Per-mode parent + dependent rewiring.
+    let mut rewired_dependents: Vec<String> = Vec::new();
+    let mut parent_status_changed = false;
+    match mode {
+        SubdivideMode::Add => {
+            // Find every active dependent and append each new child
+            // ID alongside the parent. Idempotent: skip IDs already
+            // present (shouldn't happen, but defensive).
+            let dependent_ids: Vec<String> = file
+                .targets
+                .iter()
+                .filter(|(_, t)| t.depends_on.iter().any(|d| d == parent_id))
+                .map(|(id, _)| id.clone())
+                .collect();
+            for dep_id in &dependent_ids {
+                if let Some(dep) = file.targets.get_mut(dep_id) {
+                    for new_id in &assigned_ids {
+                        if !dep.depends_on.contains(new_id) {
+                            dep.depends_on.push(new_id.clone());
+                        }
+                    }
+                }
+            }
+            rewired_dependents = dependent_ids;
+        }
+        SubdivideMode::Aggregate => {
+            let parent = file
+                .targets
+                .get_mut(parent_id)
+                .expect("parent existence checked above");
+            for new_id in &assigned_ids {
+                if !parent.depends_on.contains(new_id) {
+                    parent.depends_on.push(new_id.clone());
+                }
+            }
+            if parent.status == Status::Identified {
+                parent.status = Status::Converging;
+                parent_status_changed = true;
+            }
+        }
+        SubdivideMode::Retire => {
+            // Rewire dependents: drop parent, splice in children.
+            let dependent_ids: Vec<String> = file
+                .targets
+                .iter()
+                .filter(|(_, t)| t.depends_on.iter().any(|d| d == parent_id))
+                .map(|(id, _)| id.clone())
+                .collect();
+            for dep_id in &dependent_ids {
+                if let Some(dep) = file.targets.get_mut(dep_id) {
+                    let mut new_deps: Vec<String> = Vec::with_capacity(dep.depends_on.len());
+                    for d in &dep.depends_on {
+                        if d == parent_id {
+                            for new_id in &assigned_ids {
+                                if !new_deps.contains(new_id) {
+                                    new_deps.push(new_id.clone());
+                                }
+                            }
+                        } else if !new_deps.contains(d) {
+                            new_deps.push(d.clone());
+                        }
+                    }
+                    dep.depends_on = new_deps;
+                }
+            }
+            rewired_dependents = dependent_ids;
+
+            // Retire the parent and record the rationale in context.
+            let parent = file
+                .targets
+                .get_mut(parent_id)
+                .expect("parent existence checked above");
+            parent.status = Status::Achieved;
+            parent.achieved = Some(today);
+            parent_status_changed = parent_prior_status != Status::Achieved;
+            if let Some(reason) = trimmed_reason {
+                let entry = format!("Subdivided {today}: {reason}");
+                if parent.context.is_empty() {
+                    parent.context = entry;
+                } else {
+                    parent.context.push_str("\n\n");
+                    parent.context.push_str(&entry);
+                }
+            }
+        }
+    }
+
+    Ok(SubdivideResult {
+        parent_id: parent_id.to_string(),
+        parent_name,
+        mode,
+        created_children: assigned_ids,
+        rewired_dependents,
+        parent_status_changed,
     })
 }
 
