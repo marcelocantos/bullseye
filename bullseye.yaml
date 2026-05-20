@@ -765,8 +765,30 @@ targets:
     context: 'The current schema makes reshaping ceremonial: splitting one node into a diamond is four `bullseye_put` calls plus dependency rewiring on whatever was downstream. That ceremony discourages the move. If continuous graph evolution is the central rhythm (the waterfall → iterative reframe that justifies the whole state-graph framing), the friction of edits must be low enough that the agent reaches for them naturally. Batch / subgraph-shaped operations are what make that friction-free. Depends on schema v5 because designing the batch operation against the simpler post-v5 substrate (uniform nodes, single edge type) is dramatically cleaner than designing it against the current kind/verify/rework apparatus.'
     depends_on:
     - T25
+    - T27.1
     origin: manual
     discovered: 2026-05-17
+  T27.1:
+    name: bullseye_subdivide splits a target into children with three dependent-rewiring modes (add, aggregate, retire) in a single MCP call
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`bullseye_subdivide(cwd, parent, mode, children, retire_reason?)` is exposed as an MCP tool and routed in handler.rs'
+    - 'Three modes are supported: `add` (parent unchanged; each dependent''s `depends_on` gets the new child IDs appended alongside the parent), `aggregate` (parent''s `depends_on` += new child IDs, parent moves to `converging` if previously `identified`, dependents unchanged), `retire` (parent transitions to `achieved` with today''s date; each dependent''s `depends_on` is rewired by replacing parent with the new child IDs)'
+    - '`retire` mode appends a `Subdivided YYYY-MM-DD: <reason>` audit line to the parent''s context when `retire_reason` is provided (mirrors `bullseye_revert`)'
+    - Child IDs default to auto-assigned sub-target IDs of the parent (e.g. parent T15 → T15.1, T15.2, skipping any existing); callers can override with explicit IDs
+    - Subdivision refuses to operate on already-terminal parents (achieved or set_aside) with an actionable error suggesting `bullseye_revert` first
+    - Child specs require `name` and `acceptance`; optional `context`, `tags`, `depends_on`, and `id`
+    - Envelope-leak guard (🎯T20) runs against every caller-controlled string before persistence
+    - Operation is atomic under the existing `with_locked_mutation` flock; partial application is impossible
+    - 'Tests cover: all three modes against a parent with dependents, auto-ID assignment, explicit ID assignment, ID collision rejection, achieved-parent rejection, set-aside-parent rejection, empty-children rejection, retire-mode context audit line'
+    context: 'When a session realises a target is too large mid-flight, it tends to spawn new top-level targets carrying the difficult work, but those new targets aren''t wired into the original''s downstream dependants. The original target then gets prematurely retired (because the easy half is done), and its dependants believe they''re unblocked even though the spillover work is still open. A single-call subdivide operation that explicitly rewires dependents fixes this without relying on the agent to remember the post-step. The three modes capture the spectrum: `add` is purely additive (safest default — no information destroyed, dependents become more constrained), `aggregate` keeps the parent as a converging umbrella, `retire` records the parent as achieved-as-scoped while the new children carry the spillover. Subset of the broader 🎯T27 scope (reshape in one call), so files as a sub-target rather than a sibling.'
+    tags:
+    - api
+    - ergonomics
+    origin: manual
+    discovered: 2026-05-20
   T3:
     name: Protocol app priority sync
     status: set_aside
