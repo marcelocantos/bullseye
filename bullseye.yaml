@@ -770,7 +770,7 @@ targets:
     discovered: 2026-05-17
   T27.1:
     name: bullseye_subdivide splits a target into children with three dependent-rewiring modes (add, aggregate, retire) in a single MCP call
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -789,6 +789,7 @@ targets:
     - ergonomics
     origin: manual
     discovered: 2026-05-20
+    achieved: 2026-05-20
   T3:
     name: Protocol app priority sync
     status: set_aside
