@@ -442,6 +442,91 @@ pub struct ConvergenceTool {
     pub skip_invariants: Option<bool>,
 }
 
+/// One new child target in a `bullseye_subdivide` call.
+///
+/// `id` is optional — when omitted the child is auto-assigned the next
+/// free sub-target slot under the parent (e.g. parent `T15` → `T15.1`,
+/// `T15.2`, …). Supply `id` explicitly to place the child at a
+/// top-level slot or at a specific sub-target ID.
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct SubdivisionChild {
+    /// Optional explicit target ID. Omit to auto-assign as the next
+    /// sub-target of the parent.
+    #[serde(default)]
+    pub id: Option<String>,
+
+    /// Short assertion describing the child's desired state.
+    pub name: String,
+
+    /// Acceptance criteria — how to verify the child is achieved.
+    pub acceptance: Vec<String>,
+
+    /// Optional context paragraph carrying the why / discovery story.
+    #[serde(default)]
+    pub context: Option<String>,
+
+    /// Optional tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+
+    /// Optional dependencies the child blocks on, in addition to any
+    /// implicit edges added by the subdivide mode.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+}
+
+/// Split a parent target into one or more children in a single call,
+/// with one of three dependent-rewiring modes.
+#[mcp_tool(
+    name = "bullseye_subdivide",
+    description = "Split a parent target into one or more children in a single call, rewiring \
+        the parent's existing dependents according to `mode`. Use this when work inside a target \
+        proves bigger than scoped and you want to spawn sub-work without losing the dependency \
+        edges that point at the parent. \
+        \
+        Modes (safest default first): \
+        - `add`: parent untouched; every existing dependent of the parent gains the new children \
+          as additional `depends_on` entries alongside the parent. Strictly tightens the graph, \
+          destroys no information. \
+        - `aggregate`: parent becomes a converging umbrella — each new child is appended to the \
+          parent's own `depends_on`, and the parent moves to `converging` if previously \
+          `identified`. Dependents continue to depend on the parent only; the parent retires once \
+          all its children retire. \
+        - `retire`: parent transitions to `achieved` with today's date (its content is preserved); \
+          every dependent's `depends_on` is rewired by replacing the parent ID with the new child \
+          IDs. Use when the parent's original acceptance is met and the new children carry \
+          spillover work the original scope didn't anticipate. \
+        \
+        Each child requires `name` and `acceptance`. Child IDs default to auto-assigned \
+        sub-target slots of the parent (e.g. parent `T15` → `T15.1`, `T15.2`). Refuses to \
+        operate on terminal parents (achieved or set_aside) — revert or re-open them first. \
+        \
+        `retire_reason` is optional and only consumed in `retire` mode; when supplied it's \
+        appended to the parent's context as a `Subdivided YYYY-MM-DD: <reason>` audit line."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct SubdivideTool {
+    /// Working directory to discover bullseye.yaml from.
+    pub cwd: String,
+
+    /// ID of the parent target to subdivide. Must exist and must not
+    /// be in a terminal status (achieved / set_aside).
+    pub parent: String,
+
+    /// `add` (default, safest), `aggregate`, or `retire`. See the tool
+    /// description for full semantics.
+    pub mode: String,
+
+    /// One or more new child targets to create. Must be non-empty.
+    pub children: Vec<SubdivisionChild>,
+
+    /// Optional rationale appended to the parent's context as
+    /// `Subdivided YYYY-MM-DD: <reason>`. Only consumed in `retire`
+    /// mode; ignored otherwise.
+    #[serde(default)]
+    pub retire_reason: Option<String>,
+}
+
 tool_box!(
     TargetTools,
     [
@@ -451,6 +536,7 @@ tool_box!(
         RetireTool,
         RevertTool,
         SetAsideTool,
+        SubdivideTool,
         FrontierTool,
         ValidateTool,
         GraphTool,
