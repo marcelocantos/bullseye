@@ -9,8 +9,31 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T25 schema v5 migration (next release after
-v0.27.0). Changes since v0.27.0 affecting the interaction surface:
+Snapshot as of the 🎯T27.1 `bullseye_subdivide` addition (next release
+after v0.28.0). Changes since v0.28.0 affecting the interaction surface:
+
+- **`bullseye_subdivide` added** (🎯T27.1). New MCP tool
+  `bullseye_subdivide(cwd, parent, mode, children, retire_reason?)`
+  splits a parent target into one or more children in a single call,
+  rewiring existing dependents per `mode`. Three modes: `add` (parent
+  unchanged; every dependent gains the new children as additional
+  `depends_on` entries alongside the parent — strictly tightens the
+  graph, destroys no information, the safest default), `aggregate`
+  (parent becomes a converging umbrella with the children appended to
+  its own `depends_on`, status promoted from `identified` to
+  `converging`; dependents untouched), `retire` (parent transitions
+  to `achieved` with today's date and content preserved; every
+  dependent has the parent spliced out of `depends_on` and replaced
+  by the new child IDs; optional `retire_reason` is appended to the
+  parent's context as `Subdivided YYYY-MM-DD: <reason>`). Child IDs
+  default to auto-assigned next-slot sub-target IDs under the parent
+  (e.g. parent `T15` → `T15.1`, `T15.2`, skipping any existing).
+  Refuses to operate on terminal parents (`achieved` or `set_aside`)
+  with an actionable error suggesting `bullseye_revert` or
+  re-opening first. The operation is atomic under the existing
+  per-project flock. No schema change.
+
+Earlier v0.28.0 changes still in effect:
 
 - **Schema v5: uniform-node model — `kind`, `verifies`, `rework`,
   `retry_budget`, `retries` removed; `bullseye_revert` added;

@@ -152,7 +152,7 @@ After that, every other bullseye tool just works.
 
 ## Tools
 
-Bullseye exposes 16 MCP tools. All target-operating tools accept a
+Bullseye exposes 17 MCP tools. All target-operating tools accept a
 `cwd` parameter; discovery resolves the targets file automatically.
 
 | Tool | Description |
@@ -163,6 +163,7 @@ Bullseye exposes 16 MCP tools. All target-operating tools accept a
 | `bullseye_retire` | Mark a target achieved |
 | `bullseye_revert` | Move a target from achieved back to converging (e.g. a regression proves the achievement was premature). Clears the achieved date and appends a timestamped revert note to the target's context. |
 | `bullseye_set_aside` | Set a target aside (parked / deferred / wont-fix) with a required rationale. Distinct from retirement: the target was not delivered, but it's removed from the active set and unblocks dependents the same way an achieved target does. |
+| `bullseye_subdivide` | Split a parent target into one or more children in a single call, rewiring existing dependents per `mode`: `add` (parent unchanged, dependents gain children alongside), `aggregate` (parent becomes a converging umbrella that depends_on the children), or `retire` (parent retires as-scoped, dependents are rewired from parent to children). |
 | `bullseye_verify` | Emit a structured plan that maps each of a target's `checks` to a sawmill tool invocation. Plan-only — the calling agent runs the checks and folds results back. |
 | `bullseye_frontier` | Unblocked leaf targets ready for work, ordered by maximum unblocking fanout then target ID |
 | `bullseye_validate` | Check schema conformance |
