@@ -9,8 +9,38 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T27.1 `bullseye_subdivide` addition (next release
-after v0.28.0). Changes since v0.28.0 affecting the interaction surface:
+Snapshot as of the 🎯T28 git-history-aware ID allocator (next release
+after v0.29.0). Changes since v0.29.0 affecting the interaction surface:
+
+- **Auto-assigned target IDs are now global across branches**
+  (🎯T28). `bullseye_put` (when `id` is omitted) and the
+  child-id auto-assignment in `bullseye_subdivide` no longer pick the
+  next free slot from the in-memory `TargetsFile` alone. Both now
+  union the live keys with every target ID ever recorded in
+  `bullseye.yaml`'s git history across every branch and remote the
+  local clone has fetched, surfaced via a single
+  `git log -p --all --remotes -- bullseye.yaml` invocation (cached
+  per-process for the session). Two branches that have each filed
+  new top-level targets no longer collide on merge; the same applies
+  to sub-target slots under a common parent. Behavioural changes
+  observable to callers:
+  1. An explicit `id` parameter on `bullseye_put` or
+     `bullseye_subdivide` children that collides with a slot
+     recorded in git history but **absent from the current tree**
+     (deleted from `bullseye.yaml`, or alive only on another branch)
+     is rejected with an error explaining the collision and
+     suggesting `id` be omitted or changed. Pre-T28, this would
+     have silently created a duplicate ID on merge.
+  2. Auto-assigned IDs skip historical slots, so the first new
+     top-level target in a session may land at a higher number than
+     the current file contents would suggest (e.g. master shows up
+     to `T27` but `T28` was filed on another branch — the next
+     auto-assigned ID is `T29`).
+  3. External-mode storage (shadow tree, no git history) falls back
+     to the pre-T28 in-memory-only allocator. No tool surface
+     change; same parameters, same return shapes.
+
+Earlier v0.29.0 changes still in effect:
 
 - **`bullseye_subdivide` added** (🎯T27.1). New MCP tool
   `bullseye_subdivide(cwd, parent, mode, children, retire_reason?)`
