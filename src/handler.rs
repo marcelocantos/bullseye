@@ -16,6 +16,7 @@ use rust_mcp_sdk::schema::{
 use crate::config::{self, LOCATION_PROMPT, Location};
 use crate::git_commit;
 use crate::graph;
+use crate::id_alloc;
 use crate::import;
 use crate::ops;
 use crate::portfolio;
@@ -240,11 +241,21 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
     text_result(format!("🎯{} {}\n\n{yaml}", t.id, target.name))
 }
 
-/// Auto-assign the next `TN` ID (ignoring sub-targets like `T1.2`).
-fn next_top_level_id(file: &crate::schema::TargetsFile) -> String {
-    let max_num = file
-        .targets
-        .keys()
+/// Auto-assign the next top-level `T<N>` ID (ignoring sub-targets
+/// like `T1.2`). Considers both the live in-memory file and the set
+/// of historical IDs surfaced from git (🎯T28), so two branches that
+/// haven't seen each other's commits don't both pick the same slot.
+/// The historical set is empty for repos without git history (e.g.
+/// external-mode shadow storage) and the function then behaves
+/// exactly like the pre-T28 in-memory-only allocator.
+fn next_top_level_id(
+    file: &crate::schema::TargetsFile,
+    historical: &std::collections::HashSet<String>,
+) -> String {
+    let in_memory = file.targets.keys().map(String::as_str);
+    let from_history = historical.iter().map(String::as_str);
+    let max_num = in_memory
+        .chain(from_history)
         .filter_map(|k| {
             let num_str = k.strip_prefix('T')?;
             if num_str.contains('.') {
@@ -320,6 +331,13 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         }
     };
 
+    // Scan git history for every target ID ever assigned across all
+    // branches/remotes (🎯T28). Done outside the locked mutation so
+    // the (potentially expensive on first call per session)
+    // subprocess isn't holding the file lock. The cache makes
+    // subsequent calls cheap.
+    let historical = id_alloc::historical_ids(&path);
+
     let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
         // Resolve target ID. None → auto-assign a new top-level ID.
         let (id, is_create) = match t.id.clone() {
@@ -327,8 +345,21 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 let exists = file.targets.contains_key(&explicit);
                 (explicit, !exists)
             }
-            None => (next_top_level_id(file), true),
+            None => (next_top_level_id(file, &historical), true),
         };
+
+        // 🎯T28: an explicit-id create that collides with a target
+        // recorded in git history (deleted, or on another branch)
+        // is rejected — the whole point of reserving historical
+        // IDs is so two branches can't independently end up with
+        // the same ID pointing at different targets.
+        if is_create && historical.contains(&id) {
+            return Err(format!(
+                "🎯{id} collides with a target recorded in git history (it may exist \
+                 on another branch or have been deleted from the current tree). \
+                 Pick a different ID, or omit `id` to auto-assign the next free slot."
+            ));
+        }
 
         if is_create {
             // Creation path — name and acceptance are required.
@@ -729,9 +760,21 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
         .collect();
     let retire_reason = t.retire_reason.clone();
 
+    // 🎯T28: pull historical IDs from git before entering the locked
+    // mutation so sub-target auto-assignment sees every slot ever
+    // taken across branches, not just the current tree.
+    let historical = id_alloc::historical_ids(&path);
+
     let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
-        ops::subdivide(file, &t.parent, mode, child_specs, retire_reason.as_deref())
-            .map_err(|e| e.to_string())
+        ops::subdivide(
+            file,
+            &t.parent,
+            mode,
+            child_specs,
+            retire_reason.as_deref(),
+            &historical,
+        )
+        .map_err(|e| e.to_string())
     })
     .map_err(|e| tool_err(e.to_string()))?;
 

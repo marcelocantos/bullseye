@@ -217,13 +217,24 @@ impl std::fmt::Display for SubdivideError {
 /// Auto-assign the next sub-target ID under `parent` (e.g. parent
 /// `T15` → `T15.1`, `T15.2`, …). Only direct numeric children count;
 /// deeper paths like `T15.1.3` are ignored when picking the next slot.
-fn next_subtarget_id(file: &TargetsFile, parent: &str) -> String {
+///
+/// Unions the live in-memory keys with `historical` IDs (🎯T28) so
+/// a sub-target that exists only on another branch's commits is still
+/// honoured. `historical` may be empty when no git context is
+/// available (e.g. external-mode shadow storage) — the function then
+/// matches pre-T28 behaviour.
+fn next_subtarget_id(
+    file: &TargetsFile,
+    parent: &str,
+    historical: &std::collections::HashSet<String>,
+) -> String {
     let prefix = format!("{parent}.");
-    let max_num = file
-        .targets
-        .keys()
+    let in_memory = file.targets.keys().map(String::as_str);
+    let from_history = historical.iter().map(String::as_str);
+    let max_num = in_memory
+        .chain(from_history)
         .filter_map(|k| {
-            let suffix = k.strip_prefix(&prefix)?;
+            let suffix = k.strip_prefix(prefix.as_str())?;
             if suffix.contains('.') {
                 None
             } else {
@@ -247,6 +258,7 @@ pub fn subdivide(
     mode: SubdivideMode,
     children: Vec<ChildSpec>,
     retire_reason: Option<&str>,
+    historical: &std::collections::HashSet<String>,
 ) -> Result<SubdivideResult, SubdivideError> {
     if children.is_empty() {
         return Err(SubdivideError::NoChildren);
@@ -291,7 +303,11 @@ pub fn subdivide(
     for child in &children {
         match &child.id {
             Some(explicit) => {
-                if file.targets.contains_key(explicit) {
+                // Collision against the live file is rejected. Collision
+                // against the historical set (🎯T28) is rejected too —
+                // an ID that once existed on another branch is reserved
+                // even if the current tree has no record of it.
+                if file.targets.contains_key(explicit) || historical.contains(explicit) {
                     return Err(SubdivideError::IdCollision(explicit.clone()));
                 }
                 if assigned_ids.contains(explicit) {
@@ -300,14 +316,11 @@ pub fn subdivide(
                 assigned_ids.push(explicit.clone());
             }
             None => {
-                // next_subtarget_id only sees IDs already in the file;
-                // when we auto-assign multiple children in one call we
-                // need to also avoid the ones we just queued.
-                let mut candidate = next_subtarget_id(file, parent_id);
+                // next_subtarget_id already unions the file's keys with
+                // `historical`. We additionally have to step past slots
+                // we just allocated in this same call.
+                let mut candidate = next_subtarget_id(file, parent_id, historical);
                 while assigned_ids.contains(&candidate) {
-                    // Bump by appending — extremely defensive; the
-                    // first auto-assigned ID per call is always free,
-                    // and subsequent ones step past prior assignments.
                     let next_num: u32 = candidate
                         .rsplit('.')
                         .next()
