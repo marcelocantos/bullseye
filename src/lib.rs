@@ -6,6 +6,7 @@ pub mod convergence;
 pub mod git_commit;
 pub mod graph;
 pub mod handler;
+pub mod id_alloc;
 pub mod import;
 pub mod ops;
 pub mod portfolio;
