@@ -3913,6 +3913,20 @@ fn subdivide_auto_assigns_unique_ids_for_multiple_children() {
 
 // --- 🎯T28: git-history-aware ID allocation -------------------------------
 
+/// Serialise the 🎯T28 id_alloc tests. They share the process-global
+/// `id_alloc::CACHE`, so running them in parallel produces flaky
+/// races where one test's `clear_cache_for_tests()` invalidates
+/// another's expected memoisation. Each test acquires this mutex at
+/// entry and holds it for the whole body; the harness still
+/// parallelises against unrelated tests.
+static T28_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn t28_lock() -> std::sync::MutexGuard<'static, ()> {
+    T28_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Initialise a git repo with stable identity so commits don't depend
 /// on the developer's git config or wall clock for these tests.
 fn t28_git_init(dir: &std::path::Path) {
@@ -4020,6 +4034,7 @@ fn t28_repo_with_branched_id() -> tempfile::TempDir {
 
 #[test]
 fn id_alloc_historical_ids_sees_other_branch() {
+    let _guard = t28_lock();
     use bullseye::id_alloc;
     let tmp = t28_repo_with_branched_id();
     let yaml = tmp.path().join("bullseye.yaml");
@@ -4037,6 +4052,7 @@ fn id_alloc_historical_ids_sees_other_branch() {
 
 #[test]
 fn id_alloc_put_skips_branched_ids() {
+    let _guard = t28_lock();
     use bullseye::config::{self, Location};
     use bullseye::handler::handle_put;
     use bullseye::tools::PutTool;
@@ -4076,6 +4092,7 @@ fn id_alloc_put_skips_branched_ids() {
 
 #[test]
 fn id_alloc_external_mode_falls_back_to_in_memory() {
+    let _guard = t28_lock();
     use bullseye::id_alloc;
     // A plain tempdir with no `.git` — historical_ids must return an
     // empty set rather than panicking or hanging.
@@ -4093,6 +4110,7 @@ fn id_alloc_external_mode_falls_back_to_in_memory() {
 
 #[test]
 fn id_alloc_explicit_collision_with_branched_id_is_rejected() {
+    let _guard = t28_lock();
     use bullseye::config::{self, Location};
     use bullseye::handler::handle_put;
     use bullseye::tools::PutTool;
@@ -4132,6 +4150,7 @@ fn id_alloc_explicit_collision_with_branched_id_is_rejected() {
 
 #[test]
 fn id_alloc_subdivide_skips_branched_subtarget_ids() {
+    let _guard = t28_lock();
     use bullseye::config::{self, Location};
     use bullseye::handler::handle_subdivide;
     use bullseye::tools::SubdivideTool;
@@ -4194,6 +4213,7 @@ fn id_alloc_subdivide_skips_branched_subtarget_ids() {
 
 #[test]
 fn id_alloc_memoised_within_session() {
+    let _guard = t28_lock();
     use bullseye::id_alloc;
     let tmp = t28_repo_with_branched_id();
     let yaml = tmp.path().join("bullseye.yaml");
@@ -4255,6 +4275,7 @@ fn id_alloc_memoised_within_session() {
 
 #[test]
 fn id_alloc_deleted_targets_remain_reserved() {
+    let _guard = t28_lock();
     use bullseye::id_alloc;
     bullseye::id_alloc::clear_cache_for_tests();
 
