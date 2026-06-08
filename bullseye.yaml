@@ -792,7 +792,7 @@ targets:
     achieved: 2026-05-20
   T28:
     name: Auto-assigned target IDs scan git history so parallel branches and sessions don't collide
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -810,6 +810,7 @@ targets:
     - schema
     origin: manual
     discovered: 2026-06-08
+    achieved: 2026-06-08
   T3:
     name: Protocol app priority sync
     status: set_aside
