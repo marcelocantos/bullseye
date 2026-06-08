@@ -790,6 +790,26 @@ targets:
     origin: manual
     discovered: 2026-05-20
     achieved: 2026-05-20
+  T28:
+    name: Auto-assigned target IDs scan git history so parallel branches and sessions don't collide
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - bullseye_put (top-level ID auto-assignment) and bullseye_subdivide (sub-target ID auto-assignment) consult git history of bullseye.yaml across all local branches and remotes when picking the next free ID, in addition to the in-memory TargetsFile
+    - The git scan uses a single invocation (git log -p --all --remotes -- bullseye.yaml) and greps additions for T<N> / T<N>.<M> keys; no per-commit subprocesses
+    - Result is memoised per-process keyed by repo root to amortise the scan across multiple put/subdivide calls in the same session
+    - External-mode repos (shadow tree, no git history) fall back to in-memory-only allocation with a non-blocking note that cross-branch collision avoidance is unavailable in that mode
+    - When the local clone is missing remote branches (not fetched, or other-machine sessions never pushed), allocation can still collide — this is acknowledged in the implementation comment as an accepted edge case, not a bug
+    - Tests cover historical IDs from past commits, IDs from a non-checked-out branch, external-mode fallback when no git repo is present, memoisation cache returns identical answers within a session, and IDs deleted from the current tree but still in history are still skipped
+    - No public Rust API change beyond the new helper module; tool surface unchanged
+    context: 'Observed in practice: two parallel sessions on different branches both auto-assigned the same next ID to different targets, producing collisions on merge. Root cause: next_top_level_id in handler.rs and next_subtarget_id in ops.rs (added in v0.29.0) scan only the in-memory TargetsFile, which reflects whatever is committed/checked out on the current branch. The git repo holds the global view — every branch and remote that has ever filed a target — and the auto-assignment path should consult it. UUIDs would be the maximally durable answer but unergonomic; a single git-log -p scan is cheap, covers every branch the local clone knows about, and tolerates the narrow remaining edge cases (un-fetched remote branches, cross-machine simultaneous sessions, external-mode shadow trees).'
+    tags:
+    - correctness
+    - concurrency
+    - schema
+    origin: manual
+    discovered: 2026-06-08
   T3:
     name: Protocol app priority sync
     status: set_aside
