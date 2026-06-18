@@ -718,6 +718,11 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
     if let Some(s) = &t.retire_reason {
         check_no_envelope_leak("retire_reason", s).map_err(tool_err)?;
     }
+    if let Some(items) = &t.tail {
+        for (j, s) in items.iter().enumerate() {
+            check_no_envelope_leak(&format!("tail[{j}]"), s).map_err(tool_err)?;
+        }
+    }
     for (idx, child) in t.children.iter().enumerate() {
         if let Some(s) = &child.id {
             check_no_envelope_leak(&format!("children[{idx}].id"), s).map_err(tool_err)?;
@@ -759,6 +764,7 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
         })
         .collect();
     let retire_reason = t.retire_reason.clone();
+    let tail = t.tail.clone();
 
     // 🎯T28: pull historical IDs from git before entering the locked
     // mutation so sub-target auto-assignment sees every slot ever
@@ -772,6 +778,7 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
             mode,
             child_specs,
             retire_reason.as_deref(),
+            tail.as_deref(),
             &historical,
         )
         .map_err(|e| e.to_string())

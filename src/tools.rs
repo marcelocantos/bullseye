@@ -61,7 +61,12 @@ pub struct GetTool {
         ack, or a smoke test is described in the acceptance criteria themselves (free text), not encoded as a \
         node type. On patch, all fields are optional. \
         Use `depends_on` to declare this target's blockers, or `blocks` (sugar) to inject this target into other \
-        targets' depends_on lists — handy when adding a new prerequisite above existing work."
+        targets' depends_on lists — handy when adding a new prerequisite above existing work. \
+        \
+        Before filing a target whose acceptance reads as multi-phase prose (\"do X, then Y, then check Z\"), \
+        check `docs/shapes.md` in this repo for the named graph-shape patterns (diamond, fan-out, chain, \
+        choke-point, spike-then-decide, contract-first, migration) and propose the decomposition before \
+        committing to a single node. The mistake to avoid is encoding a subgraph in one node's prose."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct PutTool {
@@ -484,6 +489,12 @@ pub struct SubdivisionChild {
         proves bigger than scoped and you want to spawn sub-work without losing the dependency \
         edges that point at the parent. \
         \
+        See `docs/shapes.md` for the named graph-shape patterns (diamond, fan-out, chain, \
+        choke-point, spike-then-decide, contract-first, migration) and which subdivide call \
+        shape produces each. Diamond decomposition in particular leans on `retire` + `tail` — \
+        the diamond's tail is the convergence node, and dependents should rewire to that single \
+        node rather than the whole subgraph. \
+        \
         Modes (safest default first): \
         - `add`: parent untouched; every existing dependent of the parent gains the new children \
           as additional `depends_on` entries alongside the parent. Strictly tightens the graph, \
@@ -494,15 +505,24 @@ pub struct SubdivisionChild {
           all its children retire. \
         - `retire`: parent transitions to `achieved` with today's date (its content is preserved); \
           every dependent's `depends_on` is rewired by replacing the parent ID with the new child \
-          IDs. Use when the parent's original acceptance is met and the new children carry \
-          spillover work the original scope didn't anticipate. \
+          IDs (or with `tail`, when supplied — see below). Use when the parent's original \
+          acceptance is met and the new children carry spillover work the original scope didn't \
+          anticipate, or to reshape into a named pattern (diamond, contract-first, …). \
         \
         Each child requires `name` and `acceptance`. Child IDs default to auto-assigned \
-        sub-target slots of the parent (e.g. parent `T15` → `T15.1`, `T15.2`). Refuses to \
-        operate on terminal parents (achieved or set_aside) — revert or re-open them first. \
+        sub-target slots of the parent (e.g. parent `T15` → `T15.1`, `T15.2`). Supply explicit \
+        `id` values on children you intend to reference from `tail` or from other children's \
+        `depends_on`. Refuses to operate on terminal parents (achieved or set_aside) — revert or \
+        re-open them first. \
         \
         `retire_reason` is optional and only consumed in `retire` mode; when supplied it's \
-        appended to the parent's context as a `Subdivided YYYY-MM-DD: <reason>` audit line."
+        appended to the parent's context as a `Subdivided YYYY-MM-DD: <reason>` audit line. \
+        \
+        `tail` is optional and only consumed in `retire` mode. When omitted, dependents are \
+        rewired to depend on every new child (functionally redundant but noisy when the children \
+        form a connected subgraph). When supplied, dependents are rewired to depend on only the \
+        listed tail children — the load-bearing case for diamond decomposition. Tail entries must \
+        match the explicit `id` of one of the children in this call."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct SubdivideTool {
@@ -525,6 +545,17 @@ pub struct SubdivideTool {
     /// mode; ignored otherwise.
     #[serde(default)]
     pub retire_reason: Option<String>,
+
+    /// Optional subset of child IDs that should receive the rewired
+    /// dependent edges in `retire` mode. When omitted, every new
+    /// child receives the dependents (current default). When
+    /// supplied, only the listed children do — useful for shapes
+    /// whose tail node converges multiple internal branches
+    /// (diamond, contract-first integration node, migration verify
+    /// node). Tail entries must match a child's explicit `id`.
+    /// Rejected outside `retire` mode.
+    #[serde(default)]
+    pub tail: Option<Vec<String>>,
 }
 
 tool_box!(

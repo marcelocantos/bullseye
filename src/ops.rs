@@ -177,6 +177,17 @@ pub enum SubdivideError {
     /// `retire` mode received an empty reason after trimming. The
     /// reason is optional, but if supplied it must be substantive.
     EmptyRetireReason,
+    /// `tail` parameter supplied in a mode that has no dependent
+    /// rewiring (currently `aggregate`). `tail` only applies to
+    /// `retire` mode where dependents are spliced.
+    TailRequiresRetireMode,
+    /// `tail` parameter supplied but contained no IDs after parsing.
+    /// Either omit the parameter or list at least one tail child.
+    EmptyTail,
+    /// A `tail` entry doesn't match any of the new children's
+    /// assigned IDs. The tail must be a subset of the children being
+    /// created — there is no fall-through to existing targets.
+    TailNotInChildren(String),
 }
 
 impl std::fmt::Display for SubdivideError {
@@ -209,6 +220,23 @@ impl std::fmt::Display for SubdivideError {
             SubdivideError::EmptyRetireReason => write!(
                 f,
                 "`retire_reason` was supplied but is empty after trimming — omit it or write a real reason"
+            ),
+            SubdivideError::TailRequiresRetireMode => write!(
+                f,
+                "`tail` only applies to `retire` mode. In `add` mode all new children are appended \
+                 alongside the parent; in `aggregate` mode dependents are untouched. Drop the \
+                 `tail` parameter or switch to `retire` mode."
+            ),
+            SubdivideError::EmptyTail => write!(
+                f,
+                "`tail` was supplied but contains no IDs. Either list at least one tail child or \
+                 omit the parameter (omission means all children become the new dependency)."
+            ),
+            SubdivideError::TailNotInChildren(id) => write!(
+                f,
+                "`tail` entry {id} doesn't match any new child's ID. Tail must be a subset of the \
+                 children being created in this call — supply explicit `id` values on the tail \
+                 children and reference those exact IDs."
             ),
         }
     }
@@ -250,6 +278,15 @@ fn next_subtarget_id(
 /// rewiring or retiring the parent. See [`SubdivideMode`] for the
 /// per-mode semantics.
 ///
+/// `tail` is only meaningful in [`SubdivideMode::Retire`]: when
+/// supplied it restricts dependent rewiring to a subset of the new
+/// children — every dependent that previously listed the parent
+/// gets the tail IDs spliced in, not the whole child set. This is
+/// the load-bearing knob for diamond decomposition (design → build
+/// ∥ tests → validate): the diamond's tail is the convergence node,
+/// and downstream dependents should only point at it, not at every
+/// piece of the diamond.
+///
 /// Does NOT save to disk; the caller is expected to run this under
 /// `with_locked_mutation` so the read-modify-write is atomic.
 pub fn subdivide(
@@ -258,10 +295,23 @@ pub fn subdivide(
     mode: SubdivideMode,
     children: Vec<ChildSpec>,
     retire_reason: Option<&str>,
+    tail: Option<&[String]>,
     historical: &std::collections::HashSet<String>,
 ) -> Result<SubdivideResult, SubdivideError> {
     if children.is_empty() {
         return Err(SubdivideError::NoChildren);
+    }
+
+    // Tail only makes sense when retire mode rewires dependents to
+    // children. Reject early in the other modes so a caller mis-typing
+    // the mode gets a clear error rather than silent drop of the tail.
+    if let Some(tail_ids) = tail {
+        if mode != SubdivideMode::Retire {
+            return Err(SubdivideError::TailRequiresRetireMode);
+        }
+        if tail_ids.is_empty() {
+            return Err(SubdivideError::EmptyTail);
+        }
     }
 
     // Validate each child spec eagerly so we never half-create on a
@@ -420,7 +470,27 @@ pub fn subdivide(
             }
         }
         SubdivideMode::Retire => {
-            // Rewire dependents: drop parent, splice in children.
+            // Validate tail (if supplied) before any mutation: every
+            // tail ID must match one of the assigned children's IDs.
+            // Cross-checking against `assigned_ids` rather than the
+            // raw child specs accounts for auto-assignment.
+            if let Some(tail_ids) = tail {
+                for tid in tail_ids {
+                    if !assigned_ids.contains(tid) {
+                        return Err(SubdivideError::TailNotInChildren(tid.clone()));
+                    }
+                }
+            }
+
+            // Replacement set: tail when supplied, otherwise all
+            // assigned children (the pre-`tail` default behaviour).
+            let owned_default = assigned_ids.clone();
+            let replacement: &[String] = match tail {
+                Some(t) => t,
+                None => &owned_default,
+            };
+
+            // Rewire dependents: drop parent, splice in replacement.
             let dependent_ids: Vec<String> = file
                 .targets
                 .iter()
@@ -432,7 +502,7 @@ pub fn subdivide(
                     let mut new_deps: Vec<String> = Vec::with_capacity(dep.depends_on.len());
                     for d in &dep.depends_on {
                         if d == parent_id {
-                            for new_id in &assigned_ids {
+                            for new_id in replacement {
                                 if !new_deps.contains(new_id) {
                                     new_deps.push(new_id.clone());
                                 }
