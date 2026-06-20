@@ -1141,6 +1141,122 @@ fn convergence_unreleased_fixes_detected_in_git_repo() {
 }
 
 #[test]
+fn convergence_release_freeze_suppresses_release_recommendation() {
+    use std::process::Command;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path();
+    write_project(path, "bullseye:\n\t@true\n", SIMPLE_TARGETS_YAML);
+
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+    };
+    git(&["init", "-q", "-b", "master"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "Initial"]);
+    git(&["tag", "v0.1.0"]);
+
+    std::fs::write(
+        path.join("AGENTS.md"),
+        r#"release_freeze: "migration in progress""#,
+    )
+    .unwrap();
+    std::fs::write(path.join("README.md"), "hello\n").unwrap();
+    git(&["add", "AGENTS.md", "README.md"]);
+    git(&["commit", "-q", "-m", "Fix missing README for v0.1.0"]);
+
+    let yaml_path = path.join("bullseye.yaml");
+    let file = store::load(&yaml_path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &yaml_path, path, None, false);
+
+    let next = out
+        .split("## Next action")
+        .nth(1)
+        .expect("next action section");
+    assert!(
+        next.contains("**Execute now**: Work on 🎯T1 Primary deliverable"),
+        "expected frontier work while release is frozen; got:\n{next}"
+    );
+    assert!(
+        !next.contains("Run `/release`"),
+        "release freeze should suppress /release recommendation; got:\n{next}"
+    );
+    assert!(
+        next.contains("release freeze") && next.contains("migration in progress"),
+        "expected release-freeze note; got:\n{next}"
+    );
+}
+
+#[test]
+fn convergence_release_freeze_is_found_at_git_root_from_subdir() {
+    use std::process::Command;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let subdir = root.join("hms2");
+    std::fs::create_dir(&subdir).unwrap();
+    write_project(&subdir, "bullseye:\n\t@true\n", SIMPLE_TARGETS_YAML);
+
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+    };
+    git(&["init", "-q", "-b", "master"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "Initial"]);
+    git(&["tag", "v0.1.0"]);
+
+    std::fs::write(root.join("AGENTS.md"), r#"release_freeze: "port phase""#).unwrap();
+    std::fs::write(root.join("README.md"), "hello\n").unwrap();
+    git(&["add", "AGENTS.md", "README.md"]);
+    git(&["commit", "-q", "-m", "Fix missing README for v0.1.0"]);
+
+    let yaml_path = subdir.join("bullseye.yaml");
+    let file = store::load(&yaml_path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &yaml_path, &subdir, None, false);
+
+    let next = out
+        .split("## Next action")
+        .nth(1)
+        .expect("next action section");
+    assert!(
+        next.contains("**Execute now**: Work on 🎯T1 Primary deliverable"),
+        "expected frontier work while root release is frozen; got:\n{next}"
+    );
+    assert!(
+        !next.contains("Run `/release`"),
+        "root release freeze should suppress /release recommendation; got:\n{next}"
+    );
+    assert!(
+        next.contains("port phase"),
+        "expected root release-freeze reason; got:\n{next}"
+    );
+}
+
+#[test]
 fn every_tool_emits_valid_json_schema() {
     // Regression test for the `bullseye_summary.momentum: BTreeMap`
     // incident: the rust-mcp-sdk JsonSchema derive silently fell

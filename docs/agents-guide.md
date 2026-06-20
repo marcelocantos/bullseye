@@ -426,6 +426,12 @@ output verbatim and executes the instruction if it starts with
 `**Execute now**`; anything else (`**Blocked**`, `**Parallel**`) is
 presented to the user for decision.
 
+If a project declares `release_freeze:` in `AGENTS.md` or `CLAUDE.md`,
+unreleased fixes are still listed, but bullseye suppresses the
+`/release` recommendation and continues to the frontier target. When
+`/cv` is run from a subdirectory, bullseye also checks the git
+top-level instructions file for the freeze directive.
+
 **Standing-invariants hook**: bullseye_convergence requires a
 `bullseye` rule in the project's `Makefile` or `mkfile`. The rule
 runs whatever checks the project considers "green" — tests, lints,
