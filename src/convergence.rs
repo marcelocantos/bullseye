@@ -103,6 +103,7 @@ pub fn convergence(
     // --- 2. Unreleased fixes (git-based) ---
     let unreleased = detect_unreleased_fixes(repo_root);
     render_unreleased(&mut out, &unreleased);
+    let release_freeze = detect_release_freeze(repo_root);
 
     // --- 3. Summary body (reuse graph::summary with frontier detail on) ---
     //
@@ -137,6 +138,7 @@ pub fn convergence(
         &mut out,
         &invariants_result,
         &unreleased,
+        release_freeze.as_deref(),
         file,
         file_path,
         momentum,
@@ -390,6 +392,59 @@ pub fn detect_unreleased_fixes(repo_root: &Path) -> Vec<UnreleasedFix> {
         .collect()
 }
 
+/// Detect a project-level release freeze directive in agent instruction files.
+///
+/// `repo_root` may be a subdirectory inside the git repository (for example,
+/// HMS runs /cv from `hms2/` while the canonical `AGENTS.md` lives one level
+/// higher), so inspect both `repo_root` and the git top-level when available.
+/// Missing files and unreadable git metadata degrade to "no freeze" so
+/// convergence remains useful in partially configured repos.
+pub fn detect_release_freeze(repo_root: &Path) -> Option<String> {
+    let mut roots = vec![repo_root.to_path_buf()];
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(repo_root)
+        .output()
+        && output.status.success()
+    {
+        let git_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !git_root.is_empty() {
+            let git_root = Path::new(&git_root).to_path_buf();
+            if !roots.iter().any(|r| r == &git_root) {
+                roots.push(git_root);
+            }
+        }
+    }
+
+    for root in roots {
+        for name in ["AGENTS.md", "CLAUDE.md"] {
+            let path = root.join(name);
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Some(reason) = parse_release_freeze(&text) {
+                return Some(format!("{name}: {reason}"));
+            }
+        }
+    }
+    None
+}
+
+fn parse_release_freeze(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("release_freeze:") else {
+            continue;
+        };
+        let reason = rest.trim().trim_matches('"').trim_matches('\'').trim();
+        if reason.is_empty() {
+            return Some("release freeze is declared".to_string());
+        }
+        return Some(reason.to_string());
+    }
+    None
+}
+
 fn parse_oneline(line: &str) -> Option<UnreleasedFix> {
     let (hash, subject) = line.split_once(' ')?;
     Some(UnreleasedFix {
@@ -434,6 +489,7 @@ fn render_next_action(
     out: &mut String,
     invariants: &InvariantsResult,
     unreleased: &[UnreleasedFix],
+    release_freeze: Option<&str>,
     file: &TargetsFile,
     file_path: &Path,
     momentum: Option<&BTreeMap<String, f64>>,
@@ -465,8 +521,12 @@ fn render_next_action(
     // understands the recommendation is unguarded.
     let hook_missing_note = matches!(invariants, InvariantsResult::HookMissing);
 
-    // Priority 2 — unreleased fixes take precedence over new target work.
-    if !unreleased.is_empty() {
+    // Priority 2 — unreleased fixes take precedence over new target work,
+    // unless the project explicitly declares a release freeze. In that case,
+    // surface the held fixes but keep converging on target work instead of
+    // recommending an impossible `/release`.
+    let release_frozen = !unreleased.is_empty() && release_freeze.is_some();
+    if !unreleased.is_empty() && !release_frozen {
         let n = unreleased.len();
         let s = if n == 1 { "" } else { "s" };
         out.push_str(&format!(
@@ -544,6 +604,13 @@ fn render_next_action(
              has no `bullseye` rule in its Makefile/mkfile. See the ## Invariants section \
              for setup instructions. Proceed with caution until the hook is in place.\n",
         );
+    }
+    if let Some(reason) = release_freeze.filter(|_| !unreleased.is_empty()) {
+        out.push_str(&format!(
+            "\n⚠ Note: {} unreleased fix commit(s) are present, but `/release` is \
+             suppressed because the project declares a release freeze ({reason}).\n",
+            unreleased.len(),
+        ));
     }
 
     // Suppress unused-parameter warning for file_path in release builds.

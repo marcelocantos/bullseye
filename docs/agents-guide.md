@@ -355,6 +355,33 @@ Use this for cross-project prioritisation and global convergence assessment.
 | `cwd` | string | `~/work/` | Workspace root to scan |
 | `max_depth` | number | `5` | Maximum directory depth to scan |
 
+### bullseye_resolve
+
+Resolve a partial repo reference to an absolute path. Use this
+whenever you have a leaf repo name (e.g. `spyder`) or an `org/repo`
+fragment (e.g. `marcelocantos/spyder`) and need a `cwd` for a
+subsequent tool call. Cheaper than `bullseye_portfolio` + manual
+scanning when the agent already knows which repo it wants.
+
+Matching is suffix-against-path-components, against the same
+workspace scan `bullseye_portfolio` uses (default `~/work/`).
+Absolute paths pass through after a sanity check that
+`bullseye.yaml` exists.
+
+Errors when the reference is **ambiguous** (matches two or more
+repos) include every candidate path — re-issue with a more
+qualified reference (`org/repo` or the full host+org+repo path).
+Errors when the reference is **not found** name the workspace root
+so you can confirm the scan looked where you expected.
+
+Scan results are memoised per process, so repeated calls in a
+session don't re-walk the workspace.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `reference` | string | required | Leaf name, `org/repo`, full `host/org/repo`, or an absolute path |
+| `workspace_root` | string | `~/work/` | Workspace root to scan |
+
 ### bullseye_summary
 
 Return a consolidated status overview in one call: active targets
@@ -425,6 +452,12 @@ the focus-ordered frontier. The calling skill (`/cv`) relays the
 output verbatim and executes the instruction if it starts with
 `**Execute now**`; anything else (`**Blocked**`, `**Parallel**`) is
 presented to the user for decision.
+
+If a project declares `release_freeze:` in `AGENTS.md` or `CLAUDE.md`,
+unreleased fixes are still listed, but bullseye suppresses the
+`/release` recommendation and continues to the frontier target. When
+`/cv` is run from a subdirectory, bullseye also checks the git
+top-level instructions file for the freeze directive.
 
 **Standing-invariants hook**: bullseye_convergence requires a
 `bullseye` rule in the project's `Makefile` or `mkfile`. The rule

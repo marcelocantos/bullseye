@@ -558,6 +558,38 @@ pub struct SubdivideTool {
     pub tail: Option<Vec<String>>,
 }
 
+/// Resolve a partial repo reference to an absolute repo root (🎯T29).
+#[mcp_tool(
+    name = "bullseye_resolve",
+    description = "Resolve a partial repo reference to an absolute path so subsequent tool calls \
+        can pass it as `cwd` without the agent eyeballing portfolio output. \
+        \
+        Accepts: a leaf name (e.g. `spyder`), an `org/repo` fragment (e.g. \
+        `marcelocantos/spyder`), or a full host+org+repo path. Absolute paths pass through \
+        after a sanity check that `bullseye.yaml` exists there. \
+        \
+        Matching is suffix-on-path-components against the same workspace scan \
+        `bullseye_portfolio` uses (default `~/work/`, override with `workspace_root`). \
+        Ambiguous references — a reference matching two or more repos — return a \
+        structured error listing every candidate; bullseye never silently picks one. \
+        Zero matches return a not-found error suggesting `bullseye_portfolio` for the \
+        directory of available repos. \
+        \
+        Scan results are memoised per-process, so repeated calls in a session don't \
+        re-walk the workspace."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ResolveTool {
+    /// Repo reference to resolve. Leaf name, partial `org/repo`,
+    /// `host/org/repo`, or absolute path.
+    pub reference: String,
+
+    /// Workspace root to scan (default: `~/work/`). Same default as
+    /// `bullseye_portfolio`.
+    #[serde(default)]
+    pub workspace_root: Option<String>,
+}
+
 tool_box!(
     TargetTools,
     [
@@ -573,6 +605,7 @@ tool_box!(
         GraphTool,
         InitTool,
         ImportTool,
+        ResolveTool,
         StartupContextTool,
         PortfolioTool,
         SummaryTool,

@@ -62,6 +62,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::GraphTool(t) => handle_graph(t),
             TargetTools::InitTool(t) => handle_init(t),
             TargetTools::ImportTool(t) => handle_import(t),
+            TargetTools::ResolveTool(t) => handle_resolve(t),
             TargetTools::StartupContextTool(t) => handle_startup_context(t),
             TargetTools::PortfolioTool(t) => handle_portfolio(t),
             TargetTools::SummaryTool(t) => handle_summary(t),
@@ -1054,6 +1055,27 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
         Err(e @ (store::LoadError::Io(_) | store::LoadError::Parse(_))) => text_result(
             graph::startup_context_broken_file(&path.display().to_string(), &e.to_string()),
         ),
+    }
+}
+
+fn handle_resolve(t: crate::tools::ResolveTool) -> ToolResult {
+    use crate::resolve;
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/marcelo".to_string());
+    let default_root = std::path::PathBuf::from(format!("{home}/work"));
+    let root = t
+        .workspace_root
+        .as_deref()
+        .map(|s| config::expand_tilde(Path::new(s)))
+        .unwrap_or(default_root);
+    if !root.is_dir() {
+        return err(format!(
+            "workspace_root {} is not a directory",
+            root.display()
+        ));
+    }
+    match resolve::resolve(&root, &t.reference) {
+        Ok(path) => text_result(path.display().to_string()),
+        Err(e) => err(e.to_string()),
     }
 }
 
