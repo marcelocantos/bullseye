@@ -796,16 +796,16 @@ targets:
     discovered: 2026-05-20
     achieved: 2026-05-20
   T27.2:
-    name: 'subdivide retire mode supports a `tail` parameter so dependents rewire only to the convergence node'
+    name: subdivide retire mode supports a `tail` parameter so dependents rewire only to the convergence node
     status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
     - '`SubdivideTool` gains an optional `tail: Option<Vec<String>>` field; `ops::subdivide` takes the corresponding `Option<&[String]>` parameter'
-    - 'In retire mode with `tail` supplied, each dependent that previously listed the parent gets the tail IDs spliced in (not every new child)'
-    - 'Tail entries must be a subset of the children being created in the same call; mismatch produces a structured `TailNotInChildren` error'
-    - 'Tail outside retire mode produces `TailRequiresRetireMode`; empty tail list produces `EmptyTail`'
-    - 'Envelope-leak guard (🎯T20) runs against tail entries before persistence'
+    - In retire mode with `tail` supplied, each dependent that previously listed the parent gets the tail IDs spliced in (not every new child)
+    - Tail entries must be a subset of the children being created in the same call; mismatch produces a structured `TailNotInChildren` error
+    - Tail outside retire mode produces `TailRequiresRetireMode`; empty tail list produces `EmptyTail`
+    - Envelope-leak guard (🎯T20) runs against tail entries before persistence
     context: 'Build leg of the 🎯T27 diamond. The pre-`tail` retire mode rewires dependents to all new children, which is functionally equivalent when the children form a connected subgraph (the convergence tail transitively depends on the rest) but produces noisy redundant edges. `tail` is the load-bearing knob for diamond decomposition: the diamond''s tail is the convergence node, and downstream dependents should only point at it. Depends on T27.1 (the three-mode subdivide skeleton) by name only — the diff extends ops::subdivide''s signature; the prior behaviour falls out of `tail.is_none()`.'
     depends_on:
     - T27.1
@@ -821,12 +821,12 @@ targets:
     value: 0.0
     cost: 0.0
     acceptance:
-    - 'Diamond decomposition via subdivide retire with `tail` covered by `subdivide_retire_with_tail_rewires_dependents_to_tail_only`'
+    - Diamond decomposition via subdivide retire with `tail` covered by `subdivide_retire_with_tail_rewires_dependents_to_tail_only`
     - 'Tail-error coverage: outside retire mode rejected, empty tail rejected, tail ID not in children rejected'
-    - 'Fan-out insertion above an existing node covered by `reshape_fanout_insertion_above_existing_node_via_blocks` (uses `bullseye_put` + `blocks`)'
-    - 'Chain extension covered by `reshape_chain_extension_via_depends_on_and_blocks` (uses `depends_on` + `blocks`)'
-    - 'Choke-point hoisting (multiple parents → one new prerequisite → many existing children) covered by `reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams`'
-    context: 'Tests leg of the 🎯T27 diamond. Each reshape pattern from docs/shapes.md gets a regression test wired against the actual tool surface, so future refactors that quietly break a pattern fail in CI rather than at agent-use time. Parallel sibling of T27.2 — neither depends on the other; both feed T27.4''s documentation cross-reference.'
+    - Fan-out insertion above an existing node covered by `reshape_fanout_insertion_above_existing_node_via_blocks` (uses `bullseye_put` + `blocks`)
+    - Chain extension covered by `reshape_chain_extension_via_depends_on_and_blocks` (uses `depends_on` + `blocks`)
+    - Choke-point hoisting (multiple parents → one new prerequisite → many existing children) covered by `reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams`
+    context: Tests leg of the 🎯T27 diamond. Each reshape pattern from docs/shapes.md gets a regression test wired against the actual tool surface, so future refactors that quietly break a pattern fail in CI rather than at agent-use time. Parallel sibling of T27.2 — neither depends on the other; both feed T27.4's documentation cross-reference.
     depends_on:
     - T27.1
     tags:
@@ -840,10 +840,10 @@ targets:
     value: 0.0
     cost: 0.0
     acceptance:
-    - 'PutTool description points at docs/shapes.md and names the patterns the agent should check before filing a single-node target'
-    - 'SubdivideTool description points at docs/shapes.md, calls out diamond decomposition as the load-bearing use of `tail`, and documents the `tail` parameter inline on the field'
-    - 'The cross-reference is at the tool-description layer (visible without reading source) so agents see it at filing time'
-    context: 'Docs leg of the 🎯T27 diamond — the convergence tail. With the named vocabulary (T26''s docs/shapes.md) and the `tail`-aware subdivide (T27.2) both shipped, the remaining gap is making sure agents discover the vocabulary at the point of decision. The tool-description layer is the cheapest place to put it because it shows up in every JSON Schema dump and every IDE-style tool browser without an extra docs hop.'
+    - PutTool description points at docs/shapes.md and names the patterns the agent should check before filing a single-node target
+    - SubdivideTool description points at docs/shapes.md, calls out diamond decomposition as the load-bearing use of `tail`, and documents the `tail` parameter inline on the field
+    - The cross-reference is at the tool-description layer (visible without reading source) so agents see it at filing time
+    context: Docs leg of the 🎯T27 diamond — the convergence tail. With the named vocabulary (T26's docs/shapes.md) and the `tail`-aware subdivide (T27.2) both shipped, the remaining gap is making sure agents discover the vocabulary at the point of decision. The tool-description layer is the cheapest place to put it because it shows up in every JSON Schema dump and every IDE-style tool browser without an extra docs hop.
     depends_on:
     - T27.2
     - T27.3
@@ -874,6 +874,34 @@ targets:
     origin: manual
     discovered: 2026-06-08
     achieved: 2026-06-08
+  T29:
+    name: Bullseye resolves repo references from leaf names or partial paths, identifying ambiguities
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - An MCP affordance accepts non-absolute repo references — leaf name (e.g. `spyder`), partial path (e.g. `marcelocantos/spyder`), or full host+org+repo path — and resolves them to the absolute repo root before discovery runs. Whether this is a standalone `bullseye_resolve(ref) -> path` tool or an extension of every tool's `cwd` parameter is an implementation choice; both surfaces are acceptable as long as the agent never has to scan portfolio output to find a repo by name.
+    - Resolution scans the same workspace root used by `bullseye_portfolio` (default `~/work/`, configurable). Matches are decided by suffix of the absolute path's components, so `spyder` matches `~/work/github.com/marcelocantos/spyder` and `marcelocantos/spyder` matches the same path more specifically.
+    - Ambiguous references — a leaf name matching two or more repos — return a structured error listing every candidate absolute path with a hint that the caller should re-issue with more path qualifiers (`org/repo` or full path). Bullseye never silently picks one.
+    - Zero-match references return a structured not-found error suggesting `bullseye_portfolio` for the directory of available repos. The error names the workspace root that was scanned.
+    - Absolute paths are passed through unchanged. The resolver is purely an enrichment over what already works.
+    - Resolution scan is memoised per-process (same shape as the 🎯T28 git-history cache) so repeated calls in a session don't re-walk `~/work/`.
+    - '`docs/agents-guide.md` documents the partial-reference forms accepted, the ambiguity-error contract, and the workspace-root scan. The current path-only contract in the guide is updated, not appended to.'
+    context: |-
+      Discovered 2026-06-20 during a /release session debrief. The current `cwd` contract is absolute-path-or-bust: every tool requires a path the caller has already resolved. The portfolio tool returns enough information to do leaf-name lookup, but the matching happens in the agent's head — read 30+ repos, eyeball the one that matches, copy its path back into the next tool call. That's the manual step we want to eliminate.
+
+      The portfolio-scan-and-filter dance is the workaround, not the contract. The contract should be: pass a reference in whatever specificity you have, and bullseye either resolves it to a single path, surfaces an ambiguity for you to disambiguate, or tells you nothing matched. That's the affordance agents (and humans) already expect from tools like `gh repo view NAME` and `kubectl --context=NAME`.
+
+      Suffix-match-on-path-components keeps the implementation simple and avoids inventing a registry: the workspace is already the source of truth. Ambiguity surfacing matters more than smart ranking — silently picking a winner is exactly the failure mode that makes name resolution feel magical-but-wrong in other tools.
+
+      The acceptance leaves the surface (standalone `bullseye_resolve` vs. extending every `cwd`) open because both are coherent. Standalone is smaller and additive; integrating into `cwd` removes the affordance gap entirely but touches every tool. Decide during implementation.
+    tags:
+    - ergonomics
+    - api
+    - discovery
+    origin: discovered during /release v0.31.0 debrief 2026-06-20 — agent had to scan portfolio output by hand to locate `spyder` repo by leaf name
+    discovered: 2026-06-20
+    achieved: 2026-06-20
   T3:
     name: Protocol app priority sync
     status: set_aside
