@@ -10,7 +10,7 @@
 //! ## Model
 //!
 //! - **Identity.** A mirrored issue becomes a target whose ID *is* the
-//!   issue number in the `GHI-<n>` namespace (reserved `GHI-<repo>-<n>`
+//!   issue number in the `GH<n>` namespace (reserved `GH<repo>-<n>`
 //!   for multi-repo). The ID is content-derived, so there is no
 //!   local↔remote number mapping and no allocator slot; `origin =
 //!   github:<owner>/<repo>#<n>` records the authoritative coordinate.
@@ -47,9 +47,9 @@ fn stub_acceptance(url: &str) -> Vec<String> {
     vec![format!("Mirrored from {url} — define acceptance criteria.")]
 }
 
-/// The `GHI-<n>` target ID for issue `number`.
+/// The `GH<n>` target ID for issue `number`.
 pub fn target_id(number: u64) -> String {
-    format!("GHI-{number}")
+    format!("GH{number}")
 }
 
 /// The authoritative `origin` coordinate for an issue.
@@ -970,7 +970,7 @@ pub fn help_text() -> String {
      Mirror GitHub issues into bullseye targets and reflect target\n\
      lifecycle back to issues, using the `gh` CLI (which carries your\n\
      GitHub identity — no token is stored). Mirrored targets use\n\
-     GHI-<issue-number> IDs.\n\n\
+     GH<issue-number> IDs.\n\n\
      FLAGS:\n    \
      --repo owner/name   Repo to sync (default: the current checkout)\n    \
      --label L           Only mirror issues with label L\n    \
@@ -1039,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn first_pull_creates_ghi_targets() {
+    fn first_pull_creates_gh_targets() {
         let issues = vec![issue(7, "Fix the thing", IssueState::Open)];
         let p = plan(
             "o/r",
@@ -1053,7 +1053,7 @@ mod tests {
         assert_eq!(p.target_ops.len(), 1);
         match &p.target_ops[0] {
             TargetOp::Create { id, target } => {
-                assert_eq!(id, "GHI-7");
+                assert_eq!(id, "GH7");
                 assert_eq!(target.name, "Fix the thing");
                 assert_eq!(target.origin, "github:o/r#7");
                 assert_eq!(target.tags, vec!["bug".to_string()]);
@@ -1076,10 +1076,7 @@ mod tests {
     fn re_pull_is_idempotent_no_duplicate() {
         let issues = vec![issue(7, "Fix the thing", IssueState::Open)];
         let mut targets = BTreeMap::new();
-        targets.insert(
-            "GHI-7".to_string(),
-            mirrored(&issues[0], Status::Identified),
-        );
+        targets.insert("GH7".to_string(), mirrored(&issues[0], Status::Identified));
         let prior = prior_with(7, Status::Identified, IssueState::Open);
 
         let p = plan(
@@ -1103,14 +1100,14 @@ mod tests {
         // Existing target reflects the OLD title.
         let old = issue(7, "Old title", IssueState::Open);
         let mut targets = BTreeMap::new();
-        targets.insert("GHI-7".to_string(), mirrored(&old, Status::Converging));
+        targets.insert("GH7".to_string(), mirrored(&old, Status::Converging));
         let prior = prior_with(7, Status::Converging, IssueState::Open);
 
         let p = plan("o/r", &[iss], &targets, &prior, date(), PlanOpts::default());
         assert_eq!(p.updated, 1);
         match &p.target_ops[0] {
             TargetOp::UpdateContent { id, name, tags, .. } => {
-                assert_eq!(id, "GHI-7");
+                assert_eq!(id, "GH7");
                 assert_eq!(name, "Renamed title");
                 assert_eq!(tags, &vec!["bug".to_string(), "p1".to_string()]);
             }
@@ -1128,7 +1125,7 @@ mod tests {
     fn local_achieved_pushes_close_and_records_closed_base() {
         let issues = vec![issue(7, "x", IssueState::Open)];
         let mut targets = BTreeMap::new();
-        targets.insert("GHI-7".to_string(), mirrored(&issues[0], Status::Achieved));
+        targets.insert("GH7".to_string(), mirrored(&issues[0], Status::Achieved));
         let prior = prior_with(7, Status::Identified, IssueState::Open);
 
         let p = plan(
@@ -1161,7 +1158,7 @@ mod tests {
         let mut t = mirrored(&issues[0], Status::SetAside);
         t.set_aside_reason = Some("wontfix".into());
         let mut targets = BTreeMap::new();
-        targets.insert("GHI-7".to_string(), t);
+        targets.insert("GH7".to_string(), t);
         let prior = prior_with(7, Status::Identified, IssueState::Open);
 
         let p = plan(
@@ -1187,7 +1184,7 @@ mod tests {
         // Base: closed/achieved. Issue still closed (absent). Local
         // reverted to Converging ⇒ local-only change ⇒ push reopen.
         let mut targets = BTreeMap::new();
-        targets.insert("GHI-7".to_string(), {
+        targets.insert("GH7".to_string(), {
             let mut t = mirrored(&issue(7, "x", IssueState::Open), Status::Converging);
             t.status = Status::Converging;
             t
@@ -1224,7 +1221,7 @@ mod tests {
         // local target unchanged since base ⇒ adopt the close.
         let mut targets = BTreeMap::new();
         targets.insert(
-            "GHI-7".to_string(),
+            "GH7".to_string(),
             mirrored(&issue(7, "x", IssueState::Open), Status::Identified),
         );
         let prior = prior_with(7, Status::Identified, IssueState::Open);
@@ -1234,7 +1231,7 @@ mod tests {
         assert_eq!(
             p.target_ops[0],
             TargetOp::SetStatus {
-                id: "GHI-7".to_string(),
+                id: "GH7".to_string(),
                 status: Status::Achieved,
             }
         );
@@ -1246,7 +1243,7 @@ mod tests {
     fn remote_close_of_in_progress_target_is_noted() {
         let mut targets = BTreeMap::new();
         targets.insert(
-            "GHI-7".to_string(),
+            "GH7".to_string(),
             mirrored(&issue(7, "x", IssueState::Open), Status::Converging),
         );
         let prior = prior_with(7, Status::Converging, IssueState::Open);
@@ -1256,7 +1253,7 @@ mod tests {
         assert_eq!(
             p.target_ops[0],
             TargetOp::SetStatus {
-                id: "GHI-7".to_string(),
+                id: "GH7".to_string(),
                 status: Status::Achieved,
             }
         );
@@ -1268,7 +1265,7 @@ mod tests {
     fn filtered_absence_does_not_infer_close() {
         let mut targets = BTreeMap::new();
         targets.insert(
-            "GHI-7".to_string(),
+            "GH7".to_string(),
             mirrored(&issue(7, "x", IssueState::Open), Status::Identified),
         );
         let prior = prior_with(7, Status::Identified, IssueState::Open);
@@ -1317,7 +1314,7 @@ mod tests {
     fn pull_only_suppresses_push() {
         let issues = vec![issue(7, "x", IssueState::Open)];
         let mut targets = BTreeMap::new();
-        targets.insert("GHI-7".to_string(), mirrored(&issues[0], Status::Achieved));
+        targets.insert("GH7".to_string(), mirrored(&issues[0], Status::Achieved));
         let prior = prior_with(7, Status::Identified, IssueState::Open);
 
         let opts = PlanOpts {
@@ -1391,8 +1388,8 @@ mod tests {
         assert_eq!(report.created, 1);
 
         let loaded = store::load(&cwd.join("bullseye.yaml")).unwrap();
-        assert!(loaded.targets.contains_key("GHI-42"));
-        assert_eq!(loaded.targets["GHI-42"].name, "Hello");
+        assert!(loaded.targets.contains_key("GH42"));
+        assert_eq!(loaded.targets["GH42"].name, "Hello");
 
         let state = SyncState::load(&SyncState::path_for(&cwd)).unwrap();
         assert!(state.issues.contains_key(&42));

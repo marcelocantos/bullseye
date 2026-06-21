@@ -121,8 +121,8 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
 }
 
 /// Whether a target ID conforms to a recognised namespace. `T<N>` /
-/// `T<N>.<M>` are hand-authored / allocated targets (🎯T28); `GHI-<N>`
-/// (and the reserved multi-repo `GHI-<slug>-<N>`) are GitHub-issue
+/// `T<N>.<M>` are hand-authored / allocated targets (🎯T28); `GH<N>`
+/// (and the reserved multi-repo `GH<slug>-<N>`) are GitHub-issue
 /// mirrors whose number IS the upstream issue number, so no
 /// local↔remote mapping is needed (🎯T34). Non-conforming IDs still
 /// function everywhere — this only governs the advisory display warning.
@@ -130,7 +130,7 @@ fn id_is_conforming(id: &str) -> bool {
     if let Some(rest) = id.strip_prefix('T') {
         return !rest.is_empty() && rest.split('.').all(|p| p.parse::<u32>().is_ok());
     }
-    if let Some(rest) = id.strip_prefix("GHI-") {
+    if let Some(rest) = id.strip_prefix("GH") {
         // The trailing '-'-delimited component is the issue number; an
         // optional leading repo slug (reserved for multi-repo
         // mirroring) may precede it.
@@ -159,7 +159,7 @@ pub fn validate_warnings(file: &TargetsFile) -> Vec<String> {
         // or set-aside it via the normal tools.
         if !id_is_conforming(id) {
             warnings.push(format!(
-                "{id}: invalid target ID format (expected T<N>, T<N>.<M>, or GHI-<N>) — \
+                "{id}: invalid target ID format (expected T<N>, T<N>.<M>, or GH<N>) — \
                  advisory; the target is fully operable, retire or rename it via direct \
                  YAML edit if you want the warning gone"
             ));

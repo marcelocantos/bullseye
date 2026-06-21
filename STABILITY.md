@@ -9,8 +9,17 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T36 CLI/MCP surface-parity change. Changes
-affecting the interaction surface, newest first:
+Snapshot as of the 🎯T37 GH-notation rename. Changes affecting the
+interaction surface, newest first:
+
+- **GitHub-issue mirror IDs renamed `GHI-<n>` → `GH<n>`** (🎯T37). The
+  v0.33.0 mirror notation was needlessly verbose; the target ID is now
+  `GH<n>` (e.g. `GH42`) — still just the issue number, in a namespace
+  disjoint from the `T<n>` space. Only `github sync` changes (it now
+  emits `GH<n>`); the advisory ID-format validator recognises the `GH`
+  namespace and continues to tolerate any legacy `GHI-<n>` IDs already
+  created, so no migration is required. Catalogue entries below are
+  written in the new notation.
 
 - **`github sync` and `sync-priorities` exposed as MCP tools — CLI/MCP
   parity** (🎯T36). The two CLI subcommands are now also MCP tools,
@@ -27,8 +36,8 @@ affecting the interaction surface, newest first:
   issues into bullseye targets and reflects target lifecycle back to
   issues, shelling out to the `gh` CLI (so authentication is the
   caller's existing `gh` session — no token is stored). Mirrored issues
-  become targets in the new **`GHI-<n>` ID namespace** (the target ID is
-  the issue number; reserved `GHI-<repo>-<n>` for future multi-repo
+  become targets in the new **`GH<n>` ID namespace** (the target ID is
+  the issue number; reserved `GH<repo>-<n>` for future multi-repo
   use), disjoint from the `T<n>` space so no local↔remote number map is
   needed and the git-history allocator (🎯T28) is untouched. Field
   ownership prevents sync loops: issue title/body/labels flow
@@ -43,7 +52,7 @@ affecting the interaction surface, newest first:
   (default: the current checkout), `--label`, `--assignee`,
   `--pull-only`, `--push-only`, `--dry-run`, `--cwd`. The reconcile is a
   pure, fully unit-tested `plan()` function behind a `GhClient` trait.
-  The advisory target-ID-format warning now recognises the `GHI-<n>`
+  The advisory target-ID-format warning now recognises the `GH<n>`
   namespace as conforming (non-`T` IDs were already fully operable — the
   change only suppresses a cosmetic warning). New public Rust API: the
   `github` module (`run`, `plan`, `run_with`, `GhClient`, `SyncState`,
@@ -533,7 +542,7 @@ tag after 🎯T25.
 | `bullseye_resolve(reference, workspace_root?)` | Fluid | New in v0.32.0. Maps a partial repo reference — leaf name, `org/repo` fragment, or `host/org/repo` path — to an absolute repo root by suffix-matching against the same workspace scan `bullseye_portfolio` uses. Absolute paths pass through. Ambiguous references return a structured error listing every candidate; not-found references name the workspace root. Scan results are memoised per process. See 🎯T29. |
 | `bullseye_summary(cwd, momentum?, frontier_details?)` | Needs review | `momentum` added in v0.9.0, reshaped in v0.10.0 to a list of `{id, multiplier}` entries. `frontier_details: true` expands each frontier entry with full acceptance, context, and edges. 🎯T25: frontier annotation changes from `dist=N, fanout=M` to `fanout=M`; the checkpoint-distance term drops with the uniform-node model. Composition happens at the skill layer; bullseye never calls mnemo. |
 | `bullseye_convergence(cwd, momentum?, skip_invariants?)` | Needs review | New in v0.11.0. Single-call convergence evaluation: invariants via `make bullseye` / `mk bullseye`, git-based unreleased-fix detection, summary with inline frontier details, and a deterministic next-action recommendation. Absorbs most of the old `/cv` worker logic into a stateless tool call. Missing hook degrades gracefully with embedded setup instructions; frontier recommendation still fires. If `AGENTS.md` or `CLAUDE.md` declares `release_freeze:`, unreleased fixes are reported but the `/release` recommendation is suppressed so target work can continue. |
-| `bullseye_github_sync(cwd, repo?, label?, assignee?, pull_only?, push_only?, dry_run?)` | Fluid | New in v0.34.0. MCP twin of `bullseye github sync` — mirrors GitHub issues ⇄ targets via the gh CLI (🎯T36). Open issues become `GHI-<n>` targets; target lifecycle closes/reopens the issue. |
+| `bullseye_github_sync(cwd, repo?, label?, assignee?, pull_only?, push_only?, dry_run?)` | Fluid | New in v0.34.0. MCP twin of `bullseye github sync` — mirrors GitHub issues ⇄ targets via the gh CLI (🎯T36). Open issues become `GH<n>` targets; target lifecycle closes/reopens the issue. |
 | `bullseye_sync_priorities(db?, root?, horizon?, max_depth?)` | Fluid | New in v0.34.0. MCP twin of `bullseye sync-priorities` — scans the workspace and upserts the portfolio frontier into the `targets_priorities` SQLite table (🎯T36). |
 
 **Removed in 🎯T25** (breaking):
@@ -609,7 +618,7 @@ Planned additions:
 | `--help-agent` | Stable | |
 | (no args) | Stable | Starts MCP stdio server |
 | `sync-priorities [--db PATH] [--root PATH] [--horizon STR] [--max-depth N]` | Fluid | New in v0.24.0. Cron-targetable subcommand that scans the workspace and upserts the portfolio frontier into a SQLite `targets_priorities` table. The flag set may evolve once the Protocol-app sync chain is live and real usage clarifies what's needed (e.g. multi-horizon banding, per-repo include/exclude). See 🎯T3.1. |
-| `github sync [--repo owner/name] [--label L] [--assignee A] [--pull-only] [--push-only] [--dry-run] [--cwd DIR]` | Fluid | New in v0.33.0. Mirrors GitHub issues ⇄ bullseye targets via the `gh` CLI: open issues become `GHI-<n>` targets, and target lifecycle (achieved/set-aside/revert) closes/reopens the issue. Two-way reconcile against a `.bullseye/github-sync.json` sidecar. The flag set may evolve as multi-repo mirroring lands. See 🎯T34. |
+| `github sync [--repo owner/name] [--label L] [--assignee A] [--pull-only] [--push-only] [--dry-run] [--cwd DIR]` | Fluid | New in v0.33.0. Mirrors GitHub issues ⇄ bullseye targets via the `gh` CLI: open issues become `GH<n>` targets, and target lifecycle (achieved/set-aside/revert) closes/reopens the issue. Two-way reconcile against a `.bullseye/github-sync.json` sidecar. The flag set may evolve as multi-repo mirroring lands. See 🎯T34. |
 
 ### Output formats
 
