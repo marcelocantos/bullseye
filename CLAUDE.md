@@ -39,6 +39,16 @@ github.rs      — `bullseye github sync` CLI: gh-based GitHub issue mirror
                  reflects target lifecycle back to issues via the gh CLI.
 ```
 
+**Surface parity**: Every capability must be reachable from **both**
+surfaces — the MCP tools (`tools.rs` + `handler.rs`) and the CLI
+subcommands (dispatched in `main.rs`). The MCP surface is the more
+important of the two: the agent mostly drives the work through it. When
+adding a capability, expose it on both in the same change, sharing one
+entry point rather than duplicating logic. Paired examples:
+`bullseye_github_sync` / `bullseye github sync` (→ `github::run_with`)
+and `bullseye_sync_priorities` / `bullseye sync-priorities`
+(→ `priorities::run_sync`).
+
 **Data flow**: Every MCP tool call receives a `cwd` parameter → `store::discover()` finds `bullseye.yaml` → `store::load()` deserializes → operation applied → `store::save()` writes back.
 
 **Key domain concepts**:
