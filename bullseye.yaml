@@ -1091,6 +1091,20 @@ targets:
     origin: manual
     discovered: 2026-06-21
     achieved: 2026-06-21
+  T37:
+    name: GitHub-issue mirror target IDs use the GH<n> notation, not GHI-<n>
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 1.0
+    acceptance:
+    - github::target_id produces GH<n> (e.g. GH42), not GHI-<n>.
+    - The advisory ID-format validator accepts the GH<n> namespace (and still tolerates any already-created GHI-<n> IDs, which strip-prefix to a valid trailing number).
+    - All code, tests, and docs (README, STABILITY, CLAUDE, MCP tool descriptions) use the GH<n> notation.
+    context: 'Cosmetic correction of the just-shipped (v0.33.0/v0.34.0) mirror ID notation: GHI-<n> was needlessly verbose; GH<n> suffices (the user''s call). Done promptly, before real syncs populate GHI-<n> IDs anywhere. The validator strips the GH prefix and checks the trailing -delimited number, so legacy GHI-<n> still validates — no migration needed for the expected near-zero existing data. The single functional change is github::target_id; everything else is the prefix swap GHI- → GH.'
+    origin: manual
+    discovered: 2026-06-21
+    achieved: 2026-06-21
   T4:
     name: Dynamic session startup context
     status: achieved

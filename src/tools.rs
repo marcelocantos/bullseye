@@ -606,7 +606,7 @@ fn default_max_depth() -> u32 {
 /// from both surfaces.
 #[mcp_tool(
     name = "bullseye_github_sync",
-    description = "Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the gh CLI (authentication is the caller's existing gh session — no token is stored). Open issues become GHI-<n> targets (the issue number is the ID); achieving/setting-aside/reverting a mirrored target closes/reopens its issue. The MCP twin of `bullseye github sync`."
+    description = "Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the gh CLI (authentication is the caller's existing gh session — no token is stored). Open issues become GH<n> targets (the issue number is the ID); achieving/setting-aside/reverting a mirrored target closes/reopens its issue. The MCP twin of `bullseye github sync`."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GithubSyncTool {

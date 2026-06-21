@@ -35,7 +35,7 @@ handler.rs     — MCP tool request dispatch (routes tool name → implementatio
 tools.rs       — MCP tool definitions via #[mcp_tool] macro
 portfolio.rs   — Cross-repo discovery, scanning, and portfolio summary
 github.rs      — `bullseye github sync` CLI: gh-based GitHub issue mirror
-                 (🎯T34). Two-way: mirrors issues → GHI-<n> targets, and
+                 (🎯T34). Two-way: mirrors issues → GH<n> targets, and
                  reflects target lifecycle back to issues via the gh CLI.
 ```
 
