@@ -44,6 +44,16 @@ async fn main() -> SdkResult<()> {
                     process::exit(1);
                 }
             },
+            "github" => match bullseye::github::run(&args[2..]) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("github: {e}");
+                    process::exit(1);
+                }
+            },
             other => {
                 eprintln!("unknown flag: {other}");
                 eprintln!();
@@ -104,11 +114,12 @@ fn print_help() {
     println!("USAGE:");
     println!("    bullseye                       Start the MCP server (stdio transport)");
     println!("    bullseye sync-priorities ...   Sync portfolio frontier into a SQLite table");
+    println!("    bullseye github sync ...       Mirror GitHub issues ⇄ targets via the gh CLI");
     println!();
     println!("FLAGS:");
     println!("    --version             Print version");
     println!("    --help                Print this help");
     println!("    --help-agent          Print help and agent guide");
     println!();
-    println!("Run `bullseye sync-priorities --help` for subcommand details.");
+    println!("Run `bullseye sync-priorities --help` or `bullseye github --help` for details.");
 }
