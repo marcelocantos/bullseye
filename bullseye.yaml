@@ -1032,9 +1032,10 @@ targets:
     discovered: 2026-06-20
   T34:
     name: A user-driven gh-based mirror syncs all open GitHub issues to GHI-namespaced bullseye targets and reflects target lifecycle back to issues, with no server or daemon
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - A `bullseye github` CLI subcommand (in-pattern with sync-priorities) drives sync; auth is the caller's existing gh session (transitive GitHub identity), erroring clearly if `gh auth status` fails — no token invented or stored.
     - Pull mirrors ALL open issues in the configured repo (narrowable by --label/--assignee) into targets, idempotently upserting by ID.
@@ -1045,6 +1046,7 @@ targets:
     context: 'Interim stopgap delivering issue↔target sync with ZERO infrastructure, via gh (which carries the user''s GitHub identity — transitive auth for free). Independent of the Fly/sqlpipe chain (T31–T33). Implemented as a bullseye CLI subcommand that shells out to gh (in-pattern: bullseye already shells to git in repo_guard/git_commit and already has the sync-priorities subcommand). GHI-numbering (the ID = the issue number) needs only a cosmetic relaxation of the advisory ID-format warning in graph.rs — non-T IDs are already fully operable. De-risks the event flow: T33/T35 reuse the GHI scheme, the field-mapping, and the 3-way reconcile. Remains the manual reconcile/backfill path after the event flow lands.'
     origin: manual
     discovered: 2026-06-20
+    achieved: 2026-06-21
   T35:
     name: GitHub issues land as bullseye targets in real time, end to end, with no user action
     status: identified
