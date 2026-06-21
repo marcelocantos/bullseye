@@ -15,11 +15,13 @@ use rust_mcp_sdk::schema::{
 
 use crate::config::{self, LOCATION_PROMPT, Location};
 use crate::git_commit;
+use crate::github;
 use crate::graph;
 use crate::id_alloc;
 use crate::import;
 use crate::ops;
 use crate::portfolio;
+use crate::priorities;
 use crate::repo_guard;
 use crate::schema::{Status, Target};
 use crate::store;
@@ -68,6 +70,8 @@ impl ServerHandler for TargetHandler {
             TargetTools::SummaryTool(t) => handle_summary(t),
             TargetTools::VerifyTool(t) => handle_verify(t),
             TargetTools::ConvergenceTool(t) => handle_convergence(t),
+            TargetTools::GithubSyncTool(t) => handle_github_sync(t),
+            TargetTools::SyncPrioritiesTool(t) => handle_sync_priorities(t),
         }
     }
 }
@@ -84,6 +88,54 @@ fn tool_err(msg: impl Into<String>) -> CallToolError {
 
 fn err(msg: impl Into<String>) -> ToolResult {
     Err(tool_err(msg))
+}
+
+/// Build [`github::GithubArgs`] from the MCP tool params. `pull_only` /
+/// `push_only` invert into the `pull` / `push` enables (default: both on).
+pub fn github_args_for(t: &crate::tools::GithubSyncTool) -> github::GithubArgs {
+    github::GithubArgs {
+        cwd: std::path::PathBuf::from(&t.cwd),
+        repo: t.repo.clone(),
+        label: t.label.clone(),
+        assignee: t.assignee.clone(),
+        pull: !t.push_only,
+        push: !t.pull_only,
+        dry_run: t.dry_run,
+    }
+}
+
+/// MCP twin of `bullseye github sync` — mirrors GitHub issues ⇄ targets
+/// via the shared [`github::run_with`] entry point.
+pub fn handle_github_sync(t: crate::tools::GithubSyncTool) -> ToolResult {
+    let args = github_args_for(&t);
+    let today = Local::now().date_naive();
+    let client = github::RealGh::new(args.cwd.clone());
+    match github::run_with(&client, &args, today) {
+        Ok(report) => text_result(report.summary()),
+        Err(e) => err(format!("github sync failed: {e}")),
+    }
+}
+
+/// MCP twin of `bullseye sync-priorities` — reuses the shared
+/// [`priorities::run_sync`] entry point so the two surfaces can't drift.
+pub fn handle_sync_priorities(t: crate::tools::SyncPrioritiesTool) -> ToolResult {
+    let mut args: Vec<String> = Vec::new();
+    if let Some(db) = &t.db {
+        args.push("--db".to_string());
+        args.push(db.clone());
+    }
+    if let Some(root) = &t.root {
+        args.push("--root".to_string());
+        args.push(root.clone());
+    }
+    args.push("--horizon".to_string());
+    args.push(t.horizon.clone());
+    args.push("--max-depth".to_string());
+    args.push(t.max_depth.to_string());
+    match priorities::run_sync(&args) {
+        Ok(msg) => text_result(msg),
+        Err(e) => err(format!("sync-priorities failed: {e}")),
+    }
 }
 
 fn load_file(cwd: &str) -> Result<(std::path::PathBuf, crate::schema::TargetsFile), CallToolError> {

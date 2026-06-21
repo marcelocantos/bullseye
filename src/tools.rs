@@ -590,6 +590,80 @@ pub struct ResolveTool {
     pub workspace_root: Option<String>,
 }
 
+/// Default `horizon` for `bullseye_sync_priorities`.
+fn default_horizon() -> String {
+    "today".to_string()
+}
+
+/// Default directory walk depth for `bullseye_sync_priorities`.
+fn default_max_depth() -> u32 {
+    5
+}
+
+/// Mirror GitHub issues into bullseye targets and reflect target
+/// lifecycle back to issues, via the `gh` CLI. The MCP-surface twin of
+/// the `bullseye github sync` subcommand — every capability is reachable
+/// from both surfaces.
+#[mcp_tool(
+    name = "bullseye_github_sync",
+    description = "Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the gh CLI (authentication is the caller's existing gh session — no token is stored). Open issues become GHI-<n> targets (the issue number is the ID); achieving/setting-aside/reverting a mirrored target closes/reopens its issue. The MCP twin of `bullseye github sync`."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct GithubSyncTool {
+    /// Working directory to discover bullseye.yaml from and run gh in.
+    pub cwd: String,
+
+    /// Repo "owner/name" to sync (default: the checkout at cwd).
+    #[serde(default)]
+    pub repo: Option<String>,
+
+    /// Only mirror issues carrying this label.
+    #[serde(default)]
+    pub label: Option<String>,
+
+    /// Only mirror issues assigned to this user ("@me" for the authed user).
+    #[serde(default)]
+    pub assignee: Option<String>,
+
+    /// Mirror issues in only; do not push target lifecycle back to GitHub.
+    #[serde(default)]
+    pub pull_only: bool,
+
+    /// Push target lifecycle only; do not mirror issues in.
+    #[serde(default)]
+    pub push_only: bool,
+
+    /// Show what would change without writing or calling gh mutators.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Scan the workspace and upsert the portfolio frontier into a SQLite
+/// table. The MCP-surface twin of the `bullseye sync-priorities`
+/// subcommand.
+#[mcp_tool(
+    name = "bullseye_sync_priorities",
+    description = "Scan the workspace for repos with bullseye.yaml, compute the portfolio frontier, and upsert each frontier target into a SQLite `targets_priorities` table (stale rows pruned in the same transaction). The MCP twin of `bullseye sync-priorities`."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct SyncPrioritiesTool {
+    /// SQLite path (default: $BULLSEYE_DATA_DIR/priorities.db).
+    #[serde(default)]
+    pub db: Option<String>,
+
+    /// Workspace root to scan (default: ~/work).
+    #[serde(default)]
+    pub root: Option<String>,
+
+    /// Value written to the `horizon` column (default: "today").
+    #[serde(default = "default_horizon")]
+    pub horizon: String,
+
+    /// Directory walk depth (default: 5).
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u32,
+}
+
 tool_box!(
     TargetTools,
     [
@@ -610,6 +684,8 @@ tool_box!(
         PortfolioTool,
         SummaryTool,
         VerifyTool,
-        ConvergenceTool
+        ConvergenceTool,
+        GithubSyncTool,
+        SyncPrioritiesTool
     ]
 );
