@@ -201,6 +201,10 @@ Run `bullseye sync-priorities --help` for flags (`--db`, `--root`,
 mirror (`--repo`, `--label`, `--assignee`, `--pull-only`, `--push-only`,
 `--dry-run`).
 
+Both subcommands are also exposed as MCP tools — `bullseye_sync_priorities`
+and `bullseye_github_sync` — so an agent driving the MCP server can trigger
+them directly. Every capability is reachable from both surfaces.
+
 ## Key concepts
 
 - **Frontier**: The set of unblocked leaf targets that can be worked

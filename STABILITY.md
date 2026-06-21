@@ -9,8 +9,18 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T34 GitHub-issue mirror. Changes affecting the
-interaction surface, newest first:
+Snapshot as of the 🎯T36 CLI/MCP surface-parity change. Changes
+affecting the interaction surface, newest first:
+
+- **`github sync` and `sync-priorities` exposed as MCP tools — CLI/MCP
+  parity** (🎯T36). The two CLI subcommands are now also MCP tools,
+  `bullseye_github_sync` and `bullseye_sync_priorities`, so the agent —
+  which mostly drives the MCP surface — can trigger them directly. Each
+  wraps the same shared entry point as its CLI twin (`github::run_with`,
+  `priorities::run_sync`); no logic is duplicated. New public Rust API:
+  `handler::{github_args_for, handle_github_sync, handle_sync_priorities}`.
+  The principle going forward: every capability is exposed on **both** the
+  CLI and the MCP surface in the same change.
 
 - **`bullseye github sync` CLI subcommand — GitHub-issue mirror**
   (🎯T34). New hand- or cron-runnable subcommand that mirrors GitHub
@@ -523,6 +533,8 @@ tag after 🎯T25.
 | `bullseye_resolve(reference, workspace_root?)` | Fluid | New in v0.32.0. Maps a partial repo reference — leaf name, `org/repo` fragment, or `host/org/repo` path — to an absolute repo root by suffix-matching against the same workspace scan `bullseye_portfolio` uses. Absolute paths pass through. Ambiguous references return a structured error listing every candidate; not-found references name the workspace root. Scan results are memoised per process. See 🎯T29. |
 | `bullseye_summary(cwd, momentum?, frontier_details?)` | Needs review | `momentum` added in v0.9.0, reshaped in v0.10.0 to a list of `{id, multiplier}` entries. `frontier_details: true` expands each frontier entry with full acceptance, context, and edges. 🎯T25: frontier annotation changes from `dist=N, fanout=M` to `fanout=M`; the checkpoint-distance term drops with the uniform-node model. Composition happens at the skill layer; bullseye never calls mnemo. |
 | `bullseye_convergence(cwd, momentum?, skip_invariants?)` | Needs review | New in v0.11.0. Single-call convergence evaluation: invariants via `make bullseye` / `mk bullseye`, git-based unreleased-fix detection, summary with inline frontier details, and a deterministic next-action recommendation. Absorbs most of the old `/cv` worker logic into a stateless tool call. Missing hook degrades gracefully with embedded setup instructions; frontier recommendation still fires. If `AGENTS.md` or `CLAUDE.md` declares `release_freeze:`, unreleased fixes are reported but the `/release` recommendation is suppressed so target work can continue. |
+| `bullseye_github_sync(cwd, repo?, label?, assignee?, pull_only?, push_only?, dry_run?)` | Fluid | New in v0.34.0. MCP twin of `bullseye github sync` — mirrors GitHub issues ⇄ targets via the gh CLI (🎯T36). Open issues become `GHI-<n>` targets; target lifecycle closes/reopens the issue. |
+| `bullseye_sync_priorities(db?, root?, horizon?, max_depth?)` | Fluid | New in v0.34.0. MCP twin of `bullseye sync-priorities` — scans the workspace and upserts the portfolio frontier into the `targets_priorities` SQLite table (🎯T36). |
 
 **Removed in 🎯T25** (breaking):
 - `bullseye_rework` — replaced by `bullseye_revert` for achievement reversal; the rework-cycle pattern (verify target → rework edge → work target) no longer exists in the uniform-node model.
