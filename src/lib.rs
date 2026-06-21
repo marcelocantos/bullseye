@@ -4,6 +4,7 @@
 pub mod config;
 pub mod convergence;
 pub mod git_commit;
+pub mod github;
 pub mod graph;
 pub mod handler;
 pub mod id_alloc;

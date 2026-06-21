@@ -34,6 +34,9 @@ graph.rs       — Frontier (unblocked leaves), validation,
 handler.rs     — MCP tool request dispatch (routes tool name → implementation)
 tools.rs       — MCP tool definitions via #[mcp_tool] macro
 portfolio.rs   — Cross-repo discovery, scanning, and portfolio summary
+github.rs      — `bullseye github sync` CLI: gh-based GitHub issue mirror
+                 (🎯T34). Two-way: mirrors issues → GHI-<n> targets, and
+                 reflects target lifecycle back to issues via the gh CLI.
 ```
 
 **Data flow**: Every MCP tool call receives a `cwd` parameter → `store::discover()` finds `bullseye.yaml` → `store::load()` deserializes → operation applied → `store::save()` writes back.

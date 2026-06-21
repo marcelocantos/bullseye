@@ -128,7 +128,7 @@ pub struct RetryPolicy {
 }
 
 /// A single target.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Target {
     /// Short assertion describing the desired state.
     pub name: String,
@@ -299,7 +299,7 @@ impl CrossEdge {
 /// (A gates B means A enables B), which is the inverse of `depends_on`.
 /// Criticality was a soft-blocking weight that no downstream logic ever
 /// consumed; it is discarded on migration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct LegacyGateEdge {
     pub target: String,
     #[serde(default)]
