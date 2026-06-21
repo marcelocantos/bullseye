@@ -3142,6 +3142,40 @@ fn non_conforming_id_is_warning_not_blocking_error() {
     );
 }
 
+/// GitHub-issue mirror IDs (`GHI-<n>`, and the reserved multi-repo
+/// `GHI-<repo>-<n>`) are a recognised namespace (🎯T34): the ID *is*
+/// the upstream issue number, so no local↔remote mapping is needed.
+/// They must NOT trip the advisory ID-format warning, whereas a
+/// malformed `GHI-` id (non-numeric tail) still does.
+#[test]
+fn ghi_mirror_ids_are_conforming() {
+    let mut file = load_fixture();
+    let proto = file.targets["T1"].clone();
+    for id in ["GHI-123", "GHI-bullseye-7"] {
+        let mut t = proto.clone();
+        t.name = format!("Mirror of {id}");
+        file.targets.insert(id.to_string(), t);
+    }
+    // A malformed GHI id (non-numeric tail) should still warn.
+    let mut bad = proto.clone();
+    bad.name = "Malformed mirror".to_string();
+    file.targets.insert("GHI-abc".to_string(), bad);
+
+    let warnings = graph::validate_warnings(&file);
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.contains("GHI-123") || w.contains("GHI-bullseye-7")),
+        "well-formed GHI mirror IDs must not warn; got: {warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("GHI-abc") && w.contains("invalid target ID format")),
+        "malformed GHI id must still warn; got: {warnings:?}"
+    );
+}
+
 // ── 🎯T15.2: strategy schema tests ──────────────────────────────────────────
 
 /// Parse a YAML target with a full strategy block.

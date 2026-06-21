@@ -120,6 +120,28 @@ pub fn validate(file: &TargetsFile) -> Vec<String> {
     all
 }
 
+/// Whether a target ID conforms to a recognised namespace. `T<N>` /
+/// `T<N>.<M>` are hand-authored / allocated targets (🎯T28); `GHI-<N>`
+/// (and the reserved multi-repo `GHI-<slug>-<N>`) are GitHub-issue
+/// mirrors whose number IS the upstream issue number, so no
+/// local↔remote mapping is needed (🎯T34). Non-conforming IDs still
+/// function everywhere — this only governs the advisory display warning.
+fn id_is_conforming(id: &str) -> bool {
+    if let Some(rest) = id.strip_prefix('T') {
+        return !rest.is_empty() && rest.split('.').all(|p| p.parse::<u32>().is_ok());
+    }
+    if let Some(rest) = id.strip_prefix("GHI-") {
+        // The trailing '-'-delimited component is the issue number; an
+        // optional leading repo slug (reserved for multi-repo
+        // mirroring) may precede it.
+        return rest
+            .rsplit('-')
+            .next()
+            .is_some_and(|n| !n.is_empty() && n.parse::<u32>().is_ok());
+    }
+    false
+}
+
 /// Stylistic warnings — issues worth flagging in a report but not
 /// severe enough to block frontier/convergence operations. Today this
 /// is just the ID-format check; new entries belong here when the
@@ -135,9 +157,9 @@ pub fn validate_warnings(file: &TargetsFile) -> Vec<String> {
         // Treat as advisory so a user who ended up with a non-conforming
         // ID (bad tool call, hand edit, import quirk) can still retire
         // or set-aside it via the normal tools.
-        if !id.starts_with('T') || id[1..].split('.').any(|p| p.parse::<u32>().is_err()) {
+        if !id_is_conforming(id) {
             warnings.push(format!(
-                "{id}: invalid target ID format (expected T<N> or T<N>.<M>) — \
+                "{id}: invalid target ID format (expected T<N>, T<N>.<M>, or GHI-<N>) — \
                  advisory; the target is fully operable, retire or rename it via direct \
                  YAML edit if you want the warning gone"
             ));
