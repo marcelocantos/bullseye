@@ -188,6 +188,7 @@ maintenance:
 | Subcommand | Purpose |
 |------------|---------|
 | `bullseye sync-priorities` | Scan the workspace, compute the portfolio frontier, and upsert each frontier target into a SQLite `targets_priorities` table. Designed for periodic invocation from cron or a daemon hook. See [mcp-triad.md §7](docs/mcp-triad.md) for the Protocol-app sync chain. |
+| `bullseye github sync` | Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the `gh` CLI (so authentication is your existing `gh` session — no token stored). Mirrored issues become `GHI-<n>` targets, keyed by the issue number; closing/reopening a mirrored target closes/reopens its issue. |
 
 Example crontab entry (every 30 minutes):
 
@@ -196,7 +197,9 @@ Example crontab entry (every 30 minutes):
 ```
 
 Run `bullseye sync-priorities --help` for flags (`--db`, `--root`,
-`--horizon`, `--max-depth`).
+`--horizon`, `--max-depth`), or `bullseye github --help` for the issue
+mirror (`--repo`, `--label`, `--assignee`, `--pull-only`, `--push-only`,
+`--dry-run`).
 
 ## Key concepts
 

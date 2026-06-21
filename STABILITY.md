@@ -9,8 +9,42 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T28 git-history-aware ID allocator (next release
-after v0.29.0). Changes since v0.29.0 affecting the interaction surface:
+Snapshot as of the 🎯T34 GitHub-issue mirror. Changes affecting the
+interaction surface, newest first:
+
+- **`bullseye github sync` CLI subcommand — GitHub-issue mirror**
+  (🎯T34). New hand- or cron-runnable subcommand that mirrors GitHub
+  issues into bullseye targets and reflects target lifecycle back to
+  issues, shelling out to the `gh` CLI (so authentication is the
+  caller's existing `gh` session — no token is stored). Mirrored issues
+  become targets in the new **`GHI-<n>` ID namespace** (the target ID is
+  the issue number; reserved `GHI-<repo>-<n>` for future multi-repo
+  use), disjoint from the `T<n>` space so no local↔remote number map is
+  needed and the git-history allocator (🎯T28) is untouched. Field
+  ownership prevents sync loops: issue title/body/labels flow
+  GitHub→bullseye only (title→name, body+URL→context, labels→tags); the
+  open/closed↔status lifecycle bit flows both ways, reconciled
+  three-way against a per-machine `.bullseye/github-sync.json` sidecar
+  (gitignored). On pull, open issues are created/updated as `identified`
+  targets with a stub acceptance, and a remote close is mirrored to
+  `achieved`. On push, a locally `achieved`/`set_aside` target closes
+  its issue (`--reason completed` / `not planned`) and a reverted target
+  reopens it, each with a bullseye comment. Flags: `--repo owner/name`
+  (default: the current checkout), `--label`, `--assignee`,
+  `--pull-only`, `--push-only`, `--dry-run`, `--cwd`. The reconcile is a
+  pure, fully unit-tested `plan()` function behind a `GhClient` trait.
+  The advisory target-ID-format warning now recognises the `GHI-<n>`
+  namespace as conforming (non-`T` IDs were already fully operable — the
+  change only suppresses a cosmetic warning). New public Rust API: the
+  `github` module (`run`, `plan`, `run_with`, `GhClient`, `SyncState`,
+  …); `Target` and `LegacyGateEdge` now derive `PartialEq`.
+
+- **Self-documenting header on `bullseye.yaml`** (🎯T30). Every save now
+  prepends a regenerated comment banner pointing at the project repo and
+  noting the file is hand-editable. The banner is owned by `store::save`
+  and re-emitted on every write (serde drops comments on load), so it
+  never duplicates or drifts. No schema or tool-surface change — comments
+  are ignored on parse. First released in v0.33.0.
 
 - **Auto-assigned target IDs are now global across branches**
   (🎯T28). `bullseye_put` (when `id` is omitted) and the
@@ -563,6 +597,7 @@ Planned additions:
 | `--help-agent` | Stable | |
 | (no args) | Stable | Starts MCP stdio server |
 | `sync-priorities [--db PATH] [--root PATH] [--horizon STR] [--max-depth N]` | Fluid | New in v0.24.0. Cron-targetable subcommand that scans the workspace and upserts the portfolio frontier into a SQLite `targets_priorities` table. The flag set may evolve once the Protocol-app sync chain is live and real usage clarifies what's needed (e.g. multi-horizon banding, per-repo include/exclude). See 🎯T3.1. |
+| `github sync [--repo owner/name] [--label L] [--assignee A] [--pull-only] [--push-only] [--dry-run] [--cwd DIR]` | Fluid | New in v0.33.0. Mirrors GitHub issues ⇄ bullseye targets via the `gh` CLI: open issues become `GHI-<n>` targets, and target lifecycle (achieved/set-aside/revert) closes/reopens the issue. Two-way reconcile against a `.bullseye/github-sync.json` sidecar. The flag set may evolve as multi-repo mirroring lands. See 🎯T34. |
 
 ### Output formats
 
