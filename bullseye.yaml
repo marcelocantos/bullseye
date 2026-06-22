@@ -1105,6 +1105,21 @@ targets:
     origin: manual
     discovered: 2026-06-21
     achieved: 2026-06-21
+  T38:
+    name: bullseye_convergence bounds the invariants hook with a timeout so a hanging project hook can't hang the agent
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 3.0
+    acceptance:
+    - run_invariants_command runs the project hook (make/mk bullseye) under a bounded timeout; a hook that never returns no longer blocks the tool indefinitely.
+    - On timeout the hook's process GROUP is killed (Unix), so child processes like a blocked `go test` don't survive the kill of the parent make.
+    - A timed-out hook yields a distinct InvariantsResult::TimedOut, rendered as 'invariants unknown — hook timed out', and convergence still degrades to a frontier recommendation rather than blocking (like a missing hook).
+    - 'Tested: a hook that sleeps past the timeout returns promptly with TimedOut (elapsed << sleep); a fast hook still runs to completion (Green).'
+    context: 'Fixes the esfera2 hang. convergence::run_invariants_command used a bare cmd.output() with NO timeout, so esfera2''s `make bullseye` (→ `make -C server test` → `go test -p 1 ./...` blocking on local DB auth) hung bullseye_convergence — and the agent''s /cv — forever. Long-standing gap (convergence exists since v0.11.0); NOT introduced by the recent github-sync (T34) / MCP-parity (T36) / GH-rename (T37) work — those don''t touch convergence.rs. Implementation: Unix spawn with process_group(0); on timeout `kill -KILL -<pgid>` the whole group (so the stuck go-test child dies, not just make); reads/exit handled via a wait thread + recv_timeout. Treat TimedOut as ''unknown'' (degrade, don''t block), same flow as HookMissing.'
+    origin: manual
+    discovered: 2026-06-22
+    achieved: 2026-06-22
   T4:
     name: Dynamic session startup context
     status: achieved
