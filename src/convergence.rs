@@ -31,7 +31,8 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use crate::git_commit;
 use crate::graph;
@@ -268,13 +269,77 @@ pub enum InvariantsResult {
     HookMissing,
     /// Hook couldn't even be launched (subprocess error).
     SpawnFailed { error: String },
+    /// Hook ran past [`INVARIANTS_HOOK_TIMEOUT`] and was killed. Treated
+    /// like `HookMissing` for next-action purposes (the frontier
+    /// recommendation still fires), but the Invariants section carries a
+    /// prominent "timed out — invariants unknown" warning. Guards against
+    /// a project hook that never returns (a test blocking on input,
+    /// network, or DB auth) hanging the tool — and the agent — forever.
+    /// See 🎯T38.
+    TimedOut { secs: u64 },
 }
 
+/// Maximum wall-clock time the standing-invariants hook may run before
+/// bullseye gives up, kills it, and treats invariants as unknown. A
+/// project's `bullseye` rule is meant to be a quick gate; anything past
+/// two minutes is almost certainly stuck (a test blocking on
+/// input/network/DB), and hanging the agent indefinitely is never the
+/// right answer. See 🎯T38.
+const INVARIANTS_HOOK_TIMEOUT: Duration = Duration::from_secs(120);
+
 fn run_invariants_command(argv: &[String], repo_root: &Path, out: &mut String) -> InvariantsResult {
+    run_invariants_command_with_timeout(argv, repo_root, out, INVARIANTS_HOOK_TIMEOUT)
+}
+
+/// SIGKILL the process group led by `pid`. The hook is spawned with
+/// `process_group(0)`, so `pid` is also the group id and `kill -KILL
+/// -<pid>` reaps the whole tree (e.g. a `go test` child stuck on a DB
+/// connection, not just the `make` parent). Shelling out to `kill` keeps
+/// this dependency-free — bullseye already shells to git/gh. Best-effort
+/// and Unix-only; elsewhere the timeout still returns and the orphan is
+/// left to the OS.
+fn kill_process_group(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(format!("-{pid}"))
+            .status();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+    }
+}
+
+/// Run the invariants hook, bounding it at `timeout`. On expiry the
+/// hook's whole process group is killed and a
+/// [`InvariantsResult::TimedOut`] is returned instead of blocking
+/// forever. Split out from [`run_invariants_command`] so tests can drive
+/// a short timeout. See 🎯T38.
+fn run_invariants_command_with_timeout(
+    argv: &[String],
+    repo_root: &Path,
+    out: &mut String,
+    timeout: Duration,
+) -> InvariantsResult {
+    use std::sync::mpsc;
+
     let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]).current_dir(repo_root);
-    let output = match cmd.output() {
-        Ok(o) => o,
+    cmd.args(&argv[1..])
+        .current_dir(repo_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Own process group so the whole tree can be signalled on timeout —
+    // killing `make` alone would orphan the child that's actually stuck.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => {
             out.push_str(&format!(
                 "## Invariants\n\n⚠ failed to run `{}`: {e}\n\n",
@@ -285,6 +350,52 @@ fn run_invariants_command(argv: &[String], repo_root: &Path, out: &mut String) -
             };
         }
     };
+
+    // With process_group(0) the child leads a new group whose pgid equals
+    // its pid; capture it before the Child moves into the waiter thread.
+    let pid = child.id();
+
+    // wait_with_output drains both pipes and waits for exit; run it on a
+    // thread so the main thread can enforce the timeout via recv_timeout.
+    let (tx, rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+
+    let output = match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            out.push_str(&format!(
+                "## Invariants\n\n⚠ failed to run `{}`: {e}\n\n",
+                argv.join(" "),
+            ));
+            return InvariantsResult::SpawnFailed {
+                error: e.to_string(),
+            };
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            kill_process_group(pid);
+            // On Unix the kill lets the waiter's wait_with_output return
+            // promptly; detach rather than join so a non-Unix best-effort
+            // kill can't reintroduce a hang.
+            drop(waiter);
+            let secs = timeout.as_secs();
+            out.push_str(&format!(
+                "## Invariants\n\n⚠ invariants hook `{}` timed out after {secs}s and was \
+                 killed — invariants are **unknown** for this run.\n\n\
+                 Status: ⚠ unknown (hook timed out)\n\n",
+                argv.join(" "),
+            ));
+            return InvariantsResult::TimedOut { secs };
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            out.push_str("## Invariants\n\n⚠ invariants hook runner exited unexpectedly.\n\n");
+            return InvariantsResult::SpawnFailed {
+                error: "invariants waiter thread disconnected".to_string(),
+            };
+        }
+    };
+
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -520,6 +631,7 @@ fn render_next_action(
     // like Skipped does, with an added note at the end so the agent
     // understands the recommendation is unguarded.
     let hook_missing_note = matches!(invariants, InvariantsResult::HookMissing);
+    let hook_timed_out = matches!(invariants, InvariantsResult::TimedOut { .. });
 
     // Priority 2 — unreleased fixes take precedence over new target work,
     // unless the project explicitly declares a release freeze. In that case,
@@ -603,6 +715,14 @@ fn render_next_action(
             "\n⚠ Note: standing invariants are **unknown** for this run — the project \
              has no `bullseye` rule in its Makefile/mkfile. See the ## Invariants section \
              for setup instructions. Proceed with caution until the hook is in place.\n",
+        );
+    }
+    if hook_timed_out {
+        out.push_str(
+            "\n⚠ Note: the standing-invariants hook **timed out** and was killed — \
+             invariants are **unknown** for this run. Find why `make bullseye` / `mk \
+             bullseye` doesn't return (often a test blocking on input, network, or DB \
+             auth), or pass skip_invariants to bypass it. Proceed with caution.\n",
         );
     }
     if let Some(reason) = release_freeze.filter(|_| !unreleased.is_empty()) {
@@ -753,5 +873,54 @@ mod tests {
         assert!(out.contains("Makefile"));
         assert!(out.contains("`bullseye` target"));
         assert!(out.contains("Status: ⚠ unknown"));
+    }
+
+    #[test]
+    fn invariants_hook_times_out_instead_of_hanging() {
+        use std::time::Instant;
+        // The esfera2-hang regression guard (🎯T38): a hook that would
+        // run far past the timeout must be killed and return promptly,
+        // not block the tool (and the agent) forever.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut out = String::new();
+        let start = Instant::now();
+        let result = run_invariants_command_with_timeout(
+            &["sleep".to_string(), "30".to_string()],
+            tmp.path(),
+            &mut out,
+            Duration::from_millis(500),
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            matches!(result, InvariantsResult::TimedOut { .. }),
+            "expected TimedOut, got {result:?}"
+        );
+        assert!(
+            out.contains("timed out"),
+            "output must explain the timeout; got: {out}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "must return shortly after the 500ms timeout, not wait out the 30s sleep; took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn invariants_hook_fast_command_completes() {
+        // A hook that exits immediately must still run to completion and
+        // report Green — the timeout machinery must not perturb the
+        // normal case.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut out = String::new();
+        let result = run_invariants_command_with_timeout(
+            &["true".to_string()],
+            tmp.path(),
+            &mut out,
+            Duration::from_secs(10),
+        );
+        assert!(
+            matches!(result, InvariantsResult::Green),
+            "expected Green, got {result:?}"
+        );
     }
 }
