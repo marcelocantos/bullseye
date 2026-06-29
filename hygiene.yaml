@@ -1,14 +1,30 @@
 # hygiene.yaml — declared, drift-validated hygiene posture for bullseye.
 # Schema reference: the `hygiene` skill (~/.claude/skills/hygiene/SKILL.md).
-# Validate with `/hygiene` (or hygiene_check.py from repo root); aggregate
-# the fleet with `/hygiene fleet`. Sibling to bullseye.yaml: bullseye tracks
-# aspirational state ("achieve X"); this tracks steady-state ("we maintain X").
+# Validate with `/hygiene`; aggregate the fleet with `/hygiene fleet`. Tracks
+# steady-state ("we maintain X"), the complement to bullseye's own aspirational
+# targets ("achieve X").
+#
+# Tiers are PER DIMENSION (schema v1): a dimension's held tier is the highest T
+# such that every item in it with tier <= T is satisfied. `floors` is the
+# per-dimension ratchet (below floor => DRIFT); `aspires` is the gap horizon;
+# `enforce` is intent-only and does not affect tiers.
 
-schema_version: 0
+schema_version: 1
 
 repo: bullseye
-tier: 2          # held & enforced — every blocking item with tier <= 2 passes
-aspires: 3       # informational gap target
+aspires: 3
+floors:            # per-dimension held-tier ratchet; below floor => DRIFT
+  correctness: 2
+  security: 2
+  quality: 2
+  deps: 2
+  release: 2
+  governance: 2
+  build: 2
+  docs: 0          # no validated docs hygiene yet (rustdoc-in-CI, TODO sink)
+  perf: 0          # no benchmark suite yet
+  vcs: 0           # no committed git hooks yet
+  agent: 2
 
 tiers:
   1: baseline    # LICENSE + README + .gitignore; tests build & run
@@ -174,7 +190,7 @@ items:
     state: planned
     cadence: per-release
     enforce: warning
-    tier: 2
+    tier: 3
     reason: History lives in git + GitHub release notes; no curated CHANGELOG.md yet.
     evidence: {absent: {file: {path: CHANGELOG.md}}}
 
@@ -221,7 +237,7 @@ items:
     state: planned
     cadence: per-release
     enforce: warning
-    tier: 2
+    tier: 3
     reason: No NOTICE for dependency attributions yet; see ~/think 🎯T2 (canonical NOTICE filename).
     evidence: {absent: {file: {path: NOTICE}}}
 
@@ -261,7 +277,7 @@ items:
     state: planned
     cadence: continuous
     enforce: informational
-    tier: 2
+    tier: 3
     reason: Docs are not built in CI yet.
     evidence: {absent: {ci_step: {workflow: ci.yml, name: Docs}}}
 
@@ -271,7 +287,7 @@ items:
     state: planned
     cadence: once-must-hold
     enforce: informational
-    tier: 1
+    tier: 3
     reason: No docs/TODO.md; per global convention repos should carry one.
     evidence: {absent: {file: {path: docs/TODO.md}}}
 
@@ -293,7 +309,7 @@ items:
     state: planned
     cadence: once-must-hold
     enforce: informational
-    tier: 2
+    tier: 3
     reason: No scripts/hooks; core.hooksPath is the default .git/hooks.
     evidence: {absent: {file: {path: scripts/hooks/pre-commit}}}
 
