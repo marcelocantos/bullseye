@@ -1,0 +1,326 @@
+# hygiene.yaml — declared, drift-validated hygiene posture for bullseye.
+# Schema reference: the `hygiene` skill (~/.claude/skills/hygiene/SKILL.md).
+# Validate with `/hygiene` (or hygiene_check.py from repo root); aggregate
+# the fleet with `/hygiene fleet`. Sibling to bullseye.yaml: bullseye tracks
+# aspirational state ("achieve X"); this tracks steady-state ("we maintain X").
+
+schema_version: 0
+
+repo: bullseye
+tier: 2          # held & enforced — every blocking item with tier <= 2 passes
+aspires: 3       # informational gap target
+
+tiers:
+  1: baseline    # LICENSE + README + .gitignore; tests build & run
+  2: maintained  # fmt+clippy enforced, release/governance discipline validated
+  3: hardened    # security scanning (secret/dep/SAST), signing, fuzzing, perf
+
+items:
+
+  # ============================== CORRECTNESS =============================
+  - id: correctness.tests
+    dim: correctness
+    desc: cargo test runs on every push/PR (ci.yml `check` job)
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 1
+    evidence: {ci_step: {workflow: ci.yml, name: Test}}
+
+  - id: correctness.release-multitarget
+    dim: correctness
+    desc: Release builds (and tests, except aarch64-linux) across darwin-arm64, linux-amd64, linux-arm64
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {ci_job: release.yml#build}
+
+  - id: correctness.miri
+    dim: correctness
+    desc: UB checking (miri) over any unsafe code
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: Safe Rust with minimal unsafe; clippy + the type system cover most classes. miri not yet wired.
+    evidence: {absent: {ci_job: "ci.yml#miri"}}
+
+  # =========================== SECURITY / SUPPLY ==========================
+  - id: security.dep-pinning
+    dim: security
+    desc: Cargo.lock committed — reproducible, pinned dependency graph
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: Cargo.lock}}
+
+  - id: security.dep-audit
+    dim: security
+    desc: RustSec advisory scanning of the locked deps (cargo-audit / cargo-deny)
+    state: planned
+    cadence: periodic:30d
+    enforce: warning
+    tier: 3
+    reason: Cargo.lock is pinned but no automated RustSec advisory check runs against it yet.
+    evidence: {absent: {scanner: {tool: cargo-audit}}}
+
+  - id: security.secret-scan
+    dim: security
+    desc: Secret scanning (gitleaks) in pre-commit and/or CI
+    state: planned
+    cadence: continuous
+    enforce: blocking   # defines the tier-3 "hardened" bar — same as csp, for fleet consistency
+    tier: 3
+    reason: No gitleaks config yet; relying on manual review.
+    evidence: {absent: {scanner: {tool: gitleaks}}}
+
+  - id: security.sast-codeql
+    dim: security
+    desc: CodeQL static analysis
+    state: skipped
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: >-
+      CodeQL has no Rust analysis support; `clippy -D warnings` (enforced) plus
+      cargo-audit (planned) are the Rust-native equivalents.
+    evidence: {absent: {ci_job: "ci.yml#codeql"}}
+
+  - id: security.actions-perms
+    dim: security
+    desc: GitHub Actions default token permissions scoped to least privilege
+    state: planned
+    cadence: once-must-hold
+    enforce: warning
+    tier: 3
+    reason: No top-level `permissions:` block in the workflows; inherits repo default.
+    evidence: {absent: {ci_step: {workflow: ci.yml, name: permissions}}}
+
+  - id: security.signed-releases
+    dim: security
+    desc: Release artifacts carry provenance / are signed (cosign/sigstore)
+    state: planned
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: release.yml uploads assets via `gh release`; no signing/attestation step yet.
+    evidence: {absent: {ci_step: {workflow: release.yml, name: Sign}}}
+
+  # ============================== CODE QUALITY ============================
+  - id: quality.format
+    dim: quality
+    desc: Sources are rustfmt-clean, enforced in CI (cargo fmt --check)
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: ci.yml, name: Check formatting}}
+
+  - id: quality.lint
+    dim: quality
+    desc: clippy clean with warnings denied (cargo clippy -- -D warnings)
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: ci.yml, name: Clippy}}
+
+  # =========================== DEPENDENCY HEALTH ==========================
+  - id: deps.freshness
+    dim: deps
+    desc: Crate dependencies reviewed against latest at each release
+    state: manual
+    cadence: per-release
+    enforce: informational
+    tier: 2
+    evidence: {manual: {last_verified: 2026-06-15}}
+
+  # ========================== RELEASE & VERSIONING =======================
+  - id: release.semver-minor
+    dim: release
+    desc: Releases bump MINOR only; Cargo.toml version matches the latest git tag
+    state: enforced
+    cadence: per-release
+    enforce: blocking
+    tier: 2
+    evidence:
+      command: >-
+        test "$(grep -m1 -E '^version' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+        = "$(git describe --tags --abbrev=0 | tr -d v)"
+
+  - id: release.ci-built
+    dim: release
+    desc: Release binaries are built by CI across all target triples, never locally
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {ci_job: release.yml#build}
+
+  - id: release.homebrew
+    dim: release
+    desc: Published to the Homebrew tap on release
+    state: present
+    cadence: per-release
+    enforce: informational
+    tier: 2
+    evidence: {ci_job: release.yml#homebrew}
+
+  - id: release.changelog
+    dim: release
+    desc: A maintained CHANGELOG records user-visible changes per release
+    state: planned
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    reason: History lives in git + GitHub release notes; no curated CHANGELOG.md yet.
+    evidence: {absent: {file: {path: CHANGELOG.md}}}
+
+  # ============================ GOVERNANCE / META ========================
+  - id: governance.license
+    dim: governance
+    desc: Apache-2.0 LICENSE present
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: LICENSE, matches: 'Apache License'}}
+
+  - id: governance.readme
+    dim: governance
+    desc: README present and current
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: README.md}}
+
+  - id: governance.gitignore
+    dim: governance
+    desc: .gitignore covers target/, IDE/OS files, agent state
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: .gitignore}}
+
+  - id: governance.squash-only
+    dim: governance
+    desc: Repo is squash-merge only, with delete-branch-on-merge
+    state: enforced
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 2
+    evidence: {gh_setting: {key: allow_merge_commit, equals: false}}
+
+  - id: governance.notice
+    dim: governance
+    desc: Third-party attribution NOTICE for crate dependencies
+    state: planned
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    reason: No NOTICE for dependency attributions yet; see ~/think 🎯T2 (canonical NOTICE filename).
+    evidence: {absent: {file: {path: NOTICE}}}
+
+  - id: governance.security-md
+    dim: governance
+    desc: SECURITY.md documents the vulnerability-disclosure process
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: Public repo without a published disclosure policy yet.
+    evidence: {absent: {file: {path: SECURITY.md}}}
+
+  # ================================= BUILD ===============================
+  - id: build.edition-pinned
+    dim: build
+    desc: Rust edition pinned (edition = "2024")
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: Cargo.toml, matches: 'edition = "2024"'}}
+
+  - id: build.reproducible-lock
+    dim: build
+    desc: Committed Cargo.lock makes the build dependency graph reproducible
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: Cargo.lock}}
+
+  # ============================ DOCUMENTATION ============================
+  - id: docs.rustdoc
+    dim: docs
+    desc: cargo doc builds cleanly in CI (no broken intra-doc links)
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 2
+    reason: Docs are not built in CI yet.
+    evidence: {absent: {ci_step: {workflow: ci.yml, name: Docs}}}
+
+  - id: docs.todo
+    dim: docs
+    desc: docs/TODO.md exists as the repo TODO sink
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 1
+    reason: No docs/TODO.md; per global convention repos should carry one.
+    evidence: {absent: {file: {path: docs/TODO.md}}}
+
+  # ============================== PERFORMANCE ===========================
+  - id: perf.benchmarks
+    dim: perf
+    desc: Criterion benchmark suite exists
+    state: planned
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: No benches/ directory; performance is not yet tracked.
+    evidence: {absent: {file: {path: benches}}}
+
+  # ============================== VCS / HISTORY =========================
+  - id: vcs.pre-commit-hook
+    dim: vcs
+    desc: Committed git hooks (scripts/hooks) gate locally before commit
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    reason: No scripts/hooks; core.hooksPath is the default .git/hooks.
+    evidence: {absent: {file: {path: scripts/hooks/pre-commit}}}
+
+  # =================== AGENT-READINESS / ONBOARDING ====================
+  - id: agent.claude-md
+    dim: agent
+    desc: CLAUDE.md present and current (conventions discoverable by agents)
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: CLAUDE.md}}
+
+  - id: agent.bullseye
+    dim: agent
+    desc: bullseye.yaml present (convergence targets discoverable)
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: bullseye.yaml}}
+
+  - id: agent.cli-help
+    dim: agent
+    desc: Binary exposes --version and --help
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: src/main.rs, matches: '"--version"'}}
