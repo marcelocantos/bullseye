@@ -1120,6 +1120,23 @@ targets:
     origin: manual
     discovered: 2026-06-22
     achieved: 2026-06-22
+  T39:
+    name: Bullseye owns target ID allocation and hierarchy conventions
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Agents can create targets without choosing the final target ID when numbering is not part of the user's intent.
+    - Bullseye allocates canonical top-level and child IDs from explicit hierarchy intent, preserving stable Tn and Tn.m references after creation.
+    - Externally supplied IDs are validated for ambiguity and collision, including rejection of dotted IDs whose final segment is zero.
+    - MCP and CLI creation paths share the same allocation and validation behavior.
+    - Startup context, graph, list, and frontier output continue to show human-friendly IDs after allocation.
+    context: |
+      Filed from the claudia Codex-provider graph cleanup on 2026-07-06, then reframed after Codex started using Bullseye directly. The original symptom was a subtarget ID such as T4.0: technically distinct in Bullseye string space, but humans reasonably read `4` as `4.0` in numeric and version contexts. Rejecting `.0` remains useful, but the deeper issue is that agents should not have to unilaterally decide target numbers in routine creation flows.
+
+      Keep the useful Claude-style hierarchy, where an agent can say "this target has these child targets" and Bullseye renders them as T4.1, T4.2, T4.3. Drop the brittle part, where the agent picks those exact numbers. The caller should provide semantic intent such as "new top-level target" or "new child of T4"; Bullseye should allocate the next canonical ID, validate any explicit ID supplied by humans or migration tools, and return the assigned ID to the caller.
+    origin: claudia target-graph cleanup 2026-07-06
+    discovered: 2026-07-06
   T4:
     name: Dynamic session startup context
     status: achieved
@@ -1176,6 +1193,50 @@ targets:
     origin: manual
     discovered: 2026-04-07
     achieved: 2026-04-10
+  T40:
+    name: Bullseye rejects or escapes control characters before writing target YAML
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - MCP and CLI mutation paths reject target names, acceptance entries, context, origin, tags, and other free-text fields containing non-whitespace C0 control characters with a clear validation error.
+    - Newline and tab remain allowed only where the field format already supports them; invalid controls such as U+0001 cannot be serialized into bullseye.yaml.
+    - Tests cover a malformed acceptance entry containing U+0001 and verify the file remains loadable after the rejected mutation.
+    - Existing valid targets continue to round-trip without added quoting churn.
+    context: 'Discovered on 2026-07-06 while investigating T39: the working tree contained a structurally valid-looking T39 whose five acceptance bullets were five literal U+0001 bytes. That made `bullseye_startup_context` and YAML loading fail with `control characters are not allowed`. Git history showed the committed target text was valid, so the corruption was an uncommitted structured write of invalid string content rather than repository history damage. Bullseye should defend the file boundary even if an agent or client submits malformed strings.'
+    tags:
+    - safety
+    - yaml
+    - validation
+    origin: Codex T39 corruption investigation 2026-07-06
+    discovered: 2026-07-06
+  T41:
+    name: Agents mutate targets only through Bullseye tools unless the user explicitly permits direct file edits
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'The generated `bullseye.yaml` preamble contains a strongly worded agent instruction: agents must not edit this file directly unless explicitly instructed by the user or repairing an unloadable file; use Bullseye MCP/CLI mutation tools instead.'
+    - The generated preamble contains a strong content hash covering the canonical target payload, excluding the generated preamble/hash field itself.
+    - Bullseye mutation paths update the preamble hash whenever they save the file, with no sidecar stamp and no `.git` pollution.
+    - Validation or convergence checks detect hash mismatches and report a clear direct-edit warning that tells agents to use Bullseye MCP/CLI or obtain explicit user instruction.
+    - An explicit emergency repair path can recompute the hash after a user-authorized direct edit, and the command requires a non-empty reason for the audit trail.
+    - Tests or documented smoke checks cover a rejected direct edit, an accepted Bullseye-tool mutation, and hash recomputation after an explicit repair.
+    context: |-
+      Discovered on 2026-07-06 after a Codex Claudia session directly edited `/Users/marcelo/work/github.com/marcelocantos/bullseye/bullseye.yaml` with Ruby one-liners while working from the Claudia repo. One rewrite botched a Ruby backreference and wrote U+0001 bytes into T39 acceptance lines, making Bullseye unable to load its own targets until repaired. The deeper rule is an ownership boundary: agents should not hand-edit the target store unless the user explicitly asks for that or the file is already too broken for Bullseye to repair. Bullseye should make the correct path easy and make direct edits visible or blocked.
+
+      Refined on 2026-07-06: prefer self-contained enforcement in the generated `bullseye.yaml` preamble over sidecar state. The preamble should carry both the agent warning and a strong hash of the canonical target payload. That keeps the target store portable, avoids `.git` pollution, and makes direct edits visible anywhere the file travels.
+
+      Graph shape: T41 is the capstone for closing out the direct-edit incident. It depends on T39 because agents need complete enough allocator/hierarchy mutation tools that direct YAML edits are unnecessary for numbering work. It depends on T40 because the file boundary must reject malformed free text before the preamble/hash enforcement can be trusted as a safety mechanism.
+    depends_on:
+    - T39
+    - T40
+    tags:
+    - safety
+    - agents
+    - workflow
+    origin: Codex direct bullseye.yaml edit investigation 2026-07-06
+    discovered: 2026-07-06
   T5:
     name: Migration from markdown targets to bullseye
     status: achieved
