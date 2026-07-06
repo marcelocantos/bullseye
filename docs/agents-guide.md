@@ -145,6 +145,7 @@ transitions on achieved targets remain allowed.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | null | Target ID (omit to auto-assign a new top-level ID — see [Target IDs](#target-ids) for the git-history-aware allocation rules). On create, an explicit `id` is rejected if it collides with a slot recorded in git history but absent from the current tree (e.g. deleted, or on another branch). |
+| `child_of` | string | null | Parent ID for auto-assigned child creation. Only valid when `id` is omitted; creates the next free direct child of this target (for example `child_of: "T4"` → `T4.N`). |
 | `name` | string | null | Desired state assertion (required on create) |
 | `value` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
 | `cost` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
