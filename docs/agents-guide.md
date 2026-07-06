@@ -115,9 +115,14 @@ Get a single target by ID.
 
 Upsert a target: create if the ID doesn't exist, patch if it does.
 Omit `id` to create a new target with an auto-assigned top-level ID
-(`T1`, `T2`, ...). Provide `id` to create at a specific ID (useful
-for sub-targets like `T1.2`) or to patch an existing target — the
-handler decides create-vs-patch based on whether the ID exists.
+(`T1`, `T2`, ...). To create a child target without choosing the
+final number, omit `id` and set `child_of` to the parent ID
+(`child_of: "T4"` creates the next free `T4.N`). Provide `id` only
+when the exact target ID is part of the user's intent, or to patch an
+existing target — the handler decides create-vs-patch based on
+whether the ID exists. Explicit dotted IDs whose final segment is
+zero (such as `T4.0`) are rejected because humans conflate them with
+their parent in conversation and reports.
 
 On create, `name` and `acceptance` are required. `value` and `cost`
 default to `0` (the "not set at repo scope" sentinel) when omitted —

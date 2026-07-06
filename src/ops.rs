@@ -251,7 +251,7 @@ impl std::fmt::Display for SubdivideError {
 /// honoured. `historical` may be empty when no git context is
 /// available (e.g. external-mode shadow storage) — the function then
 /// matches pre-T28 behaviour.
-fn next_subtarget_id(
+pub(crate) fn next_subtarget_id(
     file: &TargetsFile,
     parent: &str,
     historical: &std::collections::HashSet<String>,

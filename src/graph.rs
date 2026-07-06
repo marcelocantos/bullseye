@@ -182,6 +182,12 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
         if !seen_ids.insert(id.as_str()) {
             errors.push(format!("{id}: duplicate target ID"));
         }
+        if id_ends_in_zero_dotted_segment(id) {
+            errors.push(format!(
+                "{id}: dotted target IDs whose final segment is zero are disallowed \
+                 because humans conflate T4 and T4.0"
+            ));
+        }
 
         // Value/cost: 0.0 means "not set at repo scope" (portfolio-scope
         // metadata is optional). Only reject explicitly negative values,
@@ -304,6 +310,12 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
     }
 
     errors
+}
+
+fn id_ends_in_zero_dotted_segment(id: &str) -> bool {
+    id.strip_prefix('T')
+        .and_then(|rest| rest.rsplit('.').next().filter(|_| rest.contains('.')))
+        == Some("0")
 }
 
 /// Produce a concise startup context summary for agent consumption.

@@ -50,8 +50,11 @@ pub struct GetTool {
 #[mcp_tool(
     name = "bullseye_put",
     description = "Upsert a target: create if the ID doesn't exist, patch if it does. \
-        Omit `id` to create a new target with an auto-assigned ID. \
-        Provide `id` (e.g., 'T1.2') to create a sub-target at a specific ID or to patch an existing one. \
+        Omit `id` to create a new target with an auto-assigned top-level ID. \
+        To create a child without choosing its final number, omit `id` and set `child_of` \
+        to the parent ID (e.g. `child_of: 'T4'` creates the next free `T4.N`). \
+        Provide `id` (e.g., 'T1.2') only when the exact target ID is part of the user's intent, \
+        or to patch an existing target. \
         On create, `name` and `acceptance` are required; all other fields are optional. \
         `value` and `cost` are portfolio-scope metadata used for cross-repo WSJF ranking (weekly-plus horizon) — \
         they are NOT consumed by repo-level frontier ordering, which uses `depends_on` shape (unblocking fanout) only. \
@@ -77,6 +80,12 @@ pub struct PutTool {
     /// Provide to upsert at a specific ID (creates if missing, patches if existing).
     #[serde(default)]
     pub id: Option<String>,
+
+    /// Parent ID for auto-assigned child creation. Only valid when
+    /// `id` is omitted; creates the next free direct child of this
+    /// target, e.g. `child_of: "T4"` → `T4.1`, `T4.2`, ...
+    #[serde(default)]
+    pub child_of: Option<String>,
 
     /// Short assertion describing the desired state. Required on create.
     #[serde(default)]
