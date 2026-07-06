@@ -1239,6 +1239,23 @@ targets:
     - workflow
     origin: Codex direct bullseye.yaml edit investigation 2026-07-06
     discovered: 2026-07-06
+  T42:
+    name: The unreleased-fixes detector ignores fix commits that don't change the shipped surface
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'A repo can declare its shipped surface in bullseye.yaml (e.g. `release_surface: [dist/, src/, include/]` glob list); absent a declaration, current behaviour is unchanged.'
+    - '`bullseye_convergence` excludes from `## Unreleased fixes` (or annotates as not-user-visible) any fix commit whose cumulative diff since the last tag does not intersect the declared surface, and the `## Next action` does not recommend `/release` when the surface diff since the last tag is empty.'
+    - 'Regression case encoded as a test: csp''s `a05c09f` over v0.21.0 (fix touching only test/ and bullseye.yaml, `git diff v0.21.0..HEAD -- dist/ src/ include/` empty) produces no release recommendation, while a fix touching a declared surface path still does.'
+    - Tests cover both the declared-surface and no-declaration paths.
+    context: 'Filed 2026-07-06 from a csp session. /cv on csp recommended "Run /release to ship 1 unreleased fix" for commit a05c09f (🎯T31), a test-fixture-only fix: the diff vs v0.21.0 over dist/, src/, include/ was empty, so a release would have shipped byte-identical artifacts and delivered nothing to users (csp is a vendor-drop-in source library; only dist/ reaches consumers). The user declined the release. The detector pattern-matches commit messages ("fix") since the last tag but doesn''t ask whether the fix can reach an installed user. For source-library repos (csp) the surface is dist/; for binary repos it''s src/ plus build inputs. A declared-surface config key keeps the heuristic simple and opt-in; the recommendation text could still list surface-external fix commits informationally ("1 fix since last tag, not user-visible") so the signal isn''t silently dropped.'
+    tags:
+    - convergence
+    - release
+    - heuristic
+    origin: manual
+    discovered: 2026-07-06
   T5:
     name: Migration from markdown targets to bullseye
     status: achieved
