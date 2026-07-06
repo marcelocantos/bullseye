@@ -115,9 +115,14 @@ Get a single target by ID.
 
 Upsert a target: create if the ID doesn't exist, patch if it does.
 Omit `id` to create a new target with an auto-assigned top-level ID
-(`T1`, `T2`, ...). Provide `id` to create at a specific ID (useful
-for sub-targets like `T1.2`) or to patch an existing target — the
-handler decides create-vs-patch based on whether the ID exists.
+(`T1`, `T2`, ...). To create a child target without choosing the
+final number, omit `id` and set `child_of` to the parent ID
+(`child_of: "T4"` creates the next free `T4.N`). Provide `id` only
+when the exact target ID is part of the user's intent, or to patch an
+existing target — the handler decides create-vs-patch based on
+whether the ID exists. Explicit dotted IDs whose final segment is
+zero (such as `T4.0`) are rejected because humans conflate them with
+their parent in conversation and reports.
 
 On create, `name` and `acceptance` are required. `value` and `cost`
 default to `0` (the "not set at repo scope" sentinel) when omitted —
@@ -140,6 +145,7 @@ transitions on achieved targets remain allowed.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | null | Target ID (omit to auto-assign a new top-level ID — see [Target IDs](#target-ids) for the git-history-aware allocation rules). On create, an explicit `id` is rejected if it collides with a slot recorded in git history but absent from the current tree (e.g. deleted, or on another branch). |
+| `child_of` | string | null | Parent ID for auto-assigned child creation. Only valid when `id` is omitted; creates the next free direct child of this target (for example `child_of: "T4"` → `T4.N`). |
 | `name` | string | null | Desired state assertion (required on create) |
 | `value` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
 | `cost` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |

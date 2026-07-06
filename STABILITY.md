@@ -9,8 +9,26 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T38 invariants-hook timeout. Changes affecting the
+Snapshot as of the 🎯T39/T40 allocator and YAML write-boundary release. Changes affecting the
 interaction surface, newest first:
+
+- **Bullseye owns target ID allocation and rejects unsafe target text**
+  (🎯T39, 🎯T40). `bullseye_put` now accepts `child_of` for
+  auto-assigned child creation: omit `id`, set `child_of: "T4"`, and
+  Bullseye allocates the next free `T4.N` while still consulting git
+  history for branch-safe ID allocation. Explicit IDs remain available
+  for intentional placement and existing-target patches, but explicit
+  dotted IDs whose final segment is zero (for example `T4.0`) are
+  rejected because humans conflate them with their parent in
+  conversation and reports. The same `.0` check is also blocking
+  validation for existing files. All mutating write-boundaries now
+  reject caller-controlled strings containing non-whitespace C0 control
+  characters before saving `bullseye.yaml`; newline, carriage return,
+  and tab remain valid prose whitespace, while bytes such as U+0001 are
+  rejected with a field-specific error and the file left unchanged. The
+  child-allocation addition is a tool-surface change and the stricter
+  ID/control-character checks narrow accepted input, so the settling
+  clock resets at v0.37.0.
 
 - **`bullseye_convergence` bounds the invariants hook with a timeout**
   (🎯T38). The project's `make bullseye` / `mk bullseye` hook now runs

@@ -190,31 +190,74 @@ fn check_no_envelope_leak(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject non-whitespace C0 controls in caller-controlled strings
+/// before they can be serialised into `bullseye.yaml` (🎯T40). Newline,
+/// carriage return, and tab remain allowed because existing prose
+/// fields and YAML block scalars legitimately use them; bytes like
+/// U+0001 are almost always terminal/editor/control-protocol damage.
+fn check_no_invalid_control_chars(field: &str, value: &str) -> Result<(), String> {
+    for ch in value.chars() {
+        if ch.is_control() && !matches!(ch, '\n' | '\r' | '\t') {
+            return Err(format!(
+                "{field} contains invalid control character U+{:04X} — \
+                 refusing to write malformed target text to bullseye.yaml",
+                ch as u32
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_persisted_string(field: &str, value: &str) -> Result<(), String> {
+    check_no_envelope_leak(field, value)?;
+    check_no_invalid_control_chars(field, value)?;
+    Ok(())
+}
+
+fn id_ends_in_zero_dotted_segment(id: &str) -> bool {
+    id.strip_prefix('T')
+        .and_then(|rest| rest.rsplit('.').next().filter(|_| rest.contains('.')))
+        == Some("0")
+}
+
+fn check_explicit_target_id(field: &str, id: &str) -> Result<(), String> {
+    check_persisted_string(field, id)?;
+    if id_ends_in_zero_dotted_segment(id) {
+        return Err(format!(
+            "{field} `{id}` is ambiguous — dotted target IDs whose final segment is zero \
+             are disallowed because humans conflate `T4` and `T4.0`. Omit `id` and let \
+             Bullseye allocate the next child, or choose a non-zero child segment."
+        ));
+    }
+    Ok(())
+}
+
 /// Walk every caller-controlled string on a parsed `Target` and run
 /// the envelope-leak check. Used by `handle_import`, where the input
 /// is bulk-parsed from markdown and we don't have a per-field handler
 /// signature to validate against.
 fn check_target_no_envelope_leaks(id: &str, target: &crate::schema::Target) -> Result<(), String> {
-    check_no_envelope_leak(&format!("{id}.name"), &target.name)?;
-    check_no_envelope_leak(&format!("{id}.context"), &target.context)?;
-    check_no_envelope_leak(&format!("{id}.origin"), &target.origin)?;
+    check_explicit_target_id("target id", id)?;
+    check_persisted_string(&format!("{id}.name"), &target.name)?;
+    check_persisted_string(&format!("{id}.context"), &target.context)?;
+    check_persisted_string(&format!("{id}.origin"), &target.origin)?;
     if let Some(r) = &target.set_aside_reason {
-        check_no_envelope_leak(&format!("{id}.set_aside_reason"), r)?;
+        check_persisted_string(&format!("{id}.set_aside_reason"), r)?;
     }
     for (i, a) in target.acceptance.iter().enumerate() {
-        check_no_envelope_leak(&format!("{id}.acceptance[{i}]"), a)?;
+        check_persisted_string(&format!("{id}.acceptance[{i}]"), a)?;
     }
     for (i, t) in target.tags.iter().enumerate() {
-        check_no_envelope_leak(&format!("{id}.tags[{i}]"), t)?;
+        check_persisted_string(&format!("{id}.tags[{i}]"), t)?;
     }
     for (i, e) in target.cross_depends.iter().enumerate() {
         if let Some(n) = &e.note {
-            check_no_envelope_leak(&format!("{id}.cross_depends[{i}].note"), n)?;
+            check_persisted_string(&format!("{id}.cross_depends[{i}].note"), n)?;
         }
     }
     for (i, e) in target.cross_enables.iter().enumerate() {
         if let Some(n) = &e.note {
-            check_no_envelope_leak(&format!("{id}.cross_enables[{i}].note"), n)?;
+            check_persisted_string(&format!("{id}.cross_enables[{i}].note"), n)?;
         }
     }
     Ok(())
@@ -326,37 +369,43 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
     ensure_mutation_allowed(&path, &t.cwd)?;
 
-    // Envelope-leak guard (🎯T20). Validate every caller-controlled
-    // string before entering the locked mutation block — fail fast if
-    // an XML tool-call envelope leaked into any field, so the file is
-    // never written with the corruption.
+    // Write-boundary guards (🎯T20 / 🎯T40). Validate every
+    // caller-controlled string before entering the locked mutation
+    // block so the file is never written with protocol or control-byte
+    // corruption.
+    if let Some(s) = &t.id {
+        check_explicit_target_id("id", s).map_err(tool_err)?;
+    }
+    if let Some(s) = &t.child_of {
+        check_explicit_target_id("child_of", s).map_err(tool_err)?;
+    }
     if let Some(s) = &t.name {
-        check_no_envelope_leak("name", s).map_err(tool_err)?;
+        check_persisted_string("name", s).map_err(tool_err)?;
     }
     if let Some(s) = &t.context {
-        check_no_envelope_leak("context", s).map_err(tool_err)?;
+        check_persisted_string("context", s).map_err(tool_err)?;
     }
     if let Some(s) = &t.origin {
-        check_no_envelope_leak("origin", s).map_err(tool_err)?;
+        check_persisted_string("origin", s).map_err(tool_err)?;
     }
     if let Some(items) = &t.acceptance {
         for (i, s) in items.iter().enumerate() {
-            check_no_envelope_leak(&format!("acceptance[{i}]"), s).map_err(tool_err)?;
+            check_persisted_string(&format!("acceptance[{i}]"), s).map_err(tool_err)?;
         }
     }
     if let Some(items) = &t.tags {
         for (i, s) in items.iter().enumerate() {
-            check_no_envelope_leak(&format!("tags[{i}]"), s).map_err(tool_err)?;
+            check_persisted_string(&format!("tags[{i}]"), s).map_err(tool_err)?;
         }
     }
     if let Some(items) = &t.depends_on {
         for (i, s) in items.iter().enumerate() {
-            check_no_envelope_leak(&format!("depends_on[{i}]"), s).map_err(tool_err)?;
+            check_explicit_target_id(&format!("depends_on[{i}]"), s).map_err(tool_err)?;
         }
     }
     if let Some(items) = &t.blocks {
         for (i, s) in items.iter().enumerate() {
-            check_no_envelope_leak(&format!("blocks[{i}]"), s).map_err(tool_err)?;
+            check_explicit_target_id(&format!("blocks[{i}]"), s).map_err(tool_err)?;
         }
     }
 
@@ -393,12 +442,23 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
 
     let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
         // Resolve target ID. None → auto-assign a new top-level ID.
-        let (id, is_create) = match t.id.clone() {
-            Some(explicit) => {
+        let (id, is_create) = match (t.id.clone(), t.child_of.clone()) {
+            (Some(_), Some(_)) => {
+                return Err(
+                    "`id` and `child_of` are mutually exclusive — provide `id` only when the exact target ID is intentional, or omit it and set `child_of` to let Bullseye allocate the next child".to_string(),
+                );
+            }
+            (Some(explicit), None) => {
                 let exists = file.targets.contains_key(&explicit);
                 (explicit, !exists)
             }
-            None => (next_top_level_id(file, &historical), true),
+            (None, Some(parent)) => {
+                if !file.targets.contains_key(&parent) {
+                    return Err(format!("child_of parent {parent} does not exist"));
+                }
+                (ops::next_subtarget_id(file, &parent, &historical), true)
+            }
+            (None, None) => (next_top_level_id(file, &historical), true),
         };
 
         // 🎯T28: an explicit-id create that collides with a target
@@ -649,10 +709,11 @@ pub fn handle_revert(t: crate::tools::RevertTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
     ensure_mutation_allowed(&path, &t.cwd)?;
 
-    // Envelope-leak guard (🎯T20). Validate before trim/empty check
-    // so a reason that's "just a leaked tag" reports the leak (more
-    // actionable) rather than the empty-after-trim error.
-    check_no_envelope_leak("reason", &t.reason).map_err(tool_err)?;
+    // Write-boundary guards (🎯T20 / 🎯T40). Validate before
+    // trim/empty check so a reason that's "just a leaked tag" or
+    // control byte reports the actionable corruption.
+    check_explicit_target_id("id", &t.id).map_err(tool_err)?;
+    check_persisted_string("reason", &t.reason).map_err(tool_err)?;
 
     let reason = t.reason.trim().to_string();
     if reason.is_empty() {
@@ -689,10 +750,11 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
     ensure_mutation_allowed(&path, &t.cwd)?;
 
-    // Envelope-leak guard (🎯T20). Validate before trim/empty check
-    // so a reason that's "just a leaked tag" reports the leak (more
-    // actionable) rather than the empty-after-trim error.
-    check_no_envelope_leak("reason", &t.reason).map_err(tool_err)?;
+    // Write-boundary guards (🎯T20 / 🎯T40). Validate before
+    // trim/empty check so a reason that's "just a leaked tag" or
+    // control byte reports the actionable corruption.
+    check_explicit_target_id("id", &t.id).map_err(tool_err)?;
+    check_persisted_string("reason", &t.reason).map_err(tool_err)?;
 
     let reason = t.reason.trim().to_string();
     if reason.is_empty() {
@@ -763,40 +825,40 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
     ensure_mutation_allowed(&path, &t.cwd)?;
 
-    // Envelope-leak guard (🎯T20): every caller-controlled string,
-    // including those nested inside child specs, must be clean before
-    // we enter the locked mutation.
-    check_no_envelope_leak("parent", &t.parent).map_err(tool_err)?;
-    check_no_envelope_leak("mode", &t.mode).map_err(tool_err)?;
+    // Write-boundary guards (🎯T20 / 🎯T40): every caller-controlled
+    // string, including those nested inside child specs, must be clean
+    // before we enter the locked mutation.
+    check_explicit_target_id("parent", &t.parent).map_err(tool_err)?;
+    check_persisted_string("mode", &t.mode).map_err(tool_err)?;
     if let Some(s) = &t.retire_reason {
-        check_no_envelope_leak("retire_reason", s).map_err(tool_err)?;
+        check_persisted_string("retire_reason", s).map_err(tool_err)?;
     }
     if let Some(items) = &t.tail {
         for (j, s) in items.iter().enumerate() {
-            check_no_envelope_leak(&format!("tail[{j}]"), s).map_err(tool_err)?;
+            check_explicit_target_id(&format!("tail[{j}]"), s).map_err(tool_err)?;
         }
     }
     for (idx, child) in t.children.iter().enumerate() {
         if let Some(s) = &child.id {
-            check_no_envelope_leak(&format!("children[{idx}].id"), s).map_err(tool_err)?;
+            check_explicit_target_id(&format!("children[{idx}].id"), s).map_err(tool_err)?;
         }
-        check_no_envelope_leak(&format!("children[{idx}].name"), &child.name).map_err(tool_err)?;
+        check_persisted_string(&format!("children[{idx}].name"), &child.name).map_err(tool_err)?;
         for (j, a) in child.acceptance.iter().enumerate() {
-            check_no_envelope_leak(&format!("children[{idx}].acceptance[{j}]"), a)
+            check_persisted_string(&format!("children[{idx}].acceptance[{j}]"), a)
                 .map_err(tool_err)?;
         }
         if let Some(s) = &child.context {
-            check_no_envelope_leak(&format!("children[{idx}].context"), s).map_err(tool_err)?;
+            check_persisted_string(&format!("children[{idx}].context"), s).map_err(tool_err)?;
         }
         if let Some(items) = &child.tags {
             for (j, s) in items.iter().enumerate() {
-                check_no_envelope_leak(&format!("children[{idx}].tags[{j}]"), s)
+                check_persisted_string(&format!("children[{idx}].tags[{j}]"), s)
                     .map_err(tool_err)?;
             }
         }
         if let Some(items) = &child.depends_on {
             for (j, s) in items.iter().enumerate() {
-                check_no_envelope_leak(&format!("children[{idx}].depends_on[{j}]"), s)
+                check_explicit_target_id(&format!("children[{idx}].depends_on[{j}]"), s)
                     .map_err(tool_err)?;
             }
         }
@@ -1341,6 +1403,7 @@ targets:
         PutTool {
             cwd: cwd.to_string(),
             id: Some(id.to_string()),
+            child_of: None,
             name: None,
             value: None,
             cost: None,

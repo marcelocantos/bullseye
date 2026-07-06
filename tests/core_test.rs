@@ -46,6 +46,22 @@ fn validates_ok() {
 }
 
 #[test]
+fn validate_rejects_zero_valued_dotted_target_id() {
+    let mut file = load_fixture();
+    let mut target = file.targets["T2"].clone();
+    target.name = "Ambiguous zero-valued child".to_string();
+    file.targets.insert("T2.0".to_string(), target);
+
+    let errors = graph::validate(&file);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T2.0") && e.contains("final segment is zero")),
+        "expected .0 validation error, got: {errors:?}"
+    );
+}
+
+#[test]
 fn mermaid_generation() {
     let file = load_fixture();
     let diagram = graph::mermaid(&file);
@@ -1425,6 +1441,7 @@ fn put_create_without_value_cost_succeeds() {
     let result = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Repo-scope target with no portfolio metadata".to_string()),
         value: None,
         cost: None,
@@ -1461,6 +1478,128 @@ fn put_create_without_value_cost_succeeds() {
     assert!(
         value_cost_errors.is_empty(),
         "0.0 value/cost should not produce validation errors: {value_cost_errors:?}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_child_of_auto_assigns_next_child_id() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "child-of-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let result = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        child_of: Some("T1".to_string()),
+        name: Some("Child allocated by Bullseye".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect("child_of create should succeed");
+
+    let text = text_from_call_result(result);
+    assert!(
+        text.contains("🎯T1.1 "),
+        "response should return allocated child id; got: {text}"
+    );
+
+    let file = store::load(&path).unwrap();
+    assert!(file.targets.contains_key("T1.1"));
+    assert_eq!(file.targets["T1.1"].name, "Child allocated by Bullseye");
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_rejects_child_of_with_explicit_id() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _path = store::create_at(tmp.path(), Location::InRepo, "child-of-explicit-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let err = handle_put(PutTool {
+        cwd,
+        id: Some("T1.9".to_string()),
+        child_of: Some("T1".to_string()),
+        name: Some("Ambiguous child".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect_err("id + child_of must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("mutually exclusive"),
+        "error should explain id/child_of conflict: {msg}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_rejects_zero_valued_dotted_explicit_id() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _path = store::create_at(tmp.path(), Location::InRepo, "zero-id-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let err = handle_put(PutTool {
+        cwd,
+        id: Some("T1.0".to_string()),
+        child_of: None,
+        name: Some("Ambiguous zero child".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect_err("T1.0 must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("final segment is zero"),
+        "error should explain .0 ambiguity: {msg}"
     );
 
     config::set_external_root_override(None);
@@ -2761,6 +2900,7 @@ fn put_rejects_envelope_markers_in_name() {
         let result = handle_put(PutTool {
             cwd: cwd.clone(),
             id: None,
+            child_of: None,
             name: Some(format!("some {marker} name")),
             value: None,
             cost: None,
@@ -2808,6 +2948,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
     let r = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Legit name".to_string()),
         value: None,
         cost: None,
@@ -2829,6 +2970,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
     let r = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Legit name".to_string()),
         value: None,
         cost: None,
@@ -2853,6 +2995,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
     let r = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Legit name".to_string()),
         value: None,
         cost: None,
@@ -2874,6 +3017,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
     let r = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Legit name".to_string()),
         value: None,
         cost: None,
@@ -2914,6 +3058,7 @@ fn put_allows_legitimate_angle_bracket_prose() {
     let result = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Valid name with <context> reference".to_string()),
         value: None,
         cost: None,
@@ -2958,6 +3103,7 @@ fn put_file_unchanged_on_envelope_rejection() {
     let result = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Good name".to_string()),
         value: None,
         cost: None,
@@ -2979,6 +3125,89 @@ fn put_file_unchanged_on_envelope_rejection() {
     assert_eq!(
         before, after,
         "file must be unchanged when handle_put rejects an envelope marker"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_rejects_invalid_control_character_and_leaves_file_unchanged() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "control-unchanged-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let before = std::fs::read_to_string(&path).unwrap();
+
+    let result = handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        child_of: None,
+        name: Some("Good name".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["bad \u{0001} criterion".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    });
+    let err = result.expect_err("U+0001 in acceptance must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("acceptance[0]") && msg.contains("U+0001"),
+        "error must name field and control code; got: {msg}"
+    );
+
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        before, after,
+        "file must be unchanged when handle_put rejects an invalid control character"
+    );
+    store::load(&path).expect("file must remain loadable after rejected mutation");
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_allows_newline_and_tab_in_context() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _path = store::create_at(tmp.path(), Location::InRepo, "control-context-test").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let result = handle_put(PutTool {
+        cwd,
+        id: None,
+        child_of: None,
+        name: Some("Context can have whitespace controls".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["done".to_string()]),
+        context: Some("line one\n\tline two".to_string()),
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    });
+    assert!(
+        result.is_ok(),
+        "newline and tab should remain valid persisted prose: {result:?}"
     );
 
     config::set_external_root_override(None);
@@ -3466,6 +3695,7 @@ fn t24_mutation_refused_in_submodule_replica() {
     let result = handle_put(PutTool {
         cwd: submodule.to_string_lossy().to_string(),
         id: Some("T1".to_string()),
+        child_of: None,
         name: Some("Renamed via submodule".to_string()),
         value: None,
         cost: None,
@@ -3547,6 +3777,7 @@ fn t24_mutation_refused_in_detached_head() {
     let result = handle_put(PutTool {
         cwd: repo.to_string_lossy().to_string(),
         id: Some("T1".to_string()),
+        child_of: None,
         name: Some("Renamed via detached HEAD".to_string()),
         value: None,
         cost: None,
@@ -4243,6 +4474,7 @@ fn reshape_fanout_insertion_above_existing_node_via_blocks() {
     let result = handle_put(PutTool {
         cwd,
         id: None,
+        child_of: None,
         name: Some("Gate above T2 and T3".to_string()),
         value: None,
         cost: None,
@@ -4296,6 +4528,7 @@ fn reshape_chain_extension_via_depends_on_and_blocks() {
     handle_put(PutTool {
         cwd,
         id: None,
+        child_of: None,
         name: Some("Mid-chain step".to_string()),
         value: None,
         cost: None,
@@ -4402,6 +4635,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
     handle_put(PutTool {
         cwd,
         id: Some("G".to_string()),
+        child_of: None,
         name: Some("Choke-point gate".to_string()),
         value: None,
         cost: None,
@@ -4580,6 +4814,7 @@ fn id_alloc_put_skips_branched_ids() {
     let result = handle_put(PutTool {
         cwd: cwd.clone(),
         id: None,
+        child_of: None,
         name: Some("Master's new target".to_string()),
         value: None,
         cost: None,
@@ -4638,6 +4873,7 @@ fn id_alloc_explicit_collision_with_branched_id_is_rejected() {
     let err = handle_put(PutTool {
         cwd,
         id: Some("T2".to_string()),
+        child_of: None,
         name: Some("Trying to re-use a branched ID".to_string()),
         value: None,
         cost: None,

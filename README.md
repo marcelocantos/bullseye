@@ -159,7 +159,7 @@ Bullseye exposes 17 MCP tools. All target-operating tools accept a
 |------|-------------|
 | `bullseye_list` | List targets (active/achieved/all) |
 | `bullseye_get` | Get a single target by ID with full detail |
-| `bullseye_put` | Upsert a target — create (auto- or explicit ID) or patch in one call. Rejects content patches on achieved targets unless re-opened in the same call. |
+| `bullseye_put` | Upsert a target — create a top-level target with an auto ID, create a child with `child_of`, or patch an existing target. Explicit IDs are for intentional placement only; `.0` child IDs are rejected. Rejects content patches on achieved targets unless re-opened in the same call. |
 | `bullseye_retire` | Mark a target achieved |
 | `bullseye_revert` | Move a target from achieved back to converging (e.g. a regression proves the achievement was premature). Clears the achieved date and appends a timestamped revert note to the target's context. |
 | `bullseye_set_aside` | Set a target aside (parked / deferred / wont-fix) with a required rationale. Distinct from retirement: the target was not delivered, but it's removed from the active set and unblocks dependents the same way an achieved target does. |
