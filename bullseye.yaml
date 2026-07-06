@@ -1122,7 +1122,7 @@ targets:
     achieved: 2026-06-22
   T39:
     name: Bullseye owns target ID allocation and hierarchy conventions
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1137,6 +1137,7 @@ targets:
       Keep the useful Claude-style hierarchy, where an agent can say "this target has these child targets" and Bullseye renders them as T4.1, T4.2, T4.3. Drop the brittle part, where the agent picks those exact numbers. The caller should provide semantic intent such as "new top-level target" or "new child of T4"; Bullseye should allocate the next canonical ID, validate any explicit ID supplied by humans or migration tools, and return the assigned ID to the caller.
     origin: claudia target-graph cleanup 2026-07-06
     discovered: 2026-07-06
+    achieved: 2026-07-06
   T4:
     name: Dynamic session startup context
     status: achieved
@@ -1195,7 +1196,7 @@ targets:
     achieved: 2026-04-10
   T40:
     name: Bullseye rejects or escapes control characters before writing target YAML
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1210,6 +1211,7 @@ targets:
     - validation
     origin: Codex T39 corruption investigation 2026-07-06
     discovered: 2026-07-06
+    achieved: 2026-07-06
   T41:
     name: Agents mutate targets only through Bullseye tools unless the user explicitly permits direct file edits
     status: identified
