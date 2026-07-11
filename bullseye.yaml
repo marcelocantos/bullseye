@@ -1369,9 +1369,10 @@ targets:
     achieved: 2026-07-11
   T47:
     name: Cold cargo builds do not enable tokio features solely because rust-mcp-sdk forces features=["full"]
-    status: identified
+    status: achieved
     value: 5.0
     cost: 5.0
+    actual_cost: 5.0
     acceptance:
     - rust-mcp-sdk (or a pinned fork/patch used by bullseye) no longer enables tokio feature "full" for the stdio server path; cargo tree -i tokio -e features for bullseye shows only features required by the MCP stdio server plus bullseye's own macros/rt-multi-thread/sync/time/io-util
     - Bullseye's Cargo.toml continues to list a minimal tokio feature set (not full); after the SDK change, a clean cargo build --timings shows tokio unit duration reduced versus the pre-change baseline recorded in docs/build-perf notes or the PR description
@@ -1384,11 +1385,13 @@ targets:
     - upstream
     origin: manual
     discovered: 2026-07-11
+    achieved: 2026-07-11
   T48:
     name: Local clean builds can skip compiling bundled SQLite when priorities/SQLite work is not needed
-    status: identified
+    status: achieved
     value: 3.0
     cost: 5.0
+    actual_cost: 3.0
     acceptance:
     - rusqlite/libsqlite3-sys bundled C compile is behind an explicit cargo feature (e.g. sqlite or priorities) that remains enabled by default for release and Homebrew builds
     - A documented local profile or feature inversion exists so `cargo build --no-default-features` (or equivalent) produces a working MCP core without compiling libsqlite3-sys, and cargo build --timings on that path shows libsqlite3-sys absent or not on the critical path
@@ -1401,11 +1404,13 @@ targets:
     - features
     origin: manual
     discovered: 2026-07-11
+    achieved: 2026-07-11
   T49:
     name: Build-perf tooling beyond cargo defaults is adopted only when measured thresholds are crossed
-    status: identified
+    status: achieved
     value: 2.0
     cost: 2.0
+    actual_cost: 1.0
     acceptance:
     - 'docs/build-perf (or STABILITY/agents-guide note) records adoption thresholds: e.g. sccache when target/ is wiped often or multi-machine caches matter; faster linker (mold/lld) when bin link regularly exceeds ~2s; cargo-nextest when test wall time dominates edit loops; workspace crate split when single-crate incremental after a typical edit exceeds ~3–5s'
     - No sccache/mold/nextest/workspace split is required for the default contributor path until those thresholds are measured and met
@@ -1417,6 +1422,7 @@ targets:
     - policy
     origin: manual
     discovered: 2026-07-11
+    achieved: 2026-07-11
   T5:
     name: Migration from markdown targets to bullseye
     status: achieved
