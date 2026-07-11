@@ -996,7 +996,7 @@ targets:
     achieved: 2026-06-20
   T31:
     name: A Fly-hosted sqlpipe Master ingests GitHub App issue webhooks into per-repo SQLite tables
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1005,7 +1005,10 @@ targets:
     - 'Upsert is idempotent: redelivery of the same event produces no duplicate rows.'
     - The table is a sqlpipe Master (changeset tracking + convergence) ready to serve Replicas.
     - A GitHub backfill poll on cold start reconstructs state if the Master DB volume is lost (the single place a reconcile-poll lives).
-    context: 'Stage 1 of the two-stage GitHub-issues integration (Fly Master → localhost Replica). Per-repo table partitioning is a hard requirement, not a convenience: it lets per-user authorization happen at sqlpipe''s table-ownership granularity, inside the convergence boundary (see the auth target). HOME REPO TBD — this is a separate sqlpipe-native (Go/C++) service, likely its own repo; captured here to keep the integration design coherent until that repo exists, then relocate. The same GitHub App used for user auth owns this webhook (App identity + webhook secret).'
+    context: |-
+      Stage 1 of the two-stage GitHub-issues integration (Fly Master → localhost Replica). Per-repo table partitioning is a hard requirement, not a convenience: it lets per-user authorization happen at sqlpipe's table-ownership granularity, inside the convergence boundary (see the auth target). HOME REPO: https://github.com/marcelocantos/issuepipe (local ~/work/github.com/marcelocantos/issuepipe) — sqlpipe-native Go service. The same GitHub App used for user auth owns this webhook (App identity + webhook secret).
+
+      Progress 2026-07-11: Scaffolded issuepipe; deployed to https://issuepipe.fly.dev (Fly app issuepipe, volume issuepipe_data, region syd). Live checks: GET /health → 200; POST /webhook/github with valid X-Hub-Signature-256 ping → 200; invalid signature → 401. Repo webhook installed on marcelocantos/issuepipe (issues+ping). GITHUB_WEBHOOK_SECRET is a Fly secret (not in git). Still remaining for full T31 acceptance: promote from repo webhook to the integration GitHub App (shared with T32 auth), confirm per-repo Master volume persistence under real GH deliveries, and cold-start backfill with installation tokens (not PAT-only).
     origin: manual
     discovered: 2026-06-20
   T32:
