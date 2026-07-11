@@ -13,6 +13,7 @@ use rust_mcp_sdk::schema::{
     CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, RpcError,
 };
 
+use crate::api;
 use crate::config::{self, LOCATION_PROMPT, Location};
 use crate::git_commit;
 use crate::github;
@@ -52,6 +53,12 @@ impl ServerHandler for TargetHandler {
         let tool: TargetTools = TargetTools::try_from(params)?;
 
         match tool {
+            // Core surface (🎯T45)
+            TargetTools::OpenTool(t) => handle_open(t),
+            TargetTools::QueryTool(t) => handle_query(t),
+            TargetTools::CommitTool(t) => handle_commit(t),
+            TargetTools::PlanChecksTool(t) => handle_plan_checks(t),
+            // Compatibility shims + extended tools
             TargetTools::ListTool(t) => handle_list(t),
             TargetTools::GetTool(t) => handle_get(t),
             TargetTools::PutTool(t) => handle_put(t),
@@ -82,12 +89,39 @@ fn text_result(text: String) -> ToolResult {
     Ok(CallToolResult::text_content(vec![text.into()]))
 }
 
+/// Prefer coded errors so agents can branch on `code=` without scraping.
 fn tool_err(msg: impl Into<String>) -> CallToolError {
-    CallToolError::from_message(msg)
+    let msg = msg.into();
+    if msg.starts_with("code=") {
+        return CallToolError::from_message(msg);
+    }
+    let code = api::classify_message(&msg);
+    CallToolError::from_message(api::format_error(code, msg))
 }
 
 fn err(msg: impl Into<String>) -> ToolResult {
     Err(tool_err(msg))
+}
+
+fn coded_err(code: api::ErrorCode, msg: impl Into<String>) -> ToolResult {
+    Err(CallToolError::from_message(api::format_error(
+        code,
+        msg.into(),
+    )))
+}
+
+/// Mutation success envelope: structured header + human body + frontier.
+fn mutation_text(
+    path: &Path,
+    op: &str,
+    ids: &[String],
+    changed: &[String],
+    body: String,
+) -> ToolResult {
+    let frontier = api::frontier_ids_from_path(path);
+    text_result(api::format_mutation_result(
+        op, ids, changed, &frontier, path, &body,
+    ))
 }
 
 /// Build [`github::GithubArgs`] from the MCP tool params. `pull_only` /
@@ -284,6 +318,212 @@ fn ensure_mutation_allowed(targets_path: &Path, cwd: &str) -> Result<(), CallToo
     repo_guard::check_mutation_allowed(repo_root)
         .map_err(|guard| tool_err(guard.message(Path::new(cwd))))
 }
+
+// ─── Core surface (🎯T45) ─────────────────────────────────────────────
+
+/// Discover / init / session snapshot.
+pub fn handle_open(t: crate::tools::OpenTool) -> ToolResult {
+    let dir = Path::new(&t.cwd);
+    if store::discover_anywhere(dir).is_some() {
+        return handle_startup_context(crate::tools::StartupContextTool {
+            cwd: t.cwd,
+            recent_days: t.recent_days,
+        });
+    }
+    if let Some(loc) = t.location.as_deref() {
+        handle_init(crate::tools::InitTool {
+            cwd: t.cwd.clone(),
+            location: loc.to_string(),
+            project_name: t.project_name,
+        })?;
+        return handle_startup_context(crate::tools::StartupContextTool {
+            cwd: t.cwd,
+            recent_days: t.recent_days,
+        });
+    }
+    coded_err(api::ErrorCode::NotInitialized, no_targets_file_message(dir))
+}
+
+/// Unified read path.
+pub fn handle_query(t: crate::tools::QueryTool) -> ToolResult {
+    let view = t.view.as_deref().unwrap_or("context");
+    match view {
+        "context" => handle_startup_context(crate::tools::StartupContextTool {
+            cwd: t.cwd,
+            recent_days: t.recent_days,
+        }),
+        "frontier" => handle_frontier(crate::tools::FrontierTool { cwd: t.cwd }),
+        "target" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "view=target requires `id`",
+                ))
+            })?;
+            handle_get(crate::tools::GetTool { cwd: t.cwd, id })
+        }
+        "list" => handle_list(crate::tools::ListTool {
+            cwd: t.cwd,
+            filter: t.filter.unwrap_or_else(|| "active".to_string()),
+        }),
+        "summary" => handle_summary(crate::tools::SummaryTool {
+            cwd: t.cwd,
+            momentum: t.momentum,
+            frontier_details: t.frontier_details,
+        }),
+        "graph" => handle_graph(crate::tools::GraphTool { cwd: t.cwd }),
+        "validate" => handle_validate(crate::tools::ValidateTool { cwd: t.cwd }),
+        other => coded_err(
+            api::ErrorCode::InvalidArgs,
+            format!(
+                "unknown view: {other} (use context, frontier, target, list, summary, graph, validate)"
+            ),
+        ),
+    }
+}
+
+/// Unified mutation path.
+pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
+    match t.op.as_str() {
+        "track" => handle_put(crate::tools::PutTool {
+            cwd: t.cwd,
+            id: t.id,
+            child_of: t.child_of,
+            name: t.name,
+            value: t.value,
+            cost: t.cost,
+            acceptance: t.acceptance,
+            context: t.context,
+            status: t.status,
+            depends_on: t.depends_on,
+            blocks: t.blocks,
+            origin: t.origin,
+            tags: t.tags,
+        }),
+        "block" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=block requires `id` (the blocking target)",
+                ))
+            })?;
+            let blocks = t.blocks.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=block requires `blocks` (targets that gain this dependency)",
+                ))
+            })?;
+            handle_put(crate::tools::PutTool {
+                cwd: t.cwd,
+                id: Some(id),
+                child_of: None,
+                name: None,
+                value: None,
+                cost: None,
+                acceptance: None,
+                context: None,
+                status: None,
+                depends_on: None,
+                blocks: Some(blocks),
+                origin: None,
+                tags: None,
+            })
+        }
+        "split" => {
+            let parent = t.parent.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=split requires `parent`",
+                ))
+            })?;
+            let mode = t.mode.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=split requires `mode` (add, aggregate, retire)",
+                ))
+            })?;
+            let children = t.children.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=split requires non-empty `children`",
+                ))
+            })?;
+            handle_subdivide(crate::tools::SubdivideTool {
+                cwd: t.cwd,
+                parent,
+                mode,
+                children,
+                retire_reason: t.retire_reason,
+                tail: t.tail,
+            })
+        }
+        "achieve" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=achieve requires `id`",
+                ))
+            })?;
+            handle_retire(crate::tools::RetireTool {
+                cwd: t.cwd,
+                id,
+                actual_cost: t.actual_cost,
+            })
+        }
+        "defer" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=defer requires `id`",
+                ))
+            })?;
+            let reason = t.reason.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=defer requires non-empty `reason`",
+                ))
+            })?;
+            handle_set_aside(crate::tools::SetAsideTool {
+                cwd: t.cwd,
+                id,
+                reason,
+            })
+        }
+        "reopen" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=reopen requires `id`",
+                ))
+            })?;
+            let reason = t.reason.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=reopen requires non-empty `reason`",
+                ))
+            })?;
+            handle_revert(crate::tools::RevertTool {
+                cwd: t.cwd,
+                id,
+                reason,
+            })
+        }
+        other => coded_err(
+            api::ErrorCode::InvalidArgs,
+            format!("unknown op: {other} (use track, block, split, achieve, defer, reopen)"),
+        ),
+    }
+}
+
+/// Plan-only check expansion (rename of verify semantics).
+pub fn handle_plan_checks(t: crate::tools::PlanChecksTool) -> ToolResult {
+    handle_verify(crate::tools::VerifyTool {
+        cwd: t.cwd,
+        id: t.id,
+    })
+}
+
+// ─── Compatibility shims & extended tools ─────────────────────────────
 
 pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
@@ -653,7 +893,15 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         ));
     }
     out.push_str(&format!("\nFile: {}", path.display()));
-    text_result(out)
+    let mut changed = vec![outcome.id.clone()];
+    changed.extend(outcome.injected_into.iter().cloned());
+    mutation_text(
+        &path,
+        "track",
+        std::slice::from_ref(&outcome.id),
+        &changed,
+        out,
+    )
 }
 
 pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
@@ -694,7 +942,13 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             if let Some(actual) = t.actual_cost {
                 out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
             }
-            text_result(out)
+            mutation_text(
+                &path,
+                "achieve",
+                std::slice::from_ref(&t.id),
+                std::slice::from_ref(&t.id),
+                out,
+            )
         }
     }
 }
@@ -732,12 +986,19 @@ pub fn handle_revert(t: crate::tools::RevertTool) -> ToolResult {
 
     git_commit::auto_commit_yaml(&path);
 
-    text_result(format!(
+    let body = format!(
         "Reverted 🎯{} \"{}\" — status moved Achieved → Converging.\nReason: {reason}\nFile: {}",
         t.id,
         result.name,
         path.display(),
-    ))
+    );
+    mutation_text(
+        &path,
+        "reopen",
+        std::slice::from_ref(&t.id),
+        std::slice::from_ref(&t.id),
+        body,
+    )
 }
 
 /// Set a target aside (🎯T18). Distinct from retirement: the target
@@ -814,7 +1075,13 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
                 "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
                 id = t.id,
             );
-            text_result(out)
+            mutation_text(
+                &path,
+                "defer",
+                std::slice::from_ref(&t.id),
+                std::slice::from_ref(&t.id),
+                out,
+            )
         }
     }
 }
@@ -934,7 +1201,12 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
         out.push_str(&format!("\nParent status: {new_status}"));
     }
     out.push_str(&format!("\nFile: {}", path.display()));
-    text_result(out)
+    let mut ids = result.created_children.clone();
+    ids.insert(0, result.parent_id.clone());
+    let mut changed = result.created_children.clone();
+    changed.push(result.parent_id.clone());
+    changed.extend(result.rewired_dependents.iter().cloned());
+    mutation_text(&path, "split", &ids, &changed, out)
 }
 
 fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {

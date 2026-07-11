@@ -136,23 +136,17 @@ pub struct Target {
     /// Current status.
     pub status: Status,
 
-    /// User-scored value on Fibonacci scale (1, 2, 3, 5, 8, 13, 20).
-    /// Required for leaf targets. Interior targets derive value from
-    /// the graph, but the file stores the computed result.
+    /// Portfolio-scope value on Fibonacci scale (1, 2, 3, 5, 8, 13, 20).
     ///
-    /// **Portfolio-scope input only.** Value is consumed by
-    /// cross-repo ordering in [`crate::portfolio`] (the weekly-plus
-    /// horizon where human attention is the scarce resource). It is
-    /// *not* consumed by repo-level frontier ordering — inside a
-    /// repo, the frontier is the parallelisable set; ordering is
-    /// derived from `depends_on` shape (unblocking fanout) alone.
+    /// **Optional.** Omit / store `0.0` for unscored repo-scope work.
+    /// Consumed only by cross-repo portfolio WSJF ranking — *not* by
+    /// repo-level frontier ordering (which uses `depends_on` fanout).
     pub value: f64,
 
-    /// Agent-estimated cost on Fibonacci scale.
+    /// Portfolio-scope cost on Fibonacci scale.
     ///
-    /// **Portfolio-scope input only.** Same scoping rule as
-    /// [`Target::value`]: cost feeds cross-repo prioritisation but
-    /// does not drive repo-level frontier ordering.
+    /// **Optional.** Same scoping rule as [`Target::value`]: omit or
+    /// `0.0` when unscored; portfolio ranking skips zero-cost terms.
     pub cost: f64,
 
     /// Actual cost recorded on retirement, for calibration.

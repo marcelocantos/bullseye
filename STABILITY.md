@@ -9,8 +9,25 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T39/T40 allocator and YAML write-boundary release. Changes affecting the
+Snapshot as of the 🎯T45 four-tool core ledger surface. Changes affecting the
 interaction surface, newest first:
+
+- **Four-tool core intent-ledger API** (🎯T45). Day-to-day agent surface is
+  `bullseye_open`, `bullseye_query`, `bullseye_commit`, and
+  `bullseye_plan_checks`. `commit` ops: `track | block | split | achieve |
+  defer | reopen`. `query` views: `context | frontier | target | list |
+  summary | graph | validate` (default `context`). Successful mutations
+  return a structured text envelope (`ok`, `op`, `ids`, `changed`,
+  `frontier`, `file`) plus the human summary; errors include stable
+  `code=` tokens (`not_initialized`, `conflict`, `immutable_achieved`,
+  `id_reserved`, `validation`, `unsafe_repo`, `not_found`,
+  `invalid_args`). Legacy tools remain as shims over the same handlers.
+  Portfolio / github / priorities / convergence / import / resolve are
+  documented as **extended (L2)**. CLI twins: `bullseye open|query|commit|
+  plan-checks`. Contract: `docs/api-v1-core.md`. Server instructions and
+  default agents-guide snippet treat bullseye as a ledger (user intent
+  overrides frontier; boundary commits), not a planning gate. Settling
+  clock resets at the release that ships this surface.
 
 - **Bullseye owns target ID allocation and rejects unsafe target text**
   (🎯T39, 🎯T40). `bullseye_put` now accepts `child_of` for

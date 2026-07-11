@@ -4,10 +4,193 @@
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::tool_box;
 
+// ─── Core surface (🎯T45) ─────────────────────────────────────────────
+// See docs/api-v1-core.md. Prefer these four tools for day-to-day work.
+
+/// Discover / init / session snapshot — preferred first call in a project.
+#[mcp_tool(
+    name = "bullseye_open",
+    description = "Core: open the project's intent ledger. If bullseye.yaml exists, returns \
+        the session snapshot (active count, frontier, recent achievements). If missing and \
+        `location` is set (in_repo|external), creates a starter file then returns context. \
+        If missing and location is omitted, returns code=not_initialized with the location \
+        prompt. Prefer this over separate init + startup_context calls."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct OpenTool {
+    /// Working directory to discover bullseye.yaml from.
+    pub cwd: String,
+
+    /// When no file exists: \"in_repo\" or \"external\". Omit to only probe.
+    #[serde(default)]
+    pub location: Option<String>,
+
+    /// Project name used when init creates a sample target.
+    #[serde(default)]
+    pub project_name: Option<String>,
+
+    /// Days of recently achieved targets in the context snapshot (default 14).
+    #[serde(default)]
+    pub recent_days: Option<u32>,
+}
+
+/// Unified read path for the intent ledger.
+#[mcp_tool(
+    name = "bullseye_query",
+    description = "Core: read the intent ledger. `view` selects the projection: \
+        context (default — session snapshot), frontier, target (requires id), list \
+        (optional filter), summary, graph, validate. Replaces separate list/get/\
+        frontier/summary/graph/validate/startup_context calls for new agents."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct QueryTool {
+    /// Working directory to discover bullseye.yaml from.
+    pub cwd: String,
+
+    /// Projection: context | frontier | target | list | summary | graph | validate.
+    /// Defaults to context.
+    #[serde(default)]
+    pub view: Option<String>,
+
+    /// Target ID when view=target.
+    #[serde(default)]
+    pub id: Option<String>,
+
+    /// Filter when view=list: active | achieved | set_aside | all.
+    #[serde(default)]
+    pub filter: Option<String>,
+
+    /// Recent-days window when view=context (default 14).
+    #[serde(default)]
+    pub recent_days: Option<u32>,
+
+    /// Optional momentum list when view=summary.
+    #[serde(default)]
+    pub momentum: Option<Vec<MomentumEntry>>,
+
+    /// Expand frontier details when view=summary.
+    #[serde(default)]
+    pub frontier_details: Option<bool>,
+}
+
+/// Unified mutation path for the intent ledger.
+#[mcp_tool(
+    name = "bullseye_commit",
+    description = "Core: mutate the intent ledger. `op` selects the write: \
+        track (create/patch target — name+acceptance on create; value/cost optional), \
+        block (id + blocks sugar), split (subdivide parent into children), \
+        achieve (retire), defer (set_aside with reason), reopen (revert achieved). \
+        Successful results include a structured header (ok, op, ids, changed, frontier, file). \
+        Prefer this over put/retire/set_aside/revert/subdivide for new agents. \
+        User intent overrides the frontier — commit records claims; it does not assign work."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct CommitTool {
+    /// Working directory to discover bullseye.yaml from.
+    pub cwd: String,
+
+    /// track | block | split | achieve | defer | reopen
+    pub op: String,
+
+    /// Target ID (achieve/defer/reopen/block/patch; optional on track create).
+    #[serde(default)]
+    pub id: Option<String>,
+
+    /// Parent for auto-child create on track.
+    #[serde(default)]
+    pub child_of: Option<String>,
+
+    /// Desired-state name (track create).
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Optional portfolio value (omit at repo scope).
+    #[serde(default)]
+    pub value: Option<f64>,
+
+    /// Optional portfolio cost (omit at repo scope).
+    #[serde(default)]
+    pub cost: Option<f64>,
+
+    /// Acceptance criteria (track create).
+    #[serde(default)]
+    pub acceptance: Option<Vec<String>>,
+
+    /// Context prose.
+    #[serde(default)]
+    pub context: Option<String>,
+
+    /// Status on track: identified | converging | achieved.
+    #[serde(default)]
+    pub status: Option<String>,
+
+    /// depends_on for track.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+
+    /// blocks sugar (track create or block op).
+    #[serde(default)]
+    pub blocks: Option<Vec<String>>,
+
+    /// Origin string.
+    #[serde(default)]
+    pub origin: Option<String>,
+
+    /// Tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+
+    /// Actual cost on achieve.
+    #[serde(default)]
+    pub actual_cost: Option<f64>,
+
+    /// Reason for defer / reopen.
+    #[serde(default)]
+    pub reason: Option<String>,
+
+    /// Parent ID for split.
+    #[serde(default)]
+    pub parent: Option<String>,
+
+    /// Split mode: add | aggregate | retire.
+    #[serde(default)]
+    pub mode: Option<String>,
+
+    /// Children for split.
+    #[serde(default)]
+    pub children: Option<Vec<SubdivisionChild>>,
+
+    /// Optional retire_reason for split mode=retire.
+    #[serde(default)]
+    pub retire_reason: Option<String>,
+
+    /// Optional tail child IDs for split mode=retire.
+    #[serde(default)]
+    pub tail: Option<Vec<String>>,
+}
+
+/// Emit a sawmill verification plan for a target's checks (does not run them).
+#[mcp_tool(
+    name = "bullseye_plan_checks",
+    description = "Core: build an executable verification *plan* for a target's `checks` field. \
+        Bullseye does not call sawmill — returns ordered sawmill tool invocations plus a report \
+        template. Prefer this name over bullseye_verify (shim) so agents never confuse plan with run."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct PlanChecksTool {
+    /// Working directory to discover bullseye.yaml from.
+    pub cwd: String,
+
+    /// Target ID whose checks should be planned.
+    pub id: String,
+}
+
+// ─── Compatibility shims ──────────────────────────────────────────────
+
 /// List targets with optional filtering.
 #[mcp_tool(
     name = "bullseye_list",
-    description = "List targets. Returns active targets by default."
+    description = "Shim for bullseye_query view=list. List targets. Returns active targets by default."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ListTool {
@@ -22,7 +205,7 @@ pub struct ListTool {
 /// Get a single target by ID.
 #[mcp_tool(
     name = "bullseye_get",
-    description = "Get a single target by ID (e.g., 'T1', 'T1.2'). Returns full detail including acceptance criteria and graph relationships."
+    description = "Shim for bullseye_query view=target. Get a single target by ID (e.g., 'T1', 'T1.2')."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GetTool {
@@ -49,7 +232,7 @@ pub struct GetTool {
 /// "assert" was the wrong word for it.
 #[mcp_tool(
     name = "bullseye_put",
-    description = "Upsert a target: create if the ID doesn't exist, patch if it does. \
+    description = "Shim for bullseye_commit op=track. Upsert a target: create if the ID doesn't exist, patch if it does. \
         Omit `id` to create a new target with an auto-assigned top-level ID. \
         To create a child without choosing its final number, omit `id` and set `child_of` \
         to the parent ID (e.g. `child_of: 'T4'` creates the next free `T4.N`). \
@@ -140,7 +323,7 @@ pub struct PutTool {
 /// Retire a target (move to achieved).
 #[mcp_tool(
     name = "bullseye_retire",
-    description = "Retire a target by marking it achieved with today's date. Optionally records actual cost for calibration."
+    description = "Shim for bullseye_commit op=achieve. Retire a target by marking it achieved with today's date. Optionally records actual cost for calibration."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct RetireTool {
@@ -164,7 +347,7 @@ pub struct RetireTool {
 /// See 🎯T18.
 #[mcp_tool(
     name = "bullseye_set_aside",
-    description = "Set a target aside (parked / deferred / wont_fix) with a required rationale. \
+    description = "Shim for bullseye_commit op=defer. Set a target aside (parked / deferred / wont_fix) with a required rationale. \
         The status moves to `set_aside`, the reason is recorded on the target, and the target is \
         removed from the active set / frontier — its dependents are unblocked the same way an \
         achieved target unblocks them. Use this instead of `bullseye_retire` when the target was \
@@ -190,7 +373,7 @@ pub struct SetAsideTool {
 /// Compute the frontier: unblocked targets ready for work.
 #[mcp_tool(
     name = "bullseye_frontier",
-    description = "Compute the frontier: active leaf targets with all dependencies satisfied. These are the targets that can be worked on right now, in parallel."
+    description = "Shim for bullseye_query view=frontier. Compute the frontier: active leaf targets with all dependencies satisfied."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct FrontierTool {
@@ -201,7 +384,7 @@ pub struct FrontierTool {
 /// Re-open a previously-retired target.
 #[mcp_tool(
     name = "bullseye_revert",
-    description = "Re-open a previously-retired target: status moves Achieved → Converging, the \
+    description = "Shim for bullseye_commit op=reopen. Re-open a previously-retired target: status moves Achieved → Converging, the \
         achieved date is cleared, and the supplied reason is appended to the target's context with \
         today's date so the audit trail survives in-place. Use when a retirement turns out to have \
         been wrong: regression detected, an acceptance criterion was missed, or external evidence \
@@ -227,7 +410,7 @@ pub struct RevertTool {
 /// Validate the targets file for schema conformance.
 #[mcp_tool(
     name = "bullseye_validate",
-    description = "Validate the targets file for schema conformance: ID format, references, cycles, required fields."
+    description = "Shim for bullseye_query view=validate. Validate the targets file for schema conformance."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ValidateTool {
@@ -238,7 +421,7 @@ pub struct ValidateTool {
 /// Generate a Mermaid dependency graph.
 #[mcp_tool(
     name = "bullseye_graph",
-    description = "Generate a Mermaid dependency graph of active targets showing parent/child, gating, and depends-on relationships."
+    description = "Shim for bullseye_query view=graph. Generate a Mermaid dependency graph of active targets."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GraphTool {
@@ -249,7 +432,7 @@ pub struct GraphTool {
 /// Initialise a new targets file with a starter template.
 #[mcp_tool(
     name = "bullseye_init",
-    description = "Create a starter bullseye.yaml with a sample target. \
+    description = "Shim for bullseye_open with location. Create a starter bullseye.yaml with a sample target. \
         Requires a `location` argument that is either \"in_repo\" (file is \
         committed into the repo, for repos you own where the team uses bullseye) \
         or \"external\" (file is stored in a shadow tree under \
@@ -277,7 +460,7 @@ pub struct InitTool {
 /// Import targets from a markdown file into YAML.
 #[mcp_tool(
     name = "bullseye_import",
-    description = "Import targets from a markdown file into bullseye.yaml. Parses \
+    description = "Extended (L2): Import targets from a markdown file into bullseye.yaml. Parses \
         the markdown format produced by other repos' /cv skills. Tolerant of minor \
         formatting variations. Requires `path` (the markdown source) and \
         `location` (\"in_repo\" or \"external\" — same semantics as bullseye_init). \
@@ -305,7 +488,7 @@ pub struct ImportTool {
 /// Session startup context for a project.
 #[mcp_tool(
     name = "bullseye_startup_context",
-    description = "Return a concise startup context for the current project: active target count, frontier targets ready for work, recently achieved targets, and any warnings (tunnels, validation errors). Designed for agent consumption at session start — pair with mnemo_recent_activity for full session context."
+    description = "Shim for bullseye_query view=context / bullseye_open. Return a concise startup context for the current project."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct StartupContextTool {
@@ -320,7 +503,7 @@ pub struct StartupContextTool {
 /// Cross-repo portfolio view with WSJF ranking.
 #[mcp_tool(
     name = "bullseye_portfolio",
-    description = "Discover all repos with targets under a workspace root and return a portfolio \
+    description = "Extended (L2): Discover all repos with targets under a workspace root and return a portfolio \
         summary ranked by aggregate WSJF score. Per-repo score: \
         sum(value_i / cost_i × momentum_i × enabler_boost_i) / frontier_size. \
         Enabler boost propagates downstream target value across repos via cross_enables edges. \
@@ -375,7 +558,7 @@ pub struct MomentumEntry {
 /// Consolidated status overview: grouped targets, focus-ordered frontier, blocked, stale.
 #[mcp_tool(
     name = "bullseye_summary",
-    description = "Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets ordered by focus (value × momentum), blocked targets with blockers, and stale targets with inconsistent graph state. \
+    description = "Shim for bullseye_query view=summary. Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets ordered by focus (value × momentum), blocked targets with blockers, and stale targets with inconsistent graph state. \
         Optionally accepts a `momentum` list ([{id, multiplier}, ...]) that scales each target's value before sorting the frontier; caller supplies the multipliers (e.g. from mnemo_recent_activity). Targets missing from the list default to 1.0 (no boost). \
         `frontier_details: true` expands each frontier entry with its full acceptance criteria, context, and edges — useful when you would otherwise round-trip `bullseye_get` on every frontier target. \
         Replaces multiple calls to list/frontier/validate/get for status assessment."
@@ -410,7 +593,7 @@ pub struct SummaryTool {
 /// Build an executable verification plan for a target's `checks`.
 #[mcp_tool(
     name = "bullseye_verify",
-    description = "Build an executable verification plan for a target's declared `checks`. \
+    description = "Shim for bullseye_plan_checks. Build an executable verification plan for a target's declared `checks`. \
         Bullseye does not call sawmill itself — MCP servers can't call each other — so this tool \
         returns a *plan*: an ordered list of sawmill tool invocations (check_conventions, query, \
         check_invariants) plus a report template the caller populates with pass/fail outcomes and \
@@ -430,7 +613,7 @@ pub struct VerifyTool {
 /// End-to-end convergence evaluation: invariants + unreleased fixes + targets + recommendation.
 #[mcp_tool(
     name = "bullseye_convergence",
-    description = "Answer \"what's the next most-valuable thing to work on?\" in a single tool call. \
+    description = "Extended (L2): Answer \"what's the next most-valuable thing to work on?\" in a single tool call. \
         Runs the project's `make bullseye` (or `mk bullseye`) rule to check standing invariants, \
         scans git for unreleased bug-fix commits since the last tag, emits the full target summary \
         with frontier details inline, and computes a deterministic next-action recommendation \
@@ -493,7 +676,7 @@ pub struct SubdivisionChild {
 /// with one of three dependent-rewiring modes.
 #[mcp_tool(
     name = "bullseye_subdivide",
-    description = "Split a parent target into one or more children in a single call, rewiring \
+    description = "Shim for bullseye_commit op=split. Split a parent target into one or more children in a single call, rewiring \
         the parent's existing dependents according to `mode`. Use this when work inside a target \
         proves bigger than scoped and you want to spawn sub-work without losing the dependency \
         edges that point at the parent. \
@@ -570,7 +753,7 @@ pub struct SubdivideTool {
 /// Resolve a partial repo reference to an absolute repo root (🎯T29).
 #[mcp_tool(
     name = "bullseye_resolve",
-    description = "Resolve a partial repo reference to an absolute path so subsequent tool calls \
+    description = "Extended (L2): Resolve a partial repo reference to an absolute path so subsequent tool calls \
         can pass it as `cwd` without the agent eyeballing portfolio output. \
         \
         Accepts: a leaf name (e.g. `spyder`), an `org/repo` fragment (e.g. \
@@ -615,7 +798,7 @@ fn default_max_depth() -> u32 {
 /// from both surfaces.
 #[mcp_tool(
     name = "bullseye_github_sync",
-    description = "Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the gh CLI (authentication is the caller's existing gh session — no token is stored). Open issues become GH<n> targets (the issue number is the ID); achieving/setting-aside/reverting a mirrored target closes/reopens its issue. The MCP twin of `bullseye github sync`."
+    description = "Extended (L2): Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the gh CLI (authentication is the caller's existing gh session — no token is stored). Open issues become GH<n> targets (the issue number is the ID); achieving/setting-aside/reverting a mirrored target closes/reopens its issue. The MCP twin of `bullseye github sync`."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GithubSyncTool {
@@ -652,7 +835,7 @@ pub struct GithubSyncTool {
 /// subcommand.
 #[mcp_tool(
     name = "bullseye_sync_priorities",
-    description = "Scan the workspace for repos with bullseye.yaml, compute the portfolio frontier, and upsert each frontier target into a SQLite `targets_priorities` table (stale rows pruned in the same transaction). The MCP twin of `bullseye sync-priorities`."
+    description = "Extended (L2): Scan the workspace for repos with bullseye.yaml, compute the portfolio frontier, and upsert each frontier target into a SQLite `targets_priorities` table (stale rows pruned in the same transaction). The MCP twin of `bullseye sync-priorities`."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct SyncPrioritiesTool {
@@ -676,6 +859,12 @@ pub struct SyncPrioritiesTool {
 tool_box!(
     TargetTools,
     [
+        // Core (🎯T45)
+        OpenTool,
+        QueryTool,
+        CommitTool,
+        PlanChecksTool,
+        // Compatibility shims
         ListTool,
         GetTool,
         PutTool,
@@ -687,12 +876,13 @@ tool_box!(
         ValidateTool,
         GraphTool,
         InitTool,
-        ImportTool,
-        ResolveTool,
         StartupContextTool,
-        PortfolioTool,
         SummaryTool,
         VerifyTool,
+        // Extended (L2)
+        ImportTool,
+        ResolveTool,
+        PortfolioTool,
         ConvergenceTool,
         GithubSyncTool,
         SyncPrioritiesTool
