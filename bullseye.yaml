@@ -1242,9 +1242,10 @@ targets:
     discovered: 2026-07-06
   T42:
     name: The unreleased-fixes detector ignores fix commits that don't change the shipped surface
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - 'A repo can declare its shipped surface in bullseye.yaml (e.g. `release_surface: [dist/, src/, include/]` glob list); absent a declaration, current behaviour is unchanged.'
     - '`bullseye_convergence` excludes from `## Unreleased fixes` (or annotates as not-user-visible) any fix commit whose cumulative diff since the last tag does not intersect the declared surface, and the `## Next action` does not recommend `/release` when the surface diff since the last tag is empty.'
@@ -1257,11 +1258,13 @@ targets:
     - heuristic
     origin: manual
     discovered: 2026-07-06
+    achieved: 2026-07-11
   T43:
     name: A target can be marked owned-by-another and excluded from an owner's frontier without being set aside
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - A target carries an explicit ownership/exclusion disposition distinct from both status and set_aside; applying it removes the target from *this* owner's frontier and from bullseye_convergence's Next-action recommendation, while leaving its status (identified/converging) unchanged.
     - Unlike set_aside and achievement, the ownership exclusion does NOT unblock the target's dependents — a not-mine foundation still blocks the sub-targets that need its work, so excluding one target never leaks its dependents into the frontier.
@@ -1292,11 +1295,13 @@ targets:
     - ux
     origin: Discovered during mnemo T64.2 /cv session
     discovered: 2026-07-06
+    achieved: 2026-07-11
   T44:
     name: Agents never predict an allocated target ID; they refer to a newly created target only by the ID returned in the tool result
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 1.0
     acceptance:
     - The bullseye_put tool description (src/tools.rs) and docs/agents-guide.md state that on create the assigned ID is knowable ONLY from the tool's return value, and that any ID computed before the call (e.g. read-max-plus-one) is stale by definition under concurrency (TOCTOU) and must not be used.
     - Guidance explicitly instructs callers not to pre-read the target set to predict the next ID for a create, and to reference the new target solely by the returned ID.
@@ -1311,6 +1316,7 @@ targets:
     - agent-behavior
     origin: manual
     discovered: 2026-07-06
+    achieved: 2026-07-11
   T45:
     name: Bullseye is a four-tool intent ledger (open / query / commit / plan_checks) with optional portfolio fields, demoted integrations, and agent defaults that never treat the graph as a planning gate
     status: achieved
@@ -1341,9 +1347,10 @@ targets:
     achieved: 2026-07-11
   T46:
     name: Unreleased-fix /release recommendation is driven by profile-template release policy, not hard-coded product flavors
-    status: identified
+    status: achieved
     value: 5.0
     cost: 5.0
+    actual_cost: 5.0
     acceptance:
     - 'bullseye_convergence resolves a project profile name from AGENTS.md/CLAUDE.md (e.g. `profile: game`) and loads a profile template YAML from a documented search path (e.g. $BULLSEYE_PROFILES_DIR, then ~/.claude/gates/<profile>.yaml); it never branches on the string "game" or other product-flavor names in code.'
     - 'Profile templates may declare a `release:` block with a small vocabulary bullseye understands — at minimum `unreleased_fixes: recommend_ship | informational` (and optionally `channel: tag | store | package | none` for wording). Unknown or missing profile / missing `release` block defaults to current behaviour (`recommend_ship`).'
@@ -1359,6 +1366,7 @@ targets:
     - policy
     origin: stock-car-racing /cv session 2026-07-11
     discovered: 2026-07-11
+    achieved: 2026-07-11
   T47:
     name: Cold cargo builds do not enable tokio features solely because rust-mcp-sdk forces features=["full"]
     status: identified
