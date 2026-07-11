@@ -9,8 +9,24 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of the 🎯T45 four-tool core ledger surface. Changes affecting the
-interaction surface, newest first:
+Snapshot as of 🎯T42/T43/T44/T46 (release surface, ownership, ID guidance,
+profile release policy). Changes affecting the interaction surface, newest first:
+
+- **Ownership exclusion, release surface, and profile release policy**
+  (🎯T42, 🎯T43, 🎯T44, 🎯T46). New optional top-level `release_surface`
+  list on `bullseye.yaml` filters which unreleased fix commits block
+  `/release` recommendations (path-prefix match; absent = all fixes
+  count). New optional `owned_by: { owner, reason }` on targets
+  excludes them from the local frontier **without** unblocking
+  dependents; `bullseye_commit` ops `assign` / `unassign` set and clear
+  it; summary adds `## Owned elsewhere`. Create guidance (tool
+  descriptions + agents-guide) states allocated IDs are knowable only
+  from the mutation return value (TOCTOU). Convergence loads optional
+  `profile:` from AGENTS.md/CLAUDE.md and a template
+  (`$BULLSEYE_PROFILES_DIR` then `~/.claude/gates/<profile>.yaml`) with
+  `release.unreleased_fixes: recommend_ship | informational` and
+  optional `channel` — no hard-coded flavor strings. Settling clock
+  resets at the release shipping this surface.
 
 - **Four-tool core intent-ledger API** (🎯T45). Day-to-day agent surface is
   `bullseye_open`, `bullseye_query`, `bullseye_commit`, and

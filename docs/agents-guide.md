@@ -668,12 +668,22 @@ which is a content edit in disguise). See 🎯T8.
 Targets use `T<N>` for top-level targets (e.g., `T1`, `T2`) and
 `T<N>.<M>` for sub-targets (e.g., `T1.2`).
 
-Auto-assignment (omit `id` on `bullseye_put` or `bullseye_subdivide`
-children) picks the next free slot across **the live file *and* git
-history of `bullseye.yaml` on every branch and remote the local clone
-knows about**, so parallel sessions on different branches don't both
-land on the same number. IDs are never recycled: a target that once
-existed on any branch — even one that has since been deleted from
+**Never predict an allocated ID.** On create (`bullseye_commit`
+`op=track` or `bullseye_put` without `id`), the assigned ID is knowable
+**only** from the tool result — the structured `ids:` header and the
+`Created 🎯…` line. Do **not** pre-read `bullseye.yaml` (or scan max
+`T*` + 1) to guess the next number. That read-then-act is a TOCTOU race:
+any concurrent session, git-history-reserved slot, or portfolio write
+between your read and Bullseye's locked allocation makes a predicted ID
+diverge from the one written, while the file stays correct and you never
+notice. Refer to the new target solely by the returned ID (🎯T44).
+
+Auto-assignment (omit `id` on `bullseye_put` / `bullseye_commit` track or
+`bullseye_subdivide` children) picks the next free slot across **the live
+file *and* git history of `bullseye.yaml` on every branch and remote the
+local clone knows about**, so parallel sessions on different branches
+don't both land on the same number. IDs are never recycled: a target that
+once existed on any branch — even one that has since been deleted from
 the current tree — stays reserved.
 
 Explicit `id` values are checked against the same union. If you ask
@@ -694,8 +704,65 @@ allocation.
 `identified` → `converging` → `achieved`
 
 To undo an achievement (e.g. a regression shows it was premature),
-use `bullseye_revert` — it moves the target back to `converging` and
-appends a timestamped revert note to its context.
+use `bullseye_revert` / `bullseye_commit op=reopen` — it moves the
+target back to `converging` and appends a timestamped revert note to
+its context.
+
+### Ownership exclusion vs set_aside (🎯T43)
+
+When **someone else is driving** a target (collaborator PR, other
+agent), use **ownership exclusion** — not `set_aside`:
+
+| | `owned_by` (assign) | `set_aside` (defer) |
+|--|---------------------|---------------------|
+| Status | unchanged (still active) | terminal `set_aside` |
+| Frontier | excluded for this owner | excluded |
+| Dependents | **still blocked** | unblocked (like achieved) |
+| Meaning | not mine / in flight elsewhere | parked / deferred / won't-fix |
+
+```
+bullseye_commit op=assign id=T12 owner=alice reason="driving on PR #88"
+bullseye_commit op=unassign id=T12
+```
+
+Summary renders these under `## Owned elsewhere`.
+
+### Release surface (🎯T42)
+
+Optional top-level key in `bullseye.yaml`:
+
+```yaml
+release_surface:
+  - src/
+  - dist/
+```
+
+When set, `bullseye_convergence` only treats unreleased fix commits as
+`/release`-blocking if their diff intersects a declared prefix. Fixes
+outside the surface are still listed as "not user-visible". Absent the
+key, all fix commits count (legacy behaviour).
+
+### Profile release policy (🎯T46)
+
+If `AGENTS.md` / `CLAUDE.md` declares `profile: <name>`, bullseye loads
+`release:` from a profile template:
+
+1. `$BULLSEYE_PROFILES_DIR/<name>.yaml` if set
+2. else `~/.claude/gates/<name>.yaml`
+
+```yaml
+release:
+  unreleased_fixes: informational   # or recommend_ship (default)
+  channel: store                    # optional wording hint
+```
+
+- `recommend_ship` (default / missing profile): unreleased surface
+  fixes recommend `/release`.
+- `informational`: fixes are listed; Next action recommends frontier
+  work instead (store-shipped apps). Distinct from `release_freeze:`,
+  which is a temporary hard override.
+- Bullseye never hard-codes product flavor names (`game`, etc.) —
+  flavors live only in external templates.
 
 ### Edges
 

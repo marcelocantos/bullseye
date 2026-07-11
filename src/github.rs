@@ -461,6 +461,7 @@ fn new_target(repo: &str, issue: &Issue, today: NaiveDate) -> Target {
         origin: origin_for(repo, issue.number),
         discovered: today,
         achieved: None,
+        owned_by: None,
     }
 }
 

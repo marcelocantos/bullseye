@@ -79,8 +79,12 @@ pub struct QueryTool {
     description = "Core: mutate the intent ledger. `op` selects the write: \
         track (create/patch target — name+acceptance on create; value/cost optional), \
         block (id + blocks sugar), split (subdivide parent into children), \
-        achieve (retire), defer (set_aside with reason), reopen (revert achieved). \
+        achieve (retire), defer (set_aside with reason), reopen (revert achieved), \
+        assign (mark owned-by-another: id + owner + reason — excludes from frontier without \
+        unblocking dependents), unassign (clear ownership exclusion). \
         Successful results include a structured header (ok, op, ids, changed, frontier, file). \
+        On track create, the allocated ID is knowable ONLY from that header (`ids:`) — never \
+        predict the next ID by scanning the file (TOCTOU under concurrency). \
         Prefer this over put/retire/set_aside/revert/subdivide for new agents. \
         User intent overrides the frontier — commit records claims; it does not assign work."
 )]
@@ -89,7 +93,7 @@ pub struct CommitTool {
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
-    /// track | block | split | achieve | defer | reopen
+    /// track | block | split | achieve | defer | reopen | assign | unassign
     pub op: String,
 
     /// Target ID (achieve/defer/reopen/block/patch; optional on track create).
@@ -167,6 +171,10 @@ pub struct CommitTool {
     /// Optional tail child IDs for split mode=retire.
     #[serde(default)]
     pub tail: Option<Vec<String>>,
+
+    /// Owner handle for op=assign (who is driving this target).
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 /// Emit a sawmill verification plan for a target's checks (does not run them).
@@ -238,6 +246,11 @@ pub struct GetTool {
         to the parent ID (e.g. `child_of: 'T4'` creates the next free `T4.N`). \
         Provide `id` (e.g., 'T1.2') only when the exact target ID is part of the user's intent, \
         or to patch an existing target. \
+        On create, the assigned ID is knowable ONLY from this tool's return value (`ids:` / \
+        \"Created 🎯…\"). Never pre-read the target set to predict the next ID (TOCTOU: any \
+        concurrent writer or git-history-reserved slot between your read and Bullseye's locked \
+        allocation makes a predicted ID diverge from the one written). Refer to the new target \
+        solely by the returned ID. \
         On create, `name` and `acceptance` are required; all other fields are optional. \
         `value` and `cost` are portfolio-scope metadata used for cross-repo WSJF ranking (weekly-plus horizon) — \
         they are NOT consumed by repo-level frontier ordering, which uses `depends_on` shape (unblocking fanout) only. \

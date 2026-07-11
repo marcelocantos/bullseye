@@ -54,6 +54,11 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 | `achieve` | Retire as achieved | `bullseye_retire` |
 | `defer` | Set aside with reason | `bullseye_set_aside` |
 | `reopen` | Revert an achieved target | `bullseye_revert` |
+| `assign` | Mark owned-by-another (`id` + `owner` + `reason`) | — |
+| `unassign` | Clear ownership exclusion | — |
+
+On **track create**, the allocated ID is knowable **only** from the
+result envelope (`ids:`) — never predict it (TOCTOU).
 
 Create requires `name` + `acceptance`. **`value` / `cost` are optional**
 (portfolio annex; omit at repo scope → stored as 0.0 unscored).

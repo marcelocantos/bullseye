@@ -41,14 +41,23 @@ pub struct FrontierTarget {
 ///
 /// A target is in the frontier if:
 /// - It is active (not terminal — neither achieved nor set aside).
+/// - It is not ownership-excluded (`owned_by` is None) — 🎯T43.
 /// - It has no in-flight dependencies (every `depends_on` ID resolves
 ///   to a terminal target — achieved or set-aside — or is absent).
+///
+/// Ownership exclusion does **not** make a target terminal: dependents
+/// stay blocked until the target is achieved or set aside.
 pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
     let active = file.active();
 
     active
         .iter()
         .filter(|(_, t)| {
+            // Owned-elsewhere targets stay active for dependency
+            // blocking but are not work for *this* owner.
+            if t.owned_by.is_some() {
+                return false;
+            }
             // All dependencies must be in a terminal disposition
             // (achieved or set aside).
             t.depends_on.iter().all(|dep| {
@@ -63,6 +72,15 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
             status: t.status,
             tags: t.tags.clone(),
         })
+        .collect()
+}
+
+/// Active targets excluded from the local frontier because another
+/// owner is driving them (🎯T43).
+pub fn owned_elsewhere(file: &TargetsFile) -> Vec<(&str, &crate::schema::Target)> {
+    file.active()
+        .into_iter()
+        .filter(|(_, t)| t.owned_by.is_some())
         .collect()
 }
 
@@ -258,6 +276,24 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
                         t.status,
                     ));
                 }
+            }
+        }
+
+        // Ownership exclusion (🎯T43): both owner and reason must be
+        // non-empty when the field is present. Terminal targets should
+        // not carry ownership — clear it first.
+        if let Some(ob) = &t.owned_by {
+            if ob.owner.trim().is_empty() {
+                errors.push(format!("{id}: owned_by.owner must be non-empty"));
+            }
+            if ob.reason.trim().is_empty() {
+                errors.push(format!("{id}: owned_by.reason must be non-empty"));
+            }
+            if t.status.is_terminal() {
+                errors.push(format!(
+                    "{id}: owned_by is only valid on active targets (status is {:?})",
+                    t.status,
+                ));
             }
         }
 
@@ -712,7 +748,27 @@ pub fn summary(
         }
     }
 
-    // --- 5. Set aside targets ---
+    // --- 5. Owned elsewhere (🎯T43) ---
+    //
+    // Active targets driven by someone else. Distinct from set_aside:
+    // status is unchanged, dependents stay blocked, and the entry
+    // names the other owner plus a reason.
+    let mut elsewhere = owned_elsewhere(file);
+    if !elsewhere.is_empty() {
+        elsewhere.sort_by(|a, b| a.0.cmp(b.0));
+        out.push_str("## Owned elsewhere\n\n");
+        for (id, t) in &elsewhere {
+            if let Some(ob) = &t.owned_by {
+                out.push_str(&format!(
+                    "🎯{id} {} — owner: {} — {}\n",
+                    t.name, ob.owner, ob.reason
+                ));
+            }
+        }
+        out.push('\n');
+    }
+
+    // --- 6. Set aside targets ---
     //
     // Terminal but not achieved. Surfaced in their own group so a
     // reviewer can see what was decided not to do and why, without

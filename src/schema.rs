@@ -74,9 +74,34 @@ pub struct TargetsFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_evaluated: Option<String>,
 
+    /// Optional globs of paths that constitute the **shipped surface**
+    /// for this repo (🎯T42). When set, `bullseye_convergence` only
+    /// treats fix commits as release-blocking when their diff since the
+    /// last tag intersects one of these prefixes/globs. Absent → all
+    /// fix commits count (legacy behaviour).
+    ///
+    /// Matching is path-prefix oriented: each entry is compared as a
+    /// string prefix of paths from `git show --name-only` (trailing `/`
+    /// optional). Examples: `src/`, `dist/`, `include/`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub release_surface: Vec<String>,
+
     /// All targets keyed by ID (e.g., "T1", "T1.1").
     #[serde(default)]
     pub targets: BTreeMap<String, Target>,
+}
+
+/// Ownership exclusion — this target is driven by someone else (🎯T43).
+///
+/// Distinct from [`Status::SetAside`]: status stays active
+/// (identified/converging), dependents remain blocked, and the target
+/// is excluded only from *this* owner's frontier / next-action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnedBy {
+    /// Who is driving the work (free text handle / name).
+    pub owner: String,
+    /// Why this owner exclusion applies (required non-empty when set).
+    pub reason: String,
 }
 
 /// Convergence strategy for a target — how the executor daemon should
@@ -234,6 +259,12 @@ pub struct Target {
     /// Date the target was achieved (filled on retirement).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub achieved: Option<NaiveDate>,
+
+    /// When set, this target is owned by another agent/human and is
+    /// excluded from the local frontier without unblocking dependents
+    /// (🎯T43). Cleared with `bullseye_commit op=unassign`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<OwnedBy>,
 }
 
 /// A cross-repo edge — a link from a target in this repo to a target

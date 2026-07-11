@@ -278,6 +278,10 @@ fn check_target_no_envelope_leaks(id: &str, target: &crate::schema::Target) -> R
     if let Some(r) = &target.set_aside_reason {
         check_persisted_string(&format!("{id}.set_aside_reason"), r)?;
     }
+    if let Some(ob) = &target.owned_by {
+        check_persisted_string(&format!("{id}.owned_by.owner"), &ob.owner)?;
+        check_persisted_string(&format!("{id}.owned_by.reason"), &ob.reason)?;
+    }
     for (i, a) in target.acceptance.iter().enumerate() {
         check_persisted_string(&format!("{id}.acceptance[{i}]"), a)?;
     }
@@ -508,11 +512,129 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                 reason,
             })
         }
+        "assign" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=assign requires `id`",
+                ))
+            })?;
+            let owner = t.owner.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=assign requires `owner`",
+                ))
+            })?;
+            let reason = t.reason.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=assign requires non-empty `reason`",
+                ))
+            })?;
+            handle_assign_owner(&t.cwd, &id, &owner, &reason)
+        }
+        "unassign" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=unassign requires `id`",
+                ))
+            })?;
+            handle_unassign_owner(&t.cwd, &id)
+        }
         other => coded_err(
             api::ErrorCode::InvalidArgs,
-            format!("unknown op: {other} (use track, block, split, achieve, defer, reopen)"),
+            format!(
+                "unknown op: {other} (use track, block, split, achieve, defer, reopen, assign, unassign)"
+            ),
         ),
     }
+}
+
+/// Mark a target as owned by another person/agent (🎯T43). Excludes it
+/// from the local frontier without unblocking dependents.
+fn handle_assign_owner(cwd: &str, id: &str, owner: &str, reason: &str) -> ToolResult {
+    let path = discover_path(cwd)?;
+    ensure_mutation_allowed(&path, cwd)?;
+    check_explicit_target_id("id", id).map_err(tool_err)?;
+    check_persisted_string("owner", owner).map_err(tool_err)?;
+    check_persisted_string("reason", reason).map_err(tool_err)?;
+    let owner = owner.trim().to_string();
+    let reason = reason.trim().to_string();
+    if owner.is_empty() {
+        return coded_err(api::ErrorCode::InvalidArgs, "owner must be non-empty");
+    }
+    if reason.is_empty() {
+        return coded_err(api::ErrorCode::InvalidArgs, "reason must be non-empty");
+    }
+
+    let name = store::with_locked_mutation(&path, |file| -> Result<String, String> {
+        let target = file
+            .targets
+            .get_mut(id)
+            .ok_or_else(|| format!("target {id} not found"))?;
+        if target.status.is_terminal() {
+            return Err(format!(
+                "🎯{id} is {:?} — ownership exclusion only applies to active targets",
+                target.status
+            ));
+        }
+        target.owned_by = Some(crate::schema::OwnedBy {
+            owner: owner.clone(),
+            reason: reason.clone(),
+        });
+        Ok(target.name.clone())
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
+
+    git_commit::auto_commit_yaml(&path);
+    let id_owned = id.to_string();
+    let body = format!(
+        "Assigned 🎯{id} \"{name}\" to owner {owner}\nReason: {reason}\n\
+         Target stays active and continues to block dependents; excluded from local frontier."
+    );
+    mutation_text(
+        &path,
+        "assign",
+        std::slice::from_ref(&id_owned),
+        std::slice::from_ref(&id_owned),
+        body,
+    )
+}
+
+/// Clear ownership exclusion (🎯T43). Restores the target to the frontier
+/// with its prior status intact.
+fn handle_unassign_owner(cwd: &str, id: &str) -> ToolResult {
+    let path = discover_path(cwd)?;
+    ensure_mutation_allowed(&path, cwd)?;
+    check_explicit_target_id("id", id).map_err(tool_err)?;
+
+    let name = store::with_locked_mutation(&path, |file| -> Result<String, String> {
+        let target = file
+            .targets
+            .get_mut(id)
+            .ok_or_else(|| format!("target {id} not found"))?;
+        if target.owned_by.is_none() {
+            return Err(format!("🎯{id} has no ownership exclusion to clear"));
+        }
+        target.owned_by = None;
+        Ok(target.name.clone())
+    })
+    .map_err(|e| tool_err(e.to_string()))?;
+
+    git_commit::auto_commit_yaml(&path);
+    let id_owned = id.to_string();
+    let body = format!(
+        "Unassigned 🎯{id} \"{name}\" — ownership exclusion cleared; \
+         target returns to the normal frontier with status unchanged."
+    );
+    mutation_text(
+        &path,
+        "unassign",
+        std::slice::from_ref(&id_owned),
+        std::slice::from_ref(&id_owned),
+        body,
+    )
 }
 
 /// Plan-only check expansion (rename of verify semantics).
@@ -761,6 +883,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 } else {
                     None
                 },
+                owned_by: None,
             };
             file.targets.insert(id.clone(), target);
         } else {
@@ -1956,6 +2079,7 @@ targets:
             origin: "manual".into(),
             discovered: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             achieved: None,
+            owned_by: None,
         };
         let err = check_target_no_envelope_leaks("T99", &target).unwrap_err();
         assert!(err.contains("T99.cross_depends[0].note"), "got: {err}");

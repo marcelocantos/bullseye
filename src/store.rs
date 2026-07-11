@@ -243,12 +243,14 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
             origin: "bullseye_init".to_string(),
             discovered: today,
             achieved: None,
+            owned_by: None,
         },
     );
 
     let file = TargetsFile {
         schema_version: Some(CURRENT_SCHEMA_VERSION),
         last_evaluated: None,
+        release_surface: Vec::new(),
         targets,
     };
     save(path, &file)
@@ -789,11 +791,13 @@ mod header_tests {
                 origin: "manual".to_string(),
                 discovered: chrono::NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
                 achieved: None,
+                owned_by: None,
             },
         );
         TargetsFile {
             schema_version: Some(CURRENT_SCHEMA_VERSION),
             last_evaluated: None,
+            release_surface: Vec::new(),
             targets,
         }
     }

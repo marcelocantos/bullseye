@@ -425,6 +425,7 @@ pub fn subdivide(
             origin: format!("subdivide(🎯{parent_id})"),
             discovered: today,
             achieved: None,
+            owned_by: None,
         };
         file.targets.insert(id.clone(), target);
     }

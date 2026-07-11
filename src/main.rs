@@ -302,6 +302,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
         children: None,
         retire_reason: flag_value(args, "--retire-reason"),
         tail: None,
+        owner: flag_value(args, "--owner"),
     }))
 }
 
