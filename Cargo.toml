@@ -1,6 +1,6 @@
 [package]
 name = "bullseye"
-version = "0.38.0"
+version = "0.39.0"
 edition = "2024"
 description = "MCP server for managing targets — desired states with dependency tracking and frontier computation"
 license = "Apache-2.0"
@@ -9,26 +9,39 @@ authors = ["Marcelo Cantos"]
 keywords = ["mcp", "targets", "scheduling", "planning", "frontier"]
 categories = ["development-tools"]
 
+[features]
+# Default keeps full product surface (including SQLite priorities sync).
+# Slim local clean builds: `cargo build --no-default-features` skips
+# compiling bundled libsqlite3-sys (~6s on cold debug). See 🎯T48 and
+# docs/build-perf-2026-04-11.md.
+default = ["sqlite"]
+sqlite = ["dep:rusqlite"]
+
 [dependencies]
 async-trait = "0.1.89"
 chrono = { version = "0.4.44", features = ["serde"] }
 fs2 = "0.4.3"
 regex = "1"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
 rust-mcp-sdk = { version = "0.9.0", default-features = false, features = ["server", "macros", "stdio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml_ng = "0.10.0"
 tempfile = "3"
-# Only what bullseye itself needs. Note: rust-mcp-sdk 0.9 still declares
-# `tokio` with `features = ["full"]`, so cargo feature-unification keeps
-# the full set enabled until the SDK trims its dep — see 🎯 build-perf
-# target for that. Declaring a minimal set here documents intent and
-# takes effect the moment the SDK stops forcing `full`.
+# Minimal set for bullseye + stdio MCP. Vendored SDK/transport patches
+# (vendor/) stop forcing tokio "full" — 🎯T47.
 tokio = { version = "1.50.0", default-features = false, features = [
     "macros",
     "rt-multi-thread",
     "sync",
     "time",
     "io-util",
+    "io-std",
+    "process",
 ] }
+
+# 🎯T47: trim tokio features in rust-mcp-sdk / rust-mcp-transport.
+# Drop when upstream no longer enables features=["full"].
+[patch.crates-io]
+rust-mcp-sdk = { path = "vendor/rust-mcp-sdk" }
+rust-mcp-transport = { path = "vendor/rust-mcp-transport" }

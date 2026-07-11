@@ -22,7 +22,6 @@ use crate::id_alloc;
 use crate::import;
 use crate::ops;
 use crate::portfolio;
-use crate::priorities;
 use crate::repo_guard;
 use crate::schema::{Status, Target};
 use crate::store;
@@ -151,24 +150,36 @@ pub fn handle_github_sync(t: crate::tools::GithubSyncTool) -> ToolResult {
 }
 
 /// MCP twin of `bullseye sync-priorities` — reuses the shared
-/// [`priorities::run_sync`] entry point so the two surfaces can't drift.
+/// [`crate::priorities::run_sync`] entry point so the two surfaces can't drift.
 pub fn handle_sync_priorities(t: crate::tools::SyncPrioritiesTool) -> ToolResult {
-    let mut args: Vec<String> = Vec::new();
-    if let Some(db) = &t.db {
-        args.push("--db".to_string());
-        args.push(db.clone());
+    #[cfg(not(feature = "sqlite"))]
+    {
+        let _ = t;
+        return err(
+            "sync-priorities unavailable: this binary was built without the `sqlite` feature \
+             (cargo build --no-default-features). Rebuild with default features or \
+             `--features sqlite`.",
+        );
     }
-    if let Some(root) = &t.root {
-        args.push("--root".to_string());
-        args.push(root.clone());
-    }
-    args.push("--horizon".to_string());
-    args.push(t.horizon.clone());
-    args.push("--max-depth".to_string());
-    args.push(t.max_depth.to_string());
-    match priorities::run_sync(&args) {
-        Ok(msg) => text_result(msg),
-        Err(e) => err(format!("sync-priorities failed: {e}")),
+    #[cfg(feature = "sqlite")]
+    {
+        let mut args: Vec<String> = Vec::new();
+        if let Some(db) = &t.db {
+            args.push("--db".to_string());
+            args.push(db.clone());
+        }
+        if let Some(root) = &t.root {
+            args.push("--root".to_string());
+            args.push(root.clone());
+        }
+        args.push("--horizon".to_string());
+        args.push(t.horizon.clone());
+        args.push("--max-depth".to_string());
+        args.push(t.max_depth.to_string());
+        match crate::priorities::run_sync(&args) {
+            Ok(msg) => text_result(msg),
+            Err(e) => err(format!("sync-priorities failed: {e}")),
+        }
     }
 }
 

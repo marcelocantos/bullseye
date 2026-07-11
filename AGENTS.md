@@ -5,15 +5,23 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## Build and Test
 
 ```bash
-cargo build          # Build the project
-cargo test           # Run all tests
+cargo build          # Full product (default features include sqlite)
+cargo test           # All tests (requires default features for priorities)
 cargo test <name>    # Run a single test by name substring
 cargo test --lib     # Unit tests only
 cargo clippy         # Lint
 cargo fmt --check    # Check formatting
+
+# Slim clean rebuild without compiling bundled SQLite (~6s saved cold):
+cargo build --no-default-features
+# MCP tools work; sync-priorities needs --features sqlite (or defaults).
 ```
 
 Rust edition 2024, toolchain 1.94+.
+
+Build-performance notes and tooling thresholds: `docs/build-perf-2026-04-11.md`.
+Tokio is feature-trimmed via `vendor/rust-mcp-sdk` + `vendor/rust-mcp-transport`
+patches (`[patch.crates-io]` in `Cargo.toml`) — see `vendor/README.md`.
 
 ## What This Is
 

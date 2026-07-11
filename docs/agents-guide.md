@@ -2,6 +2,19 @@
 
 Reference for AI agents using Bullseye as an MCP server.
 
+## Building from source (optional)
+
+```bash
+cargo build --release          # full binary (includes SQLite priorities)
+cargo build --no-default-features   # slim: skips bundled libsqlite3-sys
+```
+
+Default features enable `sqlite` (rusqlite + bundled SQLite) for
+`bullseye sync-priorities` / `bullseye_sync_priorities`. Homebrew and
+CI always use defaults. Use `--no-default-features` only for faster
+local clean rebuilds of the MCP core; see
+`docs/build-perf-2026-04-11.md`.
+
 ## Installation
 
 Bullseye runs as an MCP server. Installation is a **multi-step

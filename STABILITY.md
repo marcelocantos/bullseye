@@ -9,8 +9,20 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of 🎯T42/T43/T44/T46 (release surface, ownership, ID guidance,
-profile release policy). Changes affecting the interaction surface, newest first:
+Snapshot as of 🎯T47–T49 (build-perf: tokio trim, sqlite feature, thresholds).
+Changes affecting the interaction surface, newest first:
+
+- **Build performance: no tokio `full`, optional sqlite** (🎯T47, 🎯T48,
+  🎯T49). Vendored `rust-mcp-sdk` / `rust-mcp-transport` patches
+  (`vendor/`, `[patch.crates-io]`) drop `tokio` `features=["full"]` in
+  favour of a stdio-sized set; bullseye's own tokio dep matches.
+  Cargo feature `sqlite` (default) gates `rusqlite` + bundled
+  libsqlite3-sys and the priorities module; `cargo build
+  --no-default-features` builds MCP core without SQLite. Sync-priorities
+  CLI/MCP error clearly when built without `sqlite`. Adoption thresholds
+  for sccache/mold/nextest/workspace split documented in
+  `docs/build-perf-2026-04-11.md` — not installed by default. Settling
+  clock resets at the release shipping this surface.
 
 - **Ownership exclusion, release surface, and profile release policy**
   (🎯T42, 🎯T43, 🎯T44, 🎯T46). New optional top-level `release_surface`
