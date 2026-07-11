@@ -1233,6 +1233,7 @@ targets:
     depends_on:
     - T39
     - T40
+    - T44
     tags:
     - safety
     - agents
@@ -1241,9 +1242,10 @@ targets:
     discovered: 2026-07-06
   T42:
     name: The unreleased-fixes detector ignores fix commits that don't change the shipped surface
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - 'A repo can declare its shipped surface in bullseye.yaml (e.g. `release_surface: [dist/, src/, include/]` glob list); absent a declaration, current behaviour is unchanged.'
     - '`bullseye_convergence` excludes from `## Unreleased fixes` (or annotates as not-user-visible) any fix commit whose cumulative diff since the last tag does not intersect the declared surface, and the `## Next action` does not recommend `/release` when the surface diff since the last tag is empty.'
@@ -1256,6 +1258,165 @@ targets:
     - heuristic
     origin: manual
     discovered: 2026-07-06
+    achieved: 2026-07-11
+  T43:
+    name: A target can be marked owned-by-another and excluded from an owner's frontier without being set aside
+    status: achieved
+    value: 3.0
+    cost: 3.0
+    actual_cost: 3.0
+    acceptance:
+    - A target carries an explicit ownership/exclusion disposition distinct from both status and set_aside; applying it removes the target from *this* owner's frontier and from bullseye_convergence's Next-action recommendation, while leaving its status (identified/converging) unchanged.
+    - Unlike set_aside and achievement, the ownership exclusion does NOT unblock the target's dependents — a not-mine foundation still blocks the sub-targets that need its work, so excluding one target never leaks its dependents into the frontier.
+    - bullseye_convergence renders ownership-excluded targets in a dedicated section (distinct from `## Set aside` and `## Blocked targets`), showing the owner and a reason.
+    - A tool verb sets and clears the disposition; clearing restores the target to the normal frontier with its prior status intact.
+    - agents-guide documents when to use ownership-exclusion vs set_aside, so agents stop overloading set_aside (and its parked / deferred / won't-fix connotation) for "someone else is driving this".
+    context: |
+      Filed 2026-07-06 from a mnemo /cv session. mnemo's 🎯T64.2 was being
+      driven by a collaborator on an open PR, so it should not appear in
+      Marcelo's frontier — but set_aside was the ONLY lever bullseye offers to
+      remove a target from the frontier, and it is the wrong shape twice over:
+      (1) it reads as parked / deferred / won't-fix, conflating a collaboration
+      boundary with abandonment; and (2) it mechanically unblocks the target's
+      dependents (treated exactly like achievement), which leaked
+      T64.3/T64.5/T64.6 into the frontier and forced three manual
+      "leak-containment" set_asides. The set_aside reason field can carry the
+      nuance in prose, but a first-class owner/not-mine disposition would
+      (a) preserve dependent-blocking (a not-mine foundation still blocks its
+      sub-targets), (b) render distinctly rather than under "Set aside", and
+      (c) stop overloading one status with four meanings (parked, deferred,
+      won't-fix, not-mine). Tags don't substitute: repo-scope frontier ranks on
+      depends_on shape only, so an owner:* tag does not remove a target from the
+      recommendation.
+    tags:
+    - frontier
+    - ownership
+    - disposition
+    - ux
+    origin: Discovered during mnemo T64.2 /cv session
+    discovered: 2026-07-06
+    achieved: 2026-07-11
+  T44:
+    name: Agents never predict an allocated target ID; they refer to a newly created target only by the ID returned in the tool result
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 1.0
+    acceptance:
+    - The bullseye_put tool description (src/tools.rs) and docs/agents-guide.md state that on create the assigned ID is knowable ONLY from the tool's return value, and that any ID computed before the call (e.g. read-max-plus-one) is stale by definition under concurrency (TOCTOU) and must not be used.
+    - Guidance explicitly instructs callers not to pre-read the target set to predict the next ID for a create, and to reference the new target solely by the returned ID.
+    - Both create paths (MCP bullseye_put and the CLI equivalent) surface the assigned ID prominently in their success output so callers consume it rather than reconstructing it.
+    - 'The rationale names the concrete failure: a concurrent writer (another session, a git-history-reserved slot, a portfolio sweep) between the caller''s read and Bullseye''s locked allocation makes any predicted ID diverge from the one actually written, while Bullseye''s own allocation stays correct under the mutation lock.'
+    context: 'Filed from analysis of session b4947df3 (jevons target creation, 2026-07-06). T39 moved allocation AUTHORITY into Bullseye — the agent correctly omitted `id` and Bullseye allocated T36 atomically under with_locked_mutation. But the agent still grepped `^  T[0-9]+:` to compute "Max target is T35, so this will auto-assign T36" and narrated the predicted number instead of the returned one. That read-max-add-one prediction is a check-then-act race: it is computed from a stale read OUTSIDE the mutation lock, so any concurrent create between the read and the write shifts the real ID, leaving the agent''s narration wrong while the file stays correct — and the agent never notices because it trusted its prediction over the return value. This re-introduces the manual-numbering hazard T39 removed, one layer up in the narration path rather than the write path. Distinct from T41: T41 stops agents editing the file directly; this stops them simulating the allocator. The fix is guidance-only (tool description + agents-guide), no schema change.'
+    tags:
+    - guidance
+    - concurrency
+    - race
+    - id-allocation
+    - agent-behavior
+    origin: manual
+    discovered: 2026-07-06
+    achieved: 2026-07-11
+  T45:
+    name: Bullseye is a four-tool intent ledger (open / query / commit / plan_checks) with optional portfolio fields, demoted integrations, and agent defaults that never treat the graph as a planning gate
+    status: achieved
+    value: 13.0
+    cost: 13.0
+    actual_cost: 13.0
+    acceptance:
+    - 'MCP core surface for day-to-day ledger work is four tools: bullseye_open, bullseye_query, bullseye_commit, bullseye_plan_checks (legacy tools may remain only as documented compatibility shims that call the same handlers)'
+    - bullseye_commit implements ops track | block | split | achieve | defer | reopen with one lock/CAS write path; agents can complete create/edge/lifecycle flows without calling put/retire/set_aside/revert/subdivide by name
+    - bullseye_query implements views context | frontier | target | list | summary | graph | validate; a cwd-only or view=context call returns the session snapshot formerly produced by startup_context
+    - Creating a target does not require value or cost; portfolio fields remain optional annex keys and are omitted from the minimal create path and agents-guide happy path
+    - L2 capabilities (portfolio, github_sync, sync_priorities, convergence, import, resolve) are clearly demoted — namespaced, admin/op bundle, or --profile full — and are not listed as core tools in the default agent snippet
+    - Mutating tool results return structured payloads including allocated ids, changed ids, and a refreshed frontier snippet; errors use stable machine-readable codes (at least not_initialized, conflict, immutable_achieved, id_reserved, validation, unsafe_repo)
+    - 'docs/agents-guide.md default integration snippet states: user intent overrides frontier; open/query for context at boundaries; commit track/achieve for lasting work; no requirement to consult the frontier before every task'
+    - STABILITY.md catalogues the new surface; CLI exposes the same four core verbs (plus existing L2 subcommands); cargo test, clippy -D warnings, and fmt --check pass
+    context: |-
+      Strategic restructure from the 2026-07 first-observer + agent-planning evaluation: durable value is shared multi-session/multi-agent intent ledger (git-for-intent), not out-planning the host agent. Product layers L0 ledger + L1 views (core) vs L2 integrations vs L3 policy (skills only). Pre-1.0 window is the time to collapse ~20 tools, drop required value/cost, and fix default agent policy so sophisticated agents do not route around bullseye. Single umbrella objective — implementation phases are commits on one PR, not separate targets, unless decomposition is needed mid-flight.
+
+      Plan reference: session plan for ledger API restructure (open/query/commit/plan_checks).
+    tags:
+    - api
+    - product
+    - '1.0'
+    - agent-ux
+    - schema
+    origin: manual
+    discovered: 2026-07-11
+    achieved: 2026-07-11
+  T46:
+    name: Unreleased-fix /release recommendation is driven by profile-template release policy, not hard-coded product flavors
+    status: achieved
+    value: 5.0
+    cost: 5.0
+    actual_cost: 5.0
+    acceptance:
+    - 'bullseye_convergence resolves a project profile name from AGENTS.md/CLAUDE.md (e.g. `profile: game`) and loads a profile template YAML from a documented search path (e.g. $BULLSEYE_PROFILES_DIR, then ~/.claude/gates/<profile>.yaml); it never branches on the string "game" or other product-flavor names in code.'
+    - 'Profile templates may declare a `release:` block with a small vocabulary bullseye understands — at minimum `unreleased_fixes: recommend_ship | informational` (and optionally `channel: tag | store | package | none` for wording). Unknown or missing profile / missing `release` block defaults to current behaviour (`recommend_ship`).'
+    - 'When resolved policy is `unreleased_fixes: informational`, unreleased fix commits are still listed under ## Unreleased fixes, but ## Next action does not recommend Run /release; frontier target work is recommended instead, with a note that policy comes from the profile template (distinct from release_freeze wording).'
+    - 'When policy is `recommend_ship` (or default), behaviour matches today: unreleased fixes outrank frontier and recommend /release. `release_freeze:` still overrides and suppresses /release regardless of profile policy.'
+    - 'Tests cover: informational profile template suppresses /release while listing fixes; recommend_ship still recommends; freeze still wins; missing profile/template degrades to recommend_ship; no hard-coded flavor strings in the release-policy path.'
+    - 'Agents-guide / STABILITY document the vocabulary, discovery search path, and that product flavors live only in external profile templates (e.g. gates/game.yaml setting informational + channel: store).'
+    context: 'Filed 2026-07-11 from a stock-car-racing /cv session in the minicades fleet. Minicades and Squz games ship via App Store / Play Store cuts, not via GitHub tag + /release whenever fix commits land on master. Auto-recommend Run /release is correct for CLI/Homebrew tools but wrong for store products — and today it even fires on non-user-facing commits (bullseye.yaml, logging). The desired design is transitive: CLAUDE.md declares profile: game (product flavor already used across minicades/squz gate profiles) → external profile template (e.g. ~/.claude/gates/game.yaml) maps flavor to release policy → bullseye reads only the policy vocabulary (unreleased_fixes: informational | recommend_ship), never hard-codes "game". Adjacent to T42 (shipped-surface filter for which commits count as fixes); this target is about whether fixes that do count should auto-prioritize /release. release_freeze: remains the temporary hard override; profile policy is the steady-state delivery model.'
+    tags:
+    - convergence
+    - release
+    - profiles
+    - policy
+    origin: stock-car-racing /cv session 2026-07-11
+    discovered: 2026-07-11
+    achieved: 2026-07-11
+  T47:
+    name: Cold cargo builds do not enable tokio features solely because rust-mcp-sdk forces features=["full"]
+    status: identified
+    value: 5.0
+    cost: 5.0
+    acceptance:
+    - rust-mcp-sdk (or a pinned fork/patch used by bullseye) no longer enables tokio feature "full" for the stdio server path; cargo tree -i tokio -e features for bullseye shows only features required by the MCP stdio server plus bullseye's own macros/rt-multi-thread/sync/time/io-util
+    - Bullseye's Cargo.toml continues to list a minimal tokio feature set (not full); after the SDK change, a clean cargo build --timings shows tokio unit duration reduced versus the pre-change baseline recorded in docs/build-perf notes or the PR description
+    - cargo test and the MCP server still start (bullseye --help / a smoke tool call) with the trimmed feature set
+    context: Filed from the 2026-07-11 build-perf tangent. Bullseye itself only needs macros + rt-multi-thread (+ sync/time/io-util). Applying a minimal feature list in bullseye's Cargo.toml is already done for intent, but rust-mcp-sdk 0.9.0 hardcodes tokio features=["full"], so cargo feature-unification keeps compiling the full stack. Aggressive cold-build win requires upstream SDK trim, a feature-gated SDK dependency, or a temporary [patch]/fork. Not a local-only cargo config fix.
+    tags:
+    - build-perf
+    - deps
+    - tokio
+    - upstream
+    origin: manual
+    discovered: 2026-07-11
+  T48:
+    name: Local clean builds can skip compiling bundled SQLite when priorities/SQLite work is not needed
+    status: identified
+    value: 3.0
+    cost: 5.0
+    acceptance:
+    - rusqlite/libsqlite3-sys bundled C compile is behind an explicit cargo feature (e.g. sqlite or priorities) that remains enabled by default for release and Homebrew builds
+    - A documented local profile or feature inversion exists so `cargo build --no-default-features` (or equivalent) produces a working MCP core without compiling libsqlite3-sys, and cargo build --timings on that path shows libsqlite3-sys absent or not on the critical path
+    - Default `cargo test` / CI / release still exercise the SQLite-backed paths (sync-priorities) so production behaviour is not under-tested
+    - AGENTS.md or agents-guide notes when to use the slim feature set for fast local clean rebuilds
+    context: Filed from 2026-07-11 build-perf audit. libsqlite3-sys build-script run is ~6.2s of a ~13.7s cold debug build — the largest single unit after rusqlite was added with features=["bundled"]. Bundled remains correct for portable releases; aggressive local tuning is optional feature-gating, not dropping bundled for ship.
+    tags:
+    - build-perf
+    - sqlite
+    - features
+    origin: manual
+    discovered: 2026-07-11
+  T49:
+    name: Build-perf tooling beyond cargo defaults is adopted only when measured thresholds are crossed
+    status: identified
+    value: 2.0
+    cost: 2.0
+    acceptance:
+    - 'docs/build-perf (or STABILITY/agents-guide note) records adoption thresholds: e.g. sccache when target/ is wiped often or multi-machine caches matter; faster linker (mold/lld) when bin link regularly exceeds ~2s; cargo-nextest when test wall time dominates edit loops; workspace crate split when single-crate incremental after a typical edit exceeds ~3–5s'
+    - No sccache/mold/nextest/workspace split is required for the default contributor path until those thresholds are measured and met
+    - If any tool is adopted, it is documented with install steps and does not break CI (rust-cache remains the GHA cache)
+    context: Filed from 2026-07-11 build-perf tangent. Local incremental is already ~0.05s no-op / ~1s edit; CI warm ~22s with Swatinem/rust-cache. sccache, mold, cranelift, nextest, and workspace splits are real techniques but negative-ROI at current scale if applied blindly. This target captures the disciplined adoption bar rather than installing tools for their own sake.
+    tags:
+    - build-perf
+    - tooling
+    - policy
+    origin: manual
+    discovered: 2026-07-11
   T5:
     name: Migration from markdown targets to bullseye
     status: achieved

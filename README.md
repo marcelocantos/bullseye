@@ -152,38 +152,53 @@ After that, every other bullseye tool just works.
 
 ## Tools
 
-Bullseye exposes 17 MCP tools. All target-operating tools accept a
-`cwd` parameter; discovery resolves the targets file automatically.
+Bullseye is an **intent ledger** (desired states + dependencies + claim
+lifecycle), not a task assigner. Prefer the **core** surface; legacy
+names remain as shims. Full contract: [docs/api-v1-core.md](docs/api-v1-core.md).
+
+### Core (day-to-day)
 
 | Tool | Description |
 |------|-------------|
-| `bullseye_list` | List targets (active/achieved/all) |
-| `bullseye_get` | Get a single target by ID with full detail |
-| `bullseye_put` | Upsert a target — create a top-level target with an auto ID, create a child with `child_of`, or patch an existing target. Explicit IDs are for intentional placement only; `.0` child IDs are rejected. Rejects content patches on achieved targets unless re-opened in the same call. |
-| `bullseye_retire` | Mark a target achieved |
-| `bullseye_revert` | Move a target from achieved back to converging (e.g. a regression proves the achievement was premature). Clears the achieved date and appends a timestamped revert note to the target's context. |
-| `bullseye_set_aside` | Set a target aside (parked / deferred / wont-fix) with a required rationale. Distinct from retirement: the target was not delivered, but it's removed from the active set and unblocks dependents the same way an achieved target does. |
-| `bullseye_subdivide` | Split a parent target into one or more children in a single call, rewiring existing dependents per `mode`: `add` (parent unchanged, dependents gain children alongside), `aggregate` (parent becomes a converging umbrella that depends_on the children), or `retire` (parent retires as-scoped, dependents are rewired from parent to children). |
-| `bullseye_verify` | Emit a structured plan that maps each of a target's `checks` to a sawmill tool invocation. Plan-only — the calling agent runs the checks and folds results back. |
-| `bullseye_frontier` | Unblocked leaf targets ready for work, ordered by maximum unblocking fanout then target ID |
-| `bullseye_validate` | Check schema conformance |
-| `bullseye_graph` | Generate Mermaid dependency graph |
-| `bullseye_import` | Import targets from markdown into YAML |
-| `bullseye_init` | Create starter bullseye.yaml with sample target |
-| `bullseye_startup_context` | Session startup context (frontier, recent achievements, warnings) |
-| `bullseye_portfolio` | Cross-repo portfolio summary with frontier targets, including cross-repo edges |
-| `bullseye_summary` | Consolidated status overview: groups, frontier ordered by unblocking fanout, blocked, stale |
-| `bullseye_convergence` | End-to-end convergence evaluation: runs `make bullseye` for invariants, scans git for unreleased fixes, emits summary with frontier detail inline, and computes a deterministic next-action recommendation. Single call, replaces the old multi-tool `/cv` worker. |
+| `bullseye_open` | Discover / init / session snapshot |
+| `bullseye_query` | Reads — `view`: context (default), frontier, target, list, summary, graph, validate |
+| `bullseye_commit` | Writes — `op`: track, block, split, achieve, defer, reopen. Mutation results include `ids`, `changed`, refreshed `frontier`. |
+| `bullseye_plan_checks` | Plan-only mapping of a target's `checks` to sawmill invocations (does not run them) |
 
-See [agents-guide.md](docs/agents-guide.md) for detailed tool
-parameters, the bullseye.yaml schema, usage workflows, and a
-[copy-pasteable CLAUDE.md snippet](docs/agents-guide.md#agent-integration)
-for wiring Bullseye into your project's agent instructions.
+CLI twins: `bullseye open|query|commit|plan-checks`.
+
+### Compatibility shims
+
+`list`, `get`, `put`, `retire`, `set_aside`, `revert`, `subdivide`,
+`frontier`, `validate`, `graph`, `init`, `startup_context`, `summary`,
+`verify` — same handlers as the core tools above.
+
+### Extended (L2)
+
+| Tool | Description |
+|------|-------------|
+| `bullseye_portfolio` | Cross-repo portfolio summary (WSJF / enablers) |
+| `bullseye_convergence` | Invariants hook + unreleased fixes + frontier recommendation |
+| `bullseye_github_sync` | GitHub issues ⇄ targets via `gh` |
+| `bullseye_sync_priorities` | Portfolio frontier → SQLite priorities table |
+| `bullseye_import` | Import targets from markdown |
+| `bullseye_resolve` | Resolve partial repo reference to absolute path |
+
+See [agents-guide.md](docs/agents-guide.md) for parameters, schema,
+workflows, and the [default agent snippet](docs/agents-guide.md#agent-integration).
 
 ## CLI subcommands
 
-Beyond the MCP server, bullseye exposes a small CLI for cron-driven
-maintenance:
+Core verbs (MCP twins):
+
+| Subcommand | Purpose |
+|------------|---------|
+| `bullseye open` | Discover / init / context snapshot |
+| `bullseye query` | Reads (`--view context|frontier|…`) |
+| `bullseye commit` | Writes (`--op track|achieve|…`) |
+| `bullseye plan-checks` | Emit sawmill check plan for a target |
+
+Extended (cron / fleet):
 
 | Subcommand | Purpose |
 |------------|---------|

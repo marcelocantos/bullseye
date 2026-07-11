@@ -102,9 +102,15 @@ pub fn convergence(
     };
 
     // --- 2. Unreleased fixes (git-based) ---
-    let unreleased = detect_unreleased_fixes(repo_root);
-    render_unreleased(&mut out, &unreleased);
+    // Partition into surface-touching vs surface-external when the
+    // project declares `release_surface` (🎯T42). Absent declaration
+    // → all fix commits are ship-relevant (legacy behaviour).
+    let all_unreleased = detect_unreleased_fixes(repo_root);
+    let (ship_relevant, surface_external) =
+        partition_by_release_surface(repo_root, &all_unreleased, &file.release_surface);
+    render_unreleased(&mut out, &ship_relevant, &surface_external);
     let release_freeze = detect_release_freeze(repo_root);
+    let release_policy = detect_release_policy(repo_root);
 
     // --- 3. Summary body (reuse graph::summary with frontier detail on) ---
     //
@@ -138,8 +144,9 @@ pub fn convergence(
     render_next_action(
         &mut out,
         &invariants_result,
-        &unreleased,
+        &ship_relevant,
         release_freeze.as_deref(),
+        release_policy,
         file,
         file_path,
         momentum,
@@ -463,6 +470,30 @@ pub struct UnreleasedFix {
     pub subject: String,
 }
 
+/// How unreleased fixes should influence next-action (🎯T46).
+///
+/// Loaded from an external profile template (`profile:` in AGENTS.md /
+/// CLAUDE.md → YAML under `$BULLSEYE_PROFILES_DIR` or `~/.claude/gates/`).
+/// Bullseye never branches on product-flavor names in code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnreleasedFixesPolicy {
+    /// Recommend `/release` when ship-relevant unreleased fixes exist.
+    #[default]
+    RecommendShip,
+    /// List fixes but recommend frontier work instead of `/release`.
+    Informational,
+}
+
+/// Resolved release policy from a profile template.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReleasePolicy {
+    pub unreleased_fixes: UnreleasedFixesPolicy,
+    /// Optional delivery channel for wording (`tag`, `store`, `package`, `none`).
+    pub channel: Option<String>,
+    /// Profile name that produced this policy (for Next-action notes).
+    pub profile: Option<String>,
+}
+
 /// Query local git for commits since the latest tag whose subject
 /// matches a fix marker. Returns an empty vec when the project has no
 /// tags, is up to date, or `git` isn't available — convergence should
@@ -584,23 +615,262 @@ pub fn is_fix_commit(subject: &str) -> bool {
     MARKERS.iter().any(|m| lower.contains(m))
 }
 
-fn render_unreleased(out: &mut String, fixes: &[UnreleasedFix]) {
+/// Split unreleased fix commits into those that touch the declared
+/// shipped surface vs those that do not (🎯T42).
+///
+/// When `release_surface` is empty, every fix is ship-relevant (legacy).
+/// Matching is prefix-based against paths from `git show --name-only --pretty=format:`.
+pub fn partition_by_release_surface(
+    repo_root: &Path,
+    fixes: &[UnreleasedFix],
+    release_surface: &[String],
+) -> (Vec<UnreleasedFix>, Vec<UnreleasedFix>) {
+    if release_surface.is_empty() {
+        return (fixes.to_vec(), Vec::new());
+    }
+    let prefixes: Vec<String> = release_surface
+        .iter()
+        .map(|s| s.trim().trim_start_matches("./").to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if prefixes.is_empty() {
+        return (fixes.to_vec(), Vec::new());
+    }
+
+    let mut ship = Vec::new();
+    let mut external = Vec::new();
+    for f in fixes {
+        if commit_touches_surface(repo_root, &f.hash, &prefixes) {
+            ship.push(f.clone());
+        } else {
+            external.push(f.clone());
+        }
+    }
+    (ship, external)
+}
+
+/// True when any path in the commit matches a release-surface prefix.
+pub fn commit_touches_surface(repo_root: &Path, hash: &str, prefixes: &[String]) -> bool {
+    let out = Command::new("git")
+        .args(["show", "--name-only", "--pretty=format:", hash])
+        .current_dir(repo_root)
+        .output();
+    let Ok(out) = out else {
+        // Fail open: if we can't inspect the commit, treat as surface-touching
+        // so we don't silently drop a real fix recommendation.
+        return true;
+    };
+    if !out.status.success() {
+        return true;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let path = line.trim().trim_start_matches("./");
+        if path.is_empty() {
+            continue;
+        }
+        for prefix in prefixes {
+            let p = prefix.trim_end_matches('/');
+            if path == p || path.starts_with(&format!("{p}/")) || path.starts_with(prefix.as_str())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn render_unreleased(
+    out: &mut String,
+    ship_relevant: &[UnreleasedFix],
+    surface_external: &[UnreleasedFix],
+) {
     out.push_str("## Unreleased fixes\n\n");
-    if fixes.is_empty() {
+    if ship_relevant.is_empty() && surface_external.is_empty() {
         out.push_str("(none — everything on master is released)\n\n");
         return;
     }
-    for f in fixes {
+    for f in ship_relevant {
         out.push_str(&format!("- `{}` {}\n", f.hash, f.subject));
+    }
+    if !surface_external.is_empty() {
+        out.push_str("\nNot user-visible (outside declared `release_surface`):\n");
+        for f in surface_external {
+            out.push_str(&format!(
+                "- `{}` {} — not user-visible\n",
+                f.hash, f.subject
+            ));
+        }
     }
     out.push('\n');
 }
 
+/// Resolve `profile:` from AGENTS.md / CLAUDE.md and load release policy
+/// from the matching profile template YAML (🎯T46).
+///
+/// Search path for templates:
+/// 1. `$BULLSEYE_PROFILES_DIR/<profile>.yaml` (if set)
+/// 2. `~/.claude/gates/<profile>.yaml`
+///
+/// Missing profile / missing file / missing `release:` block → default
+/// [`UnreleasedFixesPolicy::RecommendShip`]. Never hard-codes flavor names.
+pub fn detect_release_policy(repo_root: &Path) -> ReleasePolicy {
+    let profile = detect_profile_name(repo_root);
+    let Some(profile) = profile else {
+        return ReleasePolicy::default();
+    };
+    let path = profile_template_path(&profile);
+    let Some(path) = path else {
+        return ReleasePolicy {
+            profile: Some(profile),
+            ..ReleasePolicy::default()
+        };
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return ReleasePolicy {
+            profile: Some(profile),
+            ..ReleasePolicy::default()
+        };
+    };
+    parse_release_policy_yaml(&text, &profile)
+}
+
+/// Profile name from the first `profile: <name>` line in AGENTS.md/CLAUDE.md
+/// under repo_root or git top-level.
+pub fn detect_profile_name(repo_root: &Path) -> Option<String> {
+    let mut roots = vec![repo_root.to_path_buf()];
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(repo_root)
+        .output()
+        && output.status.success()
+    {
+        let git_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !git_root.is_empty() {
+            let git_root = Path::new(&git_root).to_path_buf();
+            if !roots.iter().any(|r| r == &git_root) {
+                roots.push(git_root);
+            }
+        }
+    }
+    for root in roots {
+        for name in ["AGENTS.md", "CLAUDE.md"] {
+            let path = root.join(name);
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Some(p) = parse_profile_line(&text) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn parse_profile_line(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("profile:") else {
+            continue;
+        };
+        let name = rest.trim().trim_matches('"').trim_matches('\'').trim();
+        if name.is_empty() {
+            continue;
+        }
+        // Ignore YAML-like nested keys; profile names are simple tokens.
+        if name.contains(':') {
+            continue;
+        }
+        return Some(name.to_string());
+    }
+    None
+}
+
+fn profile_template_path(profile: &str) -> Option<std::path::PathBuf> {
+    // Sanitise: only allow simple profile names (no path traversal).
+    if profile.is_empty()
+        || profile.contains('/')
+        || profile.contains('\\')
+        || profile.contains("..")
+    {
+        return None;
+    }
+    let file = format!("{profile}.yaml");
+    if let Ok(dir) = std::env::var("BULLSEYE_PROFILES_DIR") {
+        let p = Path::new(&dir).join(&file);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = Path::new(&home).join(".claude/gates").join(&file);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Parse the `release:` block from a profile template.
+///
+/// Minimal YAML subset (no full parser dependency): looks for lines under
+/// a top-level `release:` key:
+/// ```yaml
+/// release:
+///   unreleased_fixes: informational   # or recommend_ship
+///   channel: store                    # optional
+/// ```
+pub fn parse_release_policy_yaml(text: &str, profile: &str) -> ReleasePolicy {
+    let mut in_release = false;
+    let mut policy = ReleasePolicy {
+        profile: Some(profile.to_string()),
+        ..ReleasePolicy::default()
+    };
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() || trimmed.trim_start().starts_with('#') {
+            continue;
+        }
+        // Leaving the release block: a non-indented key that is not `release:`.
+        if in_release
+            && !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && !trimmed.starts_with("release:")
+        {
+            in_release = false;
+        }
+        if trimmed.starts_with("release:") {
+            in_release = true;
+            continue;
+        }
+        if !in_release {
+            continue;
+        }
+        let content = trimmed.trim_start();
+        if let Some(rest) = content.strip_prefix("unreleased_fixes:") {
+            let v = rest.trim().trim_matches('"').trim_matches('\'').trim();
+            policy.unreleased_fixes = match v {
+                "informational" => UnreleasedFixesPolicy::Informational,
+                "recommend_ship" | "" => UnreleasedFixesPolicy::RecommendShip,
+                _ => UnreleasedFixesPolicy::RecommendShip,
+            };
+        } else if let Some(rest) = content.strip_prefix("channel:") {
+            let v = rest.trim().trim_matches('"').trim_matches('\'').trim();
+            if !v.is_empty() {
+                policy.channel = Some(v.to_string());
+            }
+        }
+    }
+    policy
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_next_action(
     out: &mut String,
     invariants: &InvariantsResult,
     unreleased: &[UnreleasedFix],
     release_freeze: Option<&str>,
+    release_policy: ReleasePolicy,
     file: &TargetsFile,
     file_path: &Path,
     momentum: Option<&BTreeMap<String, f64>>,
@@ -634,11 +904,11 @@ fn render_next_action(
     let hook_timed_out = matches!(invariants, InvariantsResult::TimedOut { .. });
 
     // Priority 2 — unreleased fixes take precedence over new target work,
-    // unless the project explicitly declares a release freeze. In that case,
-    // surface the held fixes but keep converging on target work instead of
-    // recommending an impossible `/release`.
+    // unless the project declares a release freeze (always wins) or the
+    // profile template sets unreleased_fixes: informational (🎯T46).
     let release_frozen = !unreleased.is_empty() && release_freeze.is_some();
-    if !unreleased.is_empty() && !release_frozen {
+    let informational = release_policy.unreleased_fixes == UnreleasedFixesPolicy::Informational;
+    if !unreleased.is_empty() && !release_frozen && !informational {
         let n = unreleased.len();
         let s = if n == 1 { "" } else { "s" };
         out.push_str(&format!(
@@ -729,6 +999,23 @@ fn render_next_action(
         out.push_str(&format!(
             "\n⚠ Note: {} unreleased fix commit(s) are present, but `/release` is \
              suppressed because the project declares a release freeze ({reason}).\n",
+            unreleased.len(),
+        ));
+    }
+    if informational && !unreleased.is_empty() && !release_frozen {
+        let profile = release_policy
+            .profile
+            .as_deref()
+            .unwrap_or("(profile template)");
+        let channel = release_policy
+            .channel
+            .as_deref()
+            .map(|c| format!(" (channel: {c})"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "\n⚠ Note: {} unreleased fix commit(s) are listed above, but `/release` is \
+             not recommended because profile `{profile}` sets \
+             `unreleased_fixes: informational`{channel}. Continue frontier work instead.\n",
             unreleased.len(),
         ));
     }
@@ -921,6 +1208,73 @@ mod tests {
         assert!(
             matches!(result, InvariantsResult::Green),
             "expected Green, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn parse_release_policy_informational() {
+        let yaml = r#"
+# game profile
+aspires: 2
+release:
+  unreleased_fixes: informational
+  channel: store
+other:
+  key: value
+"#;
+        let p = parse_release_policy_yaml(yaml, "game");
+        assert_eq!(p.unreleased_fixes, UnreleasedFixesPolicy::Informational);
+        assert_eq!(p.channel.as_deref(), Some("store"));
+        assert_eq!(p.profile.as_deref(), Some("game"));
+    }
+
+    #[test]
+    fn parse_release_policy_default_recommend_ship() {
+        let p = parse_release_policy_yaml("aspires: 1\n", "cli");
+        assert_eq!(p.unreleased_fixes, UnreleasedFixesPolicy::RecommendShip);
+        assert!(p.channel.is_none());
+    }
+
+    #[test]
+    fn parse_release_policy_recommend_ship_explicit() {
+        let yaml = "release:\n  unreleased_fixes: recommend_ship\n";
+        let p = parse_release_policy_yaml(yaml, "cli");
+        assert_eq!(p.unreleased_fixes, UnreleasedFixesPolicy::RecommendShip);
+    }
+
+    #[test]
+    fn parse_profile_line_simple() {
+        assert_eq!(
+            parse_profile_line("profile: game\n"),
+            Some("game".to_string())
+        );
+        assert_eq!(
+            parse_profile_line("  profile: \"cli\"  \n"),
+            Some("cli".to_string())
+        );
+        assert_eq!(parse_profile_line("no profile here\n"), None);
+    }
+
+    #[test]
+    fn partition_empty_surface_keeps_all_ship_relevant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fixes = vec![UnreleasedFix {
+            hash: "abc".into(),
+            subject: "fix: x".into(),
+        }];
+        let (ship, ext) = partition_by_release_surface(tmp.path(), &fixes, &[]);
+        assert_eq!(ship.len(), 1);
+        assert!(ext.is_empty());
+    }
+
+    #[test]
+    fn no_hardcoded_game_in_release_policy_path() {
+        // 🎯T46: policy code must not branch on product flavor strings.
+        let src = include_str!("convergence.rs");
+        // Strip string literals roughly; just ensure we don't match on "game" as a code branch.
+        assert!(
+            !src.contains("== \"game\"") && !src.contains("== \"Game\""),
+            "release-policy path must not hard-code product flavors"
         );
     }
 }

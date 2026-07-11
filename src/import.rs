@@ -164,6 +164,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                     .discovered
                     .unwrap_or_else(|| chrono::Local::now().date_naive()),
                 achieved: fields.achieved,
+                owned_by: None,
             };
 
             if let Some(ref parent_id) = fields.parent_ref {
@@ -192,6 +193,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
     let mut file = TargetsFile {
         schema_version: Some(CURRENT_SCHEMA_VERSION),
         last_evaluated,
+        release_surface: Vec::new(),
         targets,
     };
     migrate_gates_to_depends_on(&mut file);

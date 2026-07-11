@@ -74,9 +74,34 @@ pub struct TargetsFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_evaluated: Option<String>,
 
+    /// Optional globs of paths that constitute the **shipped surface**
+    /// for this repo (🎯T42). When set, `bullseye_convergence` only
+    /// treats fix commits as release-blocking when their diff since the
+    /// last tag intersects one of these prefixes/globs. Absent → all
+    /// fix commits count (legacy behaviour).
+    ///
+    /// Matching is path-prefix oriented: each entry is compared as a
+    /// string prefix of paths from `git show --name-only` (trailing `/`
+    /// optional). Examples: `src/`, `dist/`, `include/`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub release_surface: Vec<String>,
+
     /// All targets keyed by ID (e.g., "T1", "T1.1").
     #[serde(default)]
     pub targets: BTreeMap<String, Target>,
+}
+
+/// Ownership exclusion — this target is driven by someone else (🎯T43).
+///
+/// Distinct from [`Status::SetAside`]: status stays active
+/// (identified/converging), dependents remain blocked, and the target
+/// is excluded only from *this* owner's frontier / next-action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnedBy {
+    /// Who is driving the work (free text handle / name).
+    pub owner: String,
+    /// Why this owner exclusion applies (required non-empty when set).
+    pub reason: String,
 }
 
 /// Convergence strategy for a target — how the executor daemon should
@@ -136,23 +161,17 @@ pub struct Target {
     /// Current status.
     pub status: Status,
 
-    /// User-scored value on Fibonacci scale (1, 2, 3, 5, 8, 13, 20).
-    /// Required for leaf targets. Interior targets derive value from
-    /// the graph, but the file stores the computed result.
+    /// Portfolio-scope value on Fibonacci scale (1, 2, 3, 5, 8, 13, 20).
     ///
-    /// **Portfolio-scope input only.** Value is consumed by
-    /// cross-repo ordering in [`crate::portfolio`] (the weekly-plus
-    /// horizon where human attention is the scarce resource). It is
-    /// *not* consumed by repo-level frontier ordering — inside a
-    /// repo, the frontier is the parallelisable set; ordering is
-    /// derived from `depends_on` shape (unblocking fanout) alone.
+    /// **Optional.** Omit / store `0.0` for unscored repo-scope work.
+    /// Consumed only by cross-repo portfolio WSJF ranking — *not* by
+    /// repo-level frontier ordering (which uses `depends_on` fanout).
     pub value: f64,
 
-    /// Agent-estimated cost on Fibonacci scale.
+    /// Portfolio-scope cost on Fibonacci scale.
     ///
-    /// **Portfolio-scope input only.** Same scoping rule as
-    /// [`Target::value`]: cost feeds cross-repo prioritisation but
-    /// does not drive repo-level frontier ordering.
+    /// **Optional.** Same scoping rule as [`Target::value`]: omit or
+    /// `0.0` when unscored; portfolio ranking skips zero-cost terms.
     pub cost: f64,
 
     /// Actual cost recorded on retirement, for calibration.
@@ -240,6 +259,12 @@ pub struct Target {
     /// Date the target was achieved (filled on retirement).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub achieved: Option<NaiveDate>,
+
+    /// When set, this target is owned by another agent/human and is
+    /// excluded from the local frontier without unblocking dependents
+    /// (🎯T43). Cleared with `bullseye_commit op=unassign`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<OwnedBy>,
 }
 
 /// A cross-repo edge — a link from a target in this repo to a target

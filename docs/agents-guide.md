@@ -93,7 +93,52 @@ without first triggering an error elsewhere.
 
 ## Tools
 
-### bullseye_list
+Core surface first (🎯T45). Full contract: [api-v1-core.md](api-v1-core.md).
+Legacy tools below remain as shims.
+
+### bullseye_open (core)
+
+Discover / init / session snapshot. Prefer over separate init + startup_context.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `location` | string | optional | `in_repo` or `external` when creating a missing file |
+| `project_name` | string | optional | Sample target context on init |
+| `recent_days` | int | 14 | Recent achievements window |
+
+### bullseye_query (core)
+
+Unified reads. `view` defaults to `context`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cwd` | string | required | Working directory |
+| `view` | string | `context` | `context` \| `frontier` \| `target` \| `list` \| `summary` \| `graph` \| `validate` |
+| `id` | string | — | Required for `view=target` |
+| `filter` | string | `active` | For `view=list` |
+| `recent_days` | int | 14 | For `view=context` |
+| `momentum` / `frontier_details` | — | — | For `view=summary` |
+
+### bullseye_commit (core)
+
+Unified writes. Ops: `track`, `block`, `split`, `achieve`, `defer`, `reopen`.
+On create (`track`), `name` and `acceptance` are required; **value/cost optional**.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `cwd` | string | Working directory |
+| `op` | string | Operation name |
+| (op-specific) | — | Same fields as the shim tools (`id`, `name`, `acceptance`, `blocks`, `reason`, `parent`, `children`, …) |
+
+Mutation results start with a structured `# result` header (`ok`, `op`,
+`ids`, `changed`, `frontier`, `file`).
+
+### bullseye_plan_checks (core)
+
+Plan-only check expansion (preferred name for `bullseye_verify`).
+
+### bullseye_list (shim → query view=list)
 
 List targets with optional filtering.
 
@@ -623,12 +668,22 @@ which is a content edit in disguise). See 🎯T8.
 Targets use `T<N>` for top-level targets (e.g., `T1`, `T2`) and
 `T<N>.<M>` for sub-targets (e.g., `T1.2`).
 
-Auto-assignment (omit `id` on `bullseye_put` or `bullseye_subdivide`
-children) picks the next free slot across **the live file *and* git
-history of `bullseye.yaml` on every branch and remote the local clone
-knows about**, so parallel sessions on different branches don't both
-land on the same number. IDs are never recycled: a target that once
-existed on any branch — even one that has since been deleted from
+**Never predict an allocated ID.** On create (`bullseye_commit`
+`op=track` or `bullseye_put` without `id`), the assigned ID is knowable
+**only** from the tool result — the structured `ids:` header and the
+`Created 🎯…` line. Do **not** pre-read `bullseye.yaml` (or scan max
+`T*` + 1) to guess the next number. That read-then-act is a TOCTOU race:
+any concurrent session, git-history-reserved slot, or portfolio write
+between your read and Bullseye's locked allocation makes a predicted ID
+diverge from the one written, while the file stays correct and you never
+notice. Refer to the new target solely by the returned ID (🎯T44).
+
+Auto-assignment (omit `id` on `bullseye_put` / `bullseye_commit` track or
+`bullseye_subdivide` children) picks the next free slot across **the live
+file *and* git history of `bullseye.yaml` on every branch and remote the
+local clone knows about**, so parallel sessions on different branches
+don't both land on the same number. IDs are never recycled: a target that
+once existed on any branch — even one that has since been deleted from
 the current tree — stays reserved.
 
 Explicit `id` values are checked against the same union. If you ask
@@ -649,8 +704,65 @@ allocation.
 `identified` → `converging` → `achieved`
 
 To undo an achievement (e.g. a regression shows it was premature),
-use `bullseye_revert` — it moves the target back to `converging` and
-appends a timestamped revert note to its context.
+use `bullseye_revert` / `bullseye_commit op=reopen` — it moves the
+target back to `converging` and appends a timestamped revert note to
+its context.
+
+### Ownership exclusion vs set_aside (🎯T43)
+
+When **someone else is driving** a target (collaborator PR, other
+agent), use **ownership exclusion** — not `set_aside`:
+
+| | `owned_by` (assign) | `set_aside` (defer) |
+|--|---------------------|---------------------|
+| Status | unchanged (still active) | terminal `set_aside` |
+| Frontier | excluded for this owner | excluded |
+| Dependents | **still blocked** | unblocked (like achieved) |
+| Meaning | not mine / in flight elsewhere | parked / deferred / won't-fix |
+
+```
+bullseye_commit op=assign id=T12 owner=alice reason="driving on PR #88"
+bullseye_commit op=unassign id=T12
+```
+
+Summary renders these under `## Owned elsewhere`.
+
+### Release surface (🎯T42)
+
+Optional top-level key in `bullseye.yaml`:
+
+```yaml
+release_surface:
+  - src/
+  - dist/
+```
+
+When set, `bullseye_convergence` only treats unreleased fix commits as
+`/release`-blocking if their diff intersects a declared prefix. Fixes
+outside the surface are still listed as "not user-visible". Absent the
+key, all fix commits count (legacy behaviour).
+
+### Profile release policy (🎯T46)
+
+If `AGENTS.md` / `CLAUDE.md` declares `profile: <name>`, bullseye loads
+`release:` from a profile template:
+
+1. `$BULLSEYE_PROFILES_DIR/<name>.yaml` if set
+2. else `~/.claude/gates/<name>.yaml`
+
+```yaml
+release:
+  unreleased_fixes: informational   # or recommend_ship (default)
+  channel: store                    # optional wording hint
+```
+
+- `recommend_ship` (default / missing profile): unreleased surface
+  fixes recommend `/release`.
+- `informational`: fixes are listed; Next action recommends frontier
+  work instead (store-shipped apps). Distinct from `release_freeze:`,
+  which is a temporary hard override.
+- Bullseye never hard-codes product flavor names (`game`, etc.) —
+  flavors live only in external templates.
 
 ### Edges
 
@@ -723,46 +835,40 @@ bullseye_portfolio()          → cross-repo portfolio summary
 ## Agent integration
 
 Add the following snippet to your project's `CLAUDE.md` (or
-equivalent agent instructions file) to enable target-driven workflow
-management via Bullseye. The only prerequisite is having the Bullseye
-MCP server registered (see [README.md](../README.md#mcp-client-configuration)).
+equivalent agent instructions file). Full wire contract:
+[api-v1-core.md](api-v1-core.md). Prerequisite: Bullseye MCP registered
+(see [README.md](../README.md#mcp-client-configuration)).
 
 ````markdown
-## Target management
+## Target management (Bullseye)
 
 This project uses [Bullseye](https://github.com/marcelocantos/bullseye)
-for target management. Targets are desired project states expressed as
-testable properties, stored in `bullseye.yaml`.
+as an **intent ledger** — desired states in `bullseye.yaml`, not a
+task assigner. Agents plan; bullseye records, unblocks, and hardens claims.
 
-### Getting started
+### Core tools (prefer these)
 
-If this project doesn't have `bullseye.yaml` yet, call
-`bullseye_init` to create one with a starter template.
+- `bullseye_open` — discover/init/context snapshot
+- `bullseye_query` — reads (`view`: context|frontier|target|list|summary|graph|validate)
+- `bullseye_commit` — writes (`op`: track|block|split|achieve|defer|reopen)
+- `bullseye_plan_checks` — emit sawmill check plan only (does not run checks)
 
-### Assessing work
+### Policy
 
-- `bullseye_frontier` — unblocked targets ready for work right now.
-- `bullseye_list` — browse all targets (active, achieved, set_aside, or all).
+1. **User intent overrides the frontier.** If the user states clear work
+   for this session, do it. Optionally `bullseye_open` for context; do
+   not block on the graph.
+2. When choosing among multi-hour streams or resuming a project,
+   `bullseye_query` with `view=context` or `view=frontier`.
+3. Discover lasting work mid-flight → `bullseye_commit` `op=track`
+   (`name` + `acceptance`; omit `value`/`cost` at repo scope).
+4. Finish lasting work → `bullseye_commit` `op=achieve` only if
+   acceptance is met. Park with `op=defer` + reason; undo a bad claim
+   with `op=reopen` + reason.
+5. Do **not** treat bullseye as a planning gate for one-shot Q&A or
+   drive-by fixes that already have a clear user objective.
 
-Before starting work, call `bullseye_frontier` to see what's
-available.
-
-### Managing targets
-
-- `bullseye_put` — upsert a target. Omit `id` to create a new
-  target with an auto-assigned ID (provide `name` and `acceptance`;
-  `value`/`cost` are optional at repo scope). Provide `id` to create at a specific ID (sub-targets
-  like `T1.2`) or to patch an existing target (only the provided
-  fields change). Supports `depends_on` and `blocks` (sugar for
-  injecting this target into other targets' `depends_on`).
-- `bullseye_retire` — mark a target as achieved.
-
-When you discover something that should be tracked — a bug, a quality
-gap, a missing capability — add it as a target with `bullseye_put`
-rather than leaving a bare TODO.
-
-When you complete work that achieves a target, call `bullseye_retire`
-to mark it done.
-
-All tools accept a `cwd` parameter — pass the project root directory.
+All project tools take `cwd` = project root. Mutation results include
+`ids`, `changed`, and a refreshed `frontier` header. Errors include a
+stable `code=` token.
 ````

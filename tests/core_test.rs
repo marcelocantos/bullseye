@@ -1637,6 +1637,7 @@ fn summary_stale_parent_all_children_achieved() {
                 origin: "test".to_string(),
                 discovered: date,
                 achieved: Some(date),
+                owned_by: None,
             },
         );
     }
@@ -1678,6 +1679,7 @@ fn summary_shows_grouped_children() {
             origin: "test".to_string(),
             discovered: date,
             achieved: None,
+            owned_by: None,
         },
     );
 
@@ -2461,6 +2463,7 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 origin: "concurrent-test".to_string(),
                                 discovered: chrono::Local::now().date_naive(),
                                 achieved: None,
+                                owned_by: None,
                             },
                         );
                         Ok(())
@@ -3919,6 +3922,7 @@ fn subdivide_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
                 origin: "test".to_string(),
                 discovered: today,
                 achieved: None,
+                owned_by: None,
             },
         );
     }
@@ -4601,6 +4605,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     origin: "test".to_string(),
                     discovered: today,
                     achieved: None,
+                    owned_by: None,
                 },
             );
         }
@@ -4626,6 +4631,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     origin: "test".to_string(),
                     discovered: today,
                     achieved: None,
+                    owned_by: None,
                 },
             );
         }
@@ -4762,6 +4768,7 @@ fn t28_repo_with_branched_id() -> tempfile::TempDir {
                     origin: "test".to_string(),
                     discovered: today,
                     achieved: None,
+                    owned_by: None,
                 },
             );
         }
@@ -4996,6 +5003,7 @@ fn id_alloc_memoised_within_session() {
                 origin: "test".to_string(),
                 discovered: today,
                 achieved: None,
+                owned_by: None,
             },
         );
         store::save(&yaml, &file).unwrap();
@@ -5062,6 +5070,7 @@ fn id_alloc_deleted_targets_remain_reserved() {
                 origin: "test".to_string(),
                 discovered: today,
                 achieved: None,
+                owned_by: None,
             },
         );
         store::save(&path, &file).unwrap();
@@ -5301,4 +5310,623 @@ fn sync_priorities_handler_writes_frontier() {
         "the priorities SQLite db should have been created at {}",
         db.display()
     );
+}
+
+// --- 🎯T45 core API surface ------------------------------------------------
+
+#[test]
+fn t45_commit_track_returns_envelope_and_frontier() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_commit;
+    use bullseye::store;
+    use bullseye::tools::CommitTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    store::create_at(tmp.path(), Location::InRepo, "t45-commit").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let result = handle_commit(CommitTool {
+        cwd,
+        op: "track".to_string(),
+        id: None,
+        child_of: None,
+        name: Some("Envelope target".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["done".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        reason: None,
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    })
+    .expect("commit track should succeed");
+    let out = text_from_call_result(result);
+    assert!(out.contains("# result"), "missing envelope header: {out}");
+    assert!(out.contains("ok: true"), "{out}");
+    assert!(out.contains("op: track"), "{out}");
+    assert!(out.contains("ids:"), "{out}");
+    assert!(out.contains("frontier:"), "{out}");
+    assert!(out.contains("Created"), "{out}");
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn t45_query_default_view_is_context() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_query;
+    use bullseye::store;
+    use bullseye::tools::QueryTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    store::create_at(tmp.path(), Location::InRepo, "t45-query").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let result = handle_query(QueryTool {
+        cwd,
+        view: None,
+        id: None,
+        filter: None,
+        recent_days: None,
+        momentum: None,
+        frontier_details: None,
+    })
+    .expect("query context should succeed");
+    let out = text_from_call_result(result);
+    assert!(
+        out.contains("Startup context") || out.contains("Frontier") || out.contains("Active"),
+        "expected context-like output: {out}"
+    );
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn t45_open_without_file_is_not_initialized() {
+    use bullseye::config;
+    use bullseye::handler::handle_open;
+    use bullseye::tools::OpenTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let err = handle_open(OpenTool {
+        cwd,
+        location: None,
+        project_name: None,
+        recent_days: None,
+    })
+    .expect_err("open without file should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("code=not_initialized") || msg.contains("not_initialized"),
+        "expected not_initialized code: {msg}"
+    );
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn t45_commit_achieve_and_reopen_roundtrip() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_commit;
+    use bullseye::store;
+    use bullseye::tools::CommitTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "t45-life").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let created = handle_commit(CommitTool {
+        cwd: cwd.clone(),
+        op: "track".to_string(),
+        id: Some("T9".to_string()),
+        child_of: None,
+        name: Some("Lifecycle".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["ok".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        reason: None,
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    })
+    .expect("track");
+    let created_text = text_from_call_result(created);
+    assert!(created_text.contains("ids: T9"), "{created_text}");
+
+    let achieved = handle_commit(CommitTool {
+        cwd: cwd.clone(),
+        op: "achieve".to_string(),
+        id: Some("T9".to_string()),
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        reason: None,
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    })
+    .expect("achieve");
+    assert!(text_from_call_result(achieved).contains("op: achieve"));
+
+    let reopened = handle_commit(CommitTool {
+        cwd,
+        op: "reopen".to_string(),
+        id: Some("T9".to_string()),
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        reason: Some("premature".to_string()),
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    })
+    .expect("reopen");
+    assert!(text_from_call_result(reopened).contains("op: reopen"));
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(
+        file.targets["T9"].status,
+        bullseye::schema::Status::Converging
+    );
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn t45_immutable_achieved_uses_error_code() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "t45-imm").unwrap();
+    // Starter creates T1; retire it then try content patch.
+    let mut file = store::load(&path).unwrap();
+    if let Some(t) = file.targets.get_mut("T1") {
+        t.status = bullseye::schema::Status::Achieved;
+        t.achieved = Some(chrono::Local::now().date_naive());
+    }
+    store::save(&path, &file).unwrap();
+
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let err = handle_put(PutTool {
+        cwd,
+        id: Some("T1".to_string()),
+        child_of: None,
+        name: Some("hacked".to_string()),
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect_err("content patch on achieved must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("immutable_achieved"),
+        "expected immutable_achieved code: {msg}"
+    );
+    config::set_external_root_override(None);
+}
+
+// --- 🎯T42 / T43 / T46 -----------------------------------------------------
+
+#[test]
+fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
+    use bullseye::graph;
+    use bullseye::schema::{OwnedBy, Status, Target, TargetsFile};
+    use chrono::NaiveDate;
+
+    let today = NaiveDate::from_ymd_opt(2026, 7, 11).unwrap();
+    let mut targets = std::collections::BTreeMap::new();
+    targets.insert(
+        "T1".to_string(),
+        Target {
+            name: "foundation".into(),
+            status: Status::Identified,
+            value: 0.0,
+            cost: 0.0,
+            actual_cost: None,
+            set_aside_reason: None,
+            acceptance: vec!["ok".into()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: vec![],
+            cross_depends: vec![],
+            cross_enables: vec![],
+            tags: vec![],
+            strategy: None,
+            origin: "manual".into(),
+            discovered: today,
+            achieved: None,
+            owned_by: Some(OwnedBy {
+                owner: "alice".into(),
+                reason: "open PR".into(),
+            }),
+        },
+    );
+    targets.insert(
+        "T2".to_string(),
+        Target {
+            name: "depends on foundation".into(),
+            status: Status::Identified,
+            value: 0.0,
+            cost: 0.0,
+            actual_cost: None,
+            set_aside_reason: None,
+            acceptance: vec!["ok".into()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: vec!["T1".into()],
+            cross_depends: vec![],
+            cross_enables: vec![],
+            tags: vec![],
+            strategy: None,
+            origin: "manual".into(),
+            discovered: today,
+            achieved: None,
+            owned_by: None,
+        },
+    );
+    let file = TargetsFile {
+        schema_version: Some(5),
+        last_evaluated: None,
+        release_surface: vec![],
+        targets,
+    };
+
+    let front = graph::frontier(&file);
+    assert!(
+        front.iter().all(|t| t.id != "T1"),
+        "owned-by target must not appear on frontier: {front:?}"
+    );
+    assert!(
+        front.iter().all(|t| t.id != "T2"),
+        "dependent of owned-by target must stay blocked: {front:?}"
+    );
+    assert!(
+        graph::owned_elsewhere(&file)
+            .iter()
+            .any(|(id, _)| *id == "T1"),
+        "owned_elsewhere must list T1"
+    );
+
+    let summary = graph::summary(&file, "test.yaml", None, false);
+    assert!(
+        summary.contains("## Owned elsewhere"),
+        "summary must have owned elsewhere section: {summary}"
+    );
+    assert!(summary.contains("owner: alice"), "{summary}");
+}
+
+#[test]
+fn t43_assign_and_unassign_via_commit() {
+    use bullseye::config::{self, Location};
+    use bullseye::graph;
+    use bullseye::handler::handle_commit;
+    use bullseye::store;
+    use bullseye::tools::CommitTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "t43").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Starter creates T1 active.
+    let assign = handle_commit(CommitTool {
+        cwd: cwd.clone(),
+        op: "assign".to_string(),
+        id: Some("T1".to_string()),
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        reason: Some("collaborator PR".to_string()),
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: Some("bob".to_string()),
+    })
+    .expect("assign");
+    let out = text_from_call_result(assign);
+    assert!(out.contains("op: assign"), "{out}");
+
+    let file = store::load(&path).unwrap();
+    assert!(file.targets["T1"].owned_by.is_some());
+    assert!(graph::frontier(&file).iter().all(|t| t.id != "T1"));
+
+    let unassign = handle_commit(CommitTool {
+        cwd,
+        op: "unassign".to_string(),
+        id: Some("T1".to_string()),
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        reason: None,
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    })
+    .expect("unassign");
+    assert!(text_from_call_result(unassign).contains("op: unassign"));
+
+    let file = store::load(&path).unwrap();
+    assert!(file.targets["T1"].owned_by.is_none());
+    assert!(
+        graph::frontier(&file).iter().any(|t| t.id == "T1"),
+        "after unassign T1 returns to frontier"
+    );
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn t42_release_surface_roundtrips_in_yaml() {
+    use bullseye::schema::TargetsFile;
+
+    let yaml = r#"
+schema_version: 5
+release_surface:
+  - dist/
+  - src/
+targets: {}
+"#;
+    let file: TargetsFile = serde_yaml_ng::from_str(yaml).unwrap();
+    assert_eq!(file.release_surface, vec!["dist/", "src/"]);
+    let out = serde_yaml_ng::to_string(&file).unwrap();
+    assert!(out.contains("release_surface"), "{out}");
+    assert!(out.contains("dist/"), "{out}");
+}
+
+#[test]
+fn t42_partition_classifies_by_declared_surface() {
+    use bullseye::convergence::{UnreleasedFix, partition_by_release_surface};
+    use std::process::Command;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // Minimal git repo with two fix commits: one touches src/, one only tests/
+    assert!(
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["config", "user.email", "t@example.com"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["config", "user.name", "t"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(root.join("tests/t.rs"), "fn t() {}\n").unwrap();
+    assert!(
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["tag", "v0.1.0"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    std::fs::write(root.join("src/lib.rs"), "fn a() { /* fix */ }\n").unwrap();
+    assert!(
+        Command::new("git")
+            .args(["add", "src/lib.rs"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["commit", "-m", "fix: surface bug"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let surface_hash = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    std::fs::write(root.join("tests/t.rs"), "fn t() { /* fix */ }\n").unwrap();
+    assert!(
+        Command::new("git")
+            .args(["add", "tests/t.rs"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["commit", "-m", "fix: test only"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let test_hash = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    let fixes = vec![
+        UnreleasedFix {
+            hash: surface_hash.clone(),
+            subject: "fix: surface bug".into(),
+        },
+        UnreleasedFix {
+            hash: test_hash.clone(),
+            subject: "fix: test only".into(),
+        },
+    ];
+    let surface = vec!["src/".to_string()];
+    let (ship, ext) = partition_by_release_surface(root, &fixes, &surface);
+    assert_eq!(
+        ship.len(),
+        1,
+        "only surface fix ships: ship={ship:?} ext={ext:?}"
+    );
+    assert_eq!(ship[0].hash, surface_hash);
+    assert_eq!(ext.len(), 1);
+    assert_eq!(ext[0].hash, test_hash);
+
+    // No declaration → all ship-relevant
+    let (ship2, ext2) = partition_by_release_surface(root, &fixes, &[]);
+    assert_eq!(ship2.len(), 2);
+    assert!(ext2.is_empty());
+}
+
+#[test]
+fn t46_informational_policy_suppresses_release_in_next_action_notes() {
+    use bullseye::convergence::{
+        ReleasePolicy, UnreleasedFix, UnreleasedFixesPolicy, parse_release_policy_yaml,
+    };
+
+    let p = parse_release_policy_yaml(
+        "release:\n  unreleased_fixes: informational\n  channel: store\n",
+        "game",
+    );
+    assert_eq!(p.unreleased_fixes, UnreleasedFixesPolicy::Informational);
+    assert_eq!(p.channel.as_deref(), Some("store"));
+
+    // recommend_ship default when missing release block
+    let d = ReleasePolicy::default();
+    assert_eq!(d.unreleased_fixes, UnreleasedFixesPolicy::RecommendShip);
+
+    // smoke: fix list type still usable
+    let _ = UnreleasedFix {
+        hash: "dead".into(),
+        subject: "fix: x".into(),
+    };
 }

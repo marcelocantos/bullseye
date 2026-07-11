@@ -148,8 +148,30 @@ so risk is identical.
 
 ## Deferred
 
-None. No findings rated Medium or higher were deferred; no Low-value
-findings were worth pursuing.
+None at the time of the 2026-04-11 pass.
+
+## Follow-up — 2026-07-11
+
+Re-measured cold debug build at **~13.7s** (up from ~8–11s). New
+dominant unit: **libsqlite3-sys** (~6.2s) from `rusqlite` + `bundled`.
+`tokio` with `features = ["full"]` remains on the critical path via
+**rust-mcp-sdk**, not bullseye.
+
+**Applied now:** bullseye's own `tokio` dep lists only
+`macros`, `rt-multi-thread`, `sync`, `time`, `io-util` (no `full`).
+Feature unification still enables `full` until the SDK stops declaring
+it — tracked as 🎯T47.
+
+**Filed for aggressive tuning (not applied):**
+
+| Target | Idea |
+|--------|------|
+| 🎯T47 | SDK / patch so `tokio` `full` is not forced |
+| 🎯T48 | Optional feature-gate bundled SQLite for slim local clean builds |
+| 🎯T49 | Adopt sccache / mold / nextest / workspace split only past measured thresholds |
+
+CI `Swatinem/rust-cache@v2` and local incremental (~0.05s no-op, ~1s
+edit) remain the right defaults; no change there.
 
 ## Method
 
