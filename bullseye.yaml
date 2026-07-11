@@ -1339,6 +1339,76 @@ targets:
     origin: manual
     discovered: 2026-07-11
     achieved: 2026-07-11
+  T46:
+    name: Unreleased-fix /release recommendation is driven by profile-template release policy, not hard-coded product flavors
+    status: identified
+    value: 5.0
+    cost: 5.0
+    acceptance:
+    - 'bullseye_convergence resolves a project profile name from AGENTS.md/CLAUDE.md (e.g. `profile: game`) and loads a profile template YAML from a documented search path (e.g. $BULLSEYE_PROFILES_DIR, then ~/.claude/gates/<profile>.yaml); it never branches on the string "game" or other product-flavor names in code.'
+    - 'Profile templates may declare a `release:` block with a small vocabulary bullseye understands — at minimum `unreleased_fixes: recommend_ship | informational` (and optionally `channel: tag | store | package | none` for wording). Unknown or missing profile / missing `release` block defaults to current behaviour (`recommend_ship`).'
+    - 'When resolved policy is `unreleased_fixes: informational`, unreleased fix commits are still listed under ## Unreleased fixes, but ## Next action does not recommend Run /release; frontier target work is recommended instead, with a note that policy comes from the profile template (distinct from release_freeze wording).'
+    - 'When policy is `recommend_ship` (or default), behaviour matches today: unreleased fixes outrank frontier and recommend /release. `release_freeze:` still overrides and suppresses /release regardless of profile policy.'
+    - 'Tests cover: informational profile template suppresses /release while listing fixes; recommend_ship still recommends; freeze still wins; missing profile/template degrades to recommend_ship; no hard-coded flavor strings in the release-policy path.'
+    - 'Agents-guide / STABILITY document the vocabulary, discovery search path, and that product flavors live only in external profile templates (e.g. gates/game.yaml setting informational + channel: store).'
+    context: 'Filed 2026-07-11 from a stock-car-racing /cv session in the minicades fleet. Minicades and Squz games ship via App Store / Play Store cuts, not via GitHub tag + /release whenever fix commits land on master. Auto-recommend Run /release is correct for CLI/Homebrew tools but wrong for store products — and today it even fires on non-user-facing commits (bullseye.yaml, logging). The desired design is transitive: CLAUDE.md declares profile: game (product flavor already used across minicades/squz gate profiles) → external profile template (e.g. ~/.claude/gates/game.yaml) maps flavor to release policy → bullseye reads only the policy vocabulary (unreleased_fixes: informational | recommend_ship), never hard-codes "game". Adjacent to T42 (shipped-surface filter for which commits count as fixes); this target is about whether fixes that do count should auto-prioritize /release. release_freeze: remains the temporary hard override; profile policy is the steady-state delivery model.'
+    tags:
+    - convergence
+    - release
+    - profiles
+    - policy
+    origin: stock-car-racing /cv session 2026-07-11
+    discovered: 2026-07-11
+  T47:
+    name: Cold cargo builds do not enable tokio features solely because rust-mcp-sdk forces features=["full"]
+    status: identified
+    value: 5.0
+    cost: 5.0
+    acceptance:
+    - rust-mcp-sdk (or a pinned fork/patch used by bullseye) no longer enables tokio feature "full" for the stdio server path; cargo tree -i tokio -e features for bullseye shows only features required by the MCP stdio server plus bullseye's own macros/rt-multi-thread/sync/time/io-util
+    - Bullseye's Cargo.toml continues to list a minimal tokio feature set (not full); after the SDK change, a clean cargo build --timings shows tokio unit duration reduced versus the pre-change baseline recorded in docs/build-perf notes or the PR description
+    - cargo test and the MCP server still start (bullseye --help / a smoke tool call) with the trimmed feature set
+    context: Filed from the 2026-07-11 build-perf tangent. Bullseye itself only needs macros + rt-multi-thread (+ sync/time/io-util). Applying a minimal feature list in bullseye's Cargo.toml is already done for intent, but rust-mcp-sdk 0.9.0 hardcodes tokio features=["full"], so cargo feature-unification keeps compiling the full stack. Aggressive cold-build win requires upstream SDK trim, a feature-gated SDK dependency, or a temporary [patch]/fork. Not a local-only cargo config fix.
+    tags:
+    - build-perf
+    - deps
+    - tokio
+    - upstream
+    origin: manual
+    discovered: 2026-07-11
+  T48:
+    name: Local clean builds can skip compiling bundled SQLite when priorities/SQLite work is not needed
+    status: identified
+    value: 3.0
+    cost: 5.0
+    acceptance:
+    - rusqlite/libsqlite3-sys bundled C compile is behind an explicit cargo feature (e.g. sqlite or priorities) that remains enabled by default for release and Homebrew builds
+    - A documented local profile or feature inversion exists so `cargo build --no-default-features` (or equivalent) produces a working MCP core without compiling libsqlite3-sys, and cargo build --timings on that path shows libsqlite3-sys absent or not on the critical path
+    - Default `cargo test` / CI / release still exercise the SQLite-backed paths (sync-priorities) so production behaviour is not under-tested
+    - AGENTS.md or agents-guide notes when to use the slim feature set for fast local clean rebuilds
+    context: Filed from 2026-07-11 build-perf audit. libsqlite3-sys build-script run is ~6.2s of a ~13.7s cold debug build — the largest single unit after rusqlite was added with features=["bundled"]. Bundled remains correct for portable releases; aggressive local tuning is optional feature-gating, not dropping bundled for ship.
+    tags:
+    - build-perf
+    - sqlite
+    - features
+    origin: manual
+    discovered: 2026-07-11
+  T49:
+    name: Build-perf tooling beyond cargo defaults is adopted only when measured thresholds are crossed
+    status: identified
+    value: 2.0
+    cost: 2.0
+    acceptance:
+    - 'docs/build-perf (or STABILITY/agents-guide note) records adoption thresholds: e.g. sccache when target/ is wiped often or multi-machine caches matter; faster linker (mold/lld) when bin link regularly exceeds ~2s; cargo-nextest when test wall time dominates edit loops; workspace crate split when single-crate incremental after a typical edit exceeds ~3–5s'
+    - No sccache/mold/nextest/workspace split is required for the default contributor path until those thresholds are measured and met
+    - If any tool is adopted, it is documented with install steps and does not break CI (rust-cache remains the GHA cache)
+    context: Filed from 2026-07-11 build-perf tangent. Local incremental is already ~0.05s no-op / ~1s edit; CI warm ~22s with Swatinem/rust-cache. sccache, mold, cranelift, nextest, and workspace splits are real techniques but negative-ROI at current scale if applied blindly. This target captures the disciplined adoption bar rather than installing tools for their own sake.
+    tags:
+    - build-perf
+    - tooling
+    - policy
+    origin: manual
+    discovered: 2026-07-11
   T5:
     name: Migration from markdown targets to bullseye
     status: achieved
