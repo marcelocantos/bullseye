@@ -6,7 +6,6 @@ use std::process;
 use bullseye::handler::{
     TargetHandler, handle_commit, handle_open, handle_plan_checks, handle_query,
 };
-use bullseye::priorities;
 use bullseye::tools::{CommitTool, OpenTool, PlanChecksTool, QueryTool};
 use rust_mcp_sdk::mcp_server::{McpServerOptions, server_runtime};
 use rust_mcp_sdk::schema::{
@@ -42,16 +41,28 @@ async fn main() -> SdkResult<()> {
             "query" => cli_exit(cli_query(&args[2..])),
             "commit" => cli_exit(cli_commit(&args[2..])),
             "plan-checks" => cli_exit(cli_plan_checks(&args[2..])),
-            "sync-priorities" => match priorities::run_sync(&args[2..]) {
-                Ok(msg) => {
-                    println!("{msg}");
-                    process::exit(0);
+            "sync-priorities" => {
+                #[cfg(feature = "sqlite")]
+                match bullseye::priorities::run_sync(&args[2..]) {
+                    Ok(msg) => {
+                        println!("{msg}");
+                        process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("sync-priorities: {e}");
+                        process::exit(1);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("sync-priorities: {e}");
+                #[cfg(not(feature = "sqlite"))]
+                {
+                    eprintln!(
+                        "sync-priorities: this binary was built without the `sqlite` feature \
+                         (cargo build --no-default-features). Rebuild with default features \
+                         or `--features sqlite`."
+                    );
                     process::exit(1);
                 }
-            },
+            }
             "github" => match bullseye::github::run(&args[2..]) {
                 Ok(msg) => {
                     println!("{msg}");

@@ -5275,6 +5275,7 @@ fn github_sync_handler_inverts_pull_push_flags() {
 
 /// The sync-priorities MCP handler runs the same scan + upsert as the CLI
 /// subcommand, writing the portfolio frontier into the SQLite table.
+#[cfg(feature = "sqlite")]
 #[test]
 fn sync_priorities_handler_writes_frontier() {
     use bullseye::handler::handle_sync_priorities;

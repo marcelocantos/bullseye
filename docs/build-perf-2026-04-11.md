@@ -154,24 +154,48 @@ None at the time of the 2026-04-11 pass.
 
 Re-measured cold debug build at **~13.7s** (up from ~8–11s). New
 dominant unit: **libsqlite3-sys** (~6.2s) from `rusqlite` + `bundled`.
-`tokio` with `features = ["full"]` remains on the critical path via
-**rust-mcp-sdk**, not bullseye.
+`tokio` with `features = ["full"]` was on the critical path via
+**rust-mcp-sdk**.
 
-**Applied now:** bullseye's own `tokio` dep lists only
-`macros`, `rt-multi-thread`, `sync`, `time`, `io-util` (no `full`).
-Feature unification still enables `full` until the SDK stops declaring
-it — tracked as 🎯T47.
+### Applied in the build-perf release (🎯T47–T49)
 
-**Filed for aggressive tuning (not applied):**
+| Change | Effect (local cold `cargo build`, M-series) |
+|--------|-----------------------------------------------|
+| Vendor-patch MCP SDK/transport: drop `tokio/full` (🎯T47) | `cargo tree` no longer enables `full`; tokio unit **~3.5s → ~1.9s** |
+| Default+optional `sqlite` feature (🎯T48) | `cargo build --no-default-features` **~10.3s**, no `libsqlite3-sys`; default still **~12.6s** with priorities |
+| Threshold doc (🎯T49) | See below — tooling not installed by default |
 
-| Target | Idea |
-|--------|------|
-| 🎯T47 | SDK / patch so `tokio` `full` is not forced |
-| 🎯T48 | Optional feature-gate bundled SQLite for slim local clean builds |
-| 🎯T49 | Adopt sccache / mold / nextest / workspace split only past measured thresholds |
+Baseline after trim (default features, cold debug): **~12.6s** wall
+(was ~13.7s before T47). Slim path (no sqlite): **~10.3–11.2s**.
 
-CI `Swatinem/rust-cache@v2` and local incremental (~0.05s no-op, ~1s
-edit) remain the right defaults; no change there.
+### Adoption thresholds (🎯T49)
+
+Do **not** add these to the default contributor path until a threshold
+is measured and met. CI continues to use `Swatinem/rust-cache@v2` only.
+
+| Tool | Adopt when | Default today |
+|------|------------|---------------|
+| **sccache** | `target/` wiped often, or multi-machine shared cache needed | Not configured — local incremental is enough |
+| **Faster linker (mold/lld)** | Bin link step regularly **> ~2s** wall | Default system linker; bin link ~0.7s |
+| **cargo-nextest** | Test **run** wall dominates edit loops | `cargo test` is fine for the current suite |
+| **Workspace crate split** | Typical one-file edit incremental rebuild **> ~3–5s** | Single crate; edit rebuild ~1s |
+
+If a tool is adopted later: document install in this file + AGENTS.md,
+and ensure CI still uses rust-cache (do not replace GHA cache with
+sccache unless self-hosted runners need a shared backend).
+
+### Slim local builds (🎯T48)
+
+```bash
+# Full product (default) — includes sync-priorities / bundled SQLite
+cargo build
+cargo test
+
+# Fast clean rebuild without SQLite C compile
+cargo build --no-default-features
+# MCP core works; sync-priorities returns a clear error until rebuilt
+# with default features or --features sqlite
+```
 
 ## Method
 

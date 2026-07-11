@@ -12,6 +12,7 @@ pub mod id_alloc;
 pub mod import;
 pub mod ops;
 pub mod portfolio;
+#[cfg(feature = "sqlite")]
 pub mod priorities;
 pub mod repo_guard;
 pub mod resolve;
