@@ -996,9 +996,10 @@ targets:
     achieved: 2026-06-20
   T31:
     name: A Fly-hosted sqlpipe Master ingests GitHub App issue webhooks into per-repo SQLite tables
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 8.0
     acceptance:
     - The service exposes a webhook endpoint that verifies GitHub's X-Hub-Signature-256 HMAC and rejects unsigned/invalid deliveries.
     - Each issues-event delivery is upserted into a table partitioned per repository (one table/DB per repo), keyed by stable ids (repo id/node_id, issue node_id) — never owner/name.
@@ -1006,11 +1007,19 @@ targets:
     - The table is a sqlpipe Master (changeset tracking + convergence) ready to serve Replicas.
     - A GitHub backfill poll on cold start reconstructs state if the Master DB volume is lost (the single place a reconcile-poll lives).
     context: |-
-      Stage 1 of the two-stage GitHub-issues integration (Fly Master → localhost Replica). Per-repo table partitioning is a hard requirement, not a convenience: it lets per-user authorization happen at sqlpipe's table-ownership granularity, inside the convergence boundary (see the auth target). HOME REPO: https://github.com/marcelocantos/issuepipe (local ~/work/github.com/marcelocantos/issuepipe) — sqlpipe-native Go service. The same GitHub App used for user auth owns this webhook (App identity + webhook secret).
+      Stage 1 of the two-stage GitHub-issues integration (Fly Master → localhost Replica). Per-repo table partitioning is a hard requirement. HOME REPO: https://github.com/marcelocantos/issuepipe. DECISION 2026-07-18: transport is **repo webhooks** (App deferred to T32).
 
-      Progress 2026-07-11: Scaffolded issuepipe; deployed to https://issuepipe.fly.dev (Fly app issuepipe, volume issuepipe_data, region syd). Live checks: GET /health → 200; POST /webhook/github with valid X-Hub-Signature-256 ping → 200; invalid signature → 401. Repo webhook installed on marcelocantos/issuepipe (issues+ping). GITHUB_WEBHOOK_SECRET is a Fly secret (not in git). Still remaining for full T31 acceptance: promote from repo webhook to the integration GitHub App (shared with T32 auth), confirm per-repo Master volume persistence under real GH deliveries, and cold-start backfill with installation tokens (not PAT-only).
+      Oracle E2E 2026-07-26:
+      - Live: https://issuepipe.fly.dev health 200; machine started, checks passing.
+      - Real GH issue #1 opened → webhook delivery OK status_code 200 → SQLite row in /data/repo_1297170122.db (issue_node_id I_kwDOTVE-ys8AAAABKNY0dg, number 1, stable repo id 1297170122).
+      - Machine restart: same row still present (volume persistence).
+      - Issue edited → second delivery OK 200; still one row, body updated (idempotent upsert).
+      - Cold-start backfill: wiped issues table, uploaded empty DB, restart with GITHUB_TOKEN+BACKFILL_ON_START=true → issue #1 restored from GitHub list API; _sqlpipe_meta + issues tables present (sqlpipe Master).
+      - Playwright (isolated chromium): issue page title matches; /health body "ok".
+      - Unit tests cover HMAC reject/accept, redelivery, partition, Master seq, rediscovery.
     origin: manual
     discovered: 2026-06-20
+    achieved: 2026-07-26
   T32:
     name: Replicas authenticate with transitive GitHub identity; the Master scopes each to that user's GitHub-readable repos
     status: identified
@@ -1023,7 +1032,10 @@ targets:
     - 'Cross-user isolation test passes: user A cannot observe user B''s private-repo issues, including via convergence bucket-hash diffs.'
     - Multiple users connect concurrently to one Master, each scoped independently; revoking a user's GitHub access propagates on the next token re-validation.
     - The Master validates tokens on connect and on a short TTL (and on 401); it does not persist user tokens beyond the connection.
-    context: 'The security-critical core, spanning both stages. Authorization is by delegation: the Master mirrors GitHub''s own per-user repo permissions rather than maintaining its own. OPEN DECISION: device-flow user-to-server token (preferred — best UX/security, no invented identity) vs. user-pasted fine-grained PAT (simplest v1). Both achieve transitive GitHub identity + multi-user. The leak risk that forces per-repo table partitioning (T31): filtering rows AFTER convergence leaks existence via hash diffs, so authorization must gate which tables a Replica converges at all.'
+    context: |-
+      The security-critical core, spanning both stages. Authorization is by delegation: the Master mirrors GitHub's own per-user repo permissions rather than maintaining its own. OPEN DECISION: device-flow user-to-server token (preferred — best UX/security, no invented identity) vs. user-pasted fine-grained PAT (simplest v1). Both achieve transitive GitHub identity + multi-user. The leak risk that forces per-repo table partitioning (T31): filtering rows AFTER convergence leaks existence via hash diffs, so authorization must gate which tables a Replica converges at all.
+
+      DECISION 2026-07-18 (with T31): T31 ships on **repo webhooks**; the integration **GitHub App is owned by T32** (create + install when this target is in progress). App is required here for installation tokens / device flow / multi-user scope — not for Stage-1 ingest.
     depends_on:
     - T31
     origin: manual
@@ -1489,6 +1501,35 @@ targets:
     origin: manual
     discovered: 2026-04-07
     achieved: 2026-04-09
+  T50:
+    name: Postponed targets can wake on a date and/or an agent-evaluated predicate
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A target may be postponed with an optional wake date, an optional free-text predicate, or both; at least one trigger is required.
+    - Low-level code (schema, load/validate, frontier/summary/convergence) understands and persists wake dates and excludes postponed-until-date targets from the frontier until the date is due (date-only or date+predicate with date not yet reached).
+    - Predicate text is opaque to bullseye — stored and surfaced for agents to evaluate; bullseye never interprets predicate semantics.
+    - When a wake date is due, date-gated postponement no longer blocks the frontier; if a predicate remains, agents evaluate it and clear or re-postpone via mutation tools (not by hand-editing YAML unless emergency repair).
+    - MCP and CLI expose postpone/wake (or equivalent) with surface parity; tests cover date gating, predicate-only storage/surface, dual-trigger, and return to the frontier after wake.
+    context: 'Filed 2026-07-19. Desire: postpone work until a calendar moment and/or until some condition holds, without set_aside (terminal/parked) or ownership exclusion. Date triggers belong in core — deterministic, no agent required for the clock. Predicates are arbitrary agent-facing text (e.g. "sqlpipe Go binding ships install tokens", "after T32 lands") evaluated by humans/agents at session/convergence time; bullseye only stores and displays them. Complements set_aside (won''t-do/parked) and owned_by (in flight elsewhere).'
+    origin: manual
+    discovered: 2026-07-19
+  T51:
+    name: Target IDs never collide across machines, worktrees, or unfetched remotes
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Two independent clones (or worktrees) that allocate target IDs without having fetched each other's commits still produce disjoint IDs — no silent overwrite or dual T-number for different targets.
+    - The guarantee holds for in_repo bullseye.yaml and for external shadow-tree storage (no reliance on a single clone's git history alone).
+    - Explicit create of an ID reserved elsewhere is rejected with a clear code= error, not applied as a patch of the wrong target.
+    - Auto-assign remains the only supported way for agents to obtain new IDs; agents still must not predict IDs from local scans alone.
+    - Tests (or a documented multi-clone integration check) demonstrate the cross-machine / unfetched-remote case that historical_ids alone cannot cover.
+    - STABILITY.md / agents guide document the new global allocation contract and retire the "neither machine has fetched" caveat as an accepted edge case.
+    context: 'Filed 2026-07-19 after clarifying 🎯T28 (git-history ID allocation). Today historical_ids unions every T* ever added across --all/--remotes in the local clone and never recycles IDs — that fixes same-clone multi-branch races. Gaps remain: two machines or worktrees that allocate before either has pushed/fetched the other''s commit; external-mode storage with empty historical scan; simultaneous worktree race between scan and commit. This target is the global allocator / reservation design that closes those holes (mechanism TBD: content-addressed or machine-scoped ID spaces, durable lease registry, push-before-allocate, portfolio-wide ID authority, etc.). Complements T28; does not reopen branch-local history scanning, which stays as the same-clone layer.'
+    origin: manual
+    discovered: 2026-07-19
   T6:
     name: Seamless new-user adoption
     status: achieved
