@@ -73,6 +73,27 @@ async fn main() -> SdkResult<()> {
                     process::exit(1);
                 }
             },
+            "issues-poll" => {
+                #[cfg(feature = "github-issues")]
+                match bullseye::github_issues::http::run(&args[2..]) {
+                    Ok(msg) => {
+                        println!("{msg}");
+                        process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("issues-poll: {e}");
+                        process::exit(1);
+                    }
+                }
+                #[cfg(not(feature = "github-issues"))]
+                {
+                    eprintln!(
+                        "issues-poll: rebuild with `--features github-issues` \
+                         (event-path consumer; 🎯T33)."
+                    );
+                    process::exit(1);
+                }
+            }
             other => {
                 eprintln!("unknown flag: {other}");
                 eprintln!();
@@ -141,6 +162,9 @@ fn print_help() {
     println!("    bullseye plan-checks --id ID [--cwd DIR]");
     println!("    bullseye sync-priorities ...   Extended: portfolio frontier → SQLite");
     println!("    bullseye github sync ...       Extended: GitHub issues ⇄ targets");
+    println!(
+        "    bullseye issues-poll ...       Extended: issuepipe Master → targets (feature github-issues)"
+    );
     println!();
     println!("FLAGS:");
     println!("    --version             Print version");
