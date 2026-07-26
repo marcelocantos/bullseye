@@ -231,6 +231,55 @@ pub fn sync_once(
     .map_err(|e| e.to_string())
 }
 
+/// Continuous consumer loop (🎯T35): poll Master on `interval` until
+/// `should_stop` returns true. Each tick runs [`sync_once`] so newly
+/// delivered Master rows become targets without a separate manual reconcile.
+///
+/// `on_tick` is invoked after every successful (or logged-failed) tick so
+/// tests can observe progress. Transient errors are reported via `on_error`
+/// and do not terminate the loop.
+pub fn run_continuous<S, T, E>(
+    client: &dyn MasterClient,
+    opt_in: &BTreeSet<i64>,
+    yaml_path: &Path,
+    interval: std::time::Duration,
+    mut should_stop: S,
+    mut on_tick: T,
+    mut on_error: E,
+) where
+    S: FnMut() -> bool,
+    T: FnMut(ApplyStats),
+    E: FnMut(String),
+{
+    loop {
+        if should_stop() {
+            break;
+        }
+        let today = chrono::Utc::now().date_naive();
+        match sync_once(client, opt_in, yaml_path, today) {
+            Ok(stats) => on_tick(stats),
+            Err(e) => on_error(e),
+        }
+        if should_stop() {
+            break;
+        }
+        if interval.is_zero() {
+            break; // one-shot
+        }
+        // Sleep in small slices so stop is responsive.
+        let slice = std::time::Duration::from_millis(100);
+        let mut left = interval;
+        while left > std::time::Duration::ZERO {
+            if should_stop() {
+                return;
+            }
+            let step = if left > slice { slice } else { left };
+            std::thread::sleep(step);
+            left = left.saturating_sub(step);
+        }
+    }
+}
+
 /// Parse comma-separated repo ids for opt-in config.
 pub fn parse_opt_in(s: &str) -> BTreeSet<i64> {
     s.split(',')
@@ -305,12 +354,23 @@ pub mod http {
         resp.into_string().map_err(|e| e.to_string())
     }
 
-    /// CLI entry: `bullseye issues-poll --master URL --token TOK --opt-in 1,2 --cwd DIR`
-    pub fn run(args: &[String]) -> Result<String, String> {
+    /// Parse shared config from CLI args + env.
+    pub struct PollConfig {
+        pub master: String,
+        pub token: String,
+        pub opt_in: BTreeSet<i64>,
+        pub cwd: std::path::PathBuf,
+        /// Seconds between ticks. 0 = one-shot. Default from
+        /// `BULLSEYE_ISSUEPIPE_INTERVAL` or 0.
+        pub interval_secs: u64,
+    }
+
+    pub fn parse_config(args: &[String]) -> Result<PollConfig, String> {
         let mut master = None;
         let mut token = None;
         let mut opt_in_s = String::new();
         let mut cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let mut interval_secs: Option<u64> = None;
         let mut i = 0;
         while i < args.len() {
             match args[i].as_str() {
@@ -333,6 +393,14 @@ pub mod http {
                         .map(std::path::PathBuf::from)
                         .ok_or("--cwd needs path")?;
                 }
+                "--interval" => {
+                    i += 1;
+                    let s = args.get(i).ok_or("--interval needs seconds")?;
+                    interval_secs = Some(
+                        s.parse::<u64>()
+                            .map_err(|_| format!("bad --interval: {s}"))?,
+                    );
+                }
                 other => return Err(format!("unknown arg: {other}")),
             }
             i += 1;
@@ -351,18 +419,132 @@ pub mod http {
         if opt_in.is_empty() {
             return Err("opt-in set is empty — set --opt-in or BULLSEYE_ISSUEPIPE_OPT_IN".into());
         }
-        let path = store::discover_anywhere(&cwd)
-            .ok_or_else(|| format!("no bullseye.yaml under {}", cwd.display()))?;
-        let client = HttpMaster {
-            base_url: master,
+        if interval_secs.is_none() {
+            if let Ok(s) = std::env::var("BULLSEYE_ISSUEPIPE_INTERVAL") {
+                interval_secs = Some(
+                    s.parse::<u64>()
+                        .map_err(|_| format!("bad BULLSEYE_ISSUEPIPE_INTERVAL: {s}"))?,
+                );
+            }
+        }
+        Ok(PollConfig {
+            master,
             token,
+            opt_in,
+            cwd,
+            interval_secs: interval_secs.unwrap_or(0),
+        })
+    }
+
+    /// CLI entry: `bullseye issues-poll --master URL --token TOK --opt-in 1,2 [--interval SECS] --cwd DIR`
+    ///
+    /// With `--interval N` (N>0) runs continuously until SIGINT/SIGTERM so
+    /// newly opened GitHub issues appear as targets without further CLI
+    /// action (🎯T35). Interval 0 (default) is a single tick.
+    pub fn run(args: &[String]) -> Result<String, String> {
+        let cfg = parse_config(args)?;
+        let path = store::discover_anywhere(&cfg.cwd)
+            .ok_or_else(|| format!("no bullseye.yaml under {}", cfg.cwd.display()))?;
+        let client = HttpMaster {
+            base_url: cfg.master.clone(),
+            token: cfg.token.clone(),
         };
-        let today = chrono::Utc::now().date_naive();
-        let stats = sync_once(&client, &opt_in, &path, today)?;
-        Ok(format!(
-            "issues-poll: created={} updated={} unchanged={}",
-            stats.created, stats.updated, stats.unchanged
-        ))
+
+        if cfg.interval_secs == 0 {
+            let today = chrono::Utc::now().date_naive();
+            let stats = sync_once(&client, &cfg.opt_in, &path, today)?;
+            return Ok(format!(
+                "issues-poll: created={} updated={} unchanged={}",
+                stats.created, stats.updated, stats.unchanged
+            ));
+        }
+
+        // Continuous mode: runs until the process is terminated (Ctrl-C /
+        // SIGTERM). Default OS signal disposition stops the process.
+        eprintln!(
+            "issues-poll: continuous every {}s (master={}) — Ctrl-C to stop",
+            cfg.interval_secs, cfg.master
+        );
+        let interval = std::time::Duration::from_secs(cfg.interval_secs);
+        run_continuous(
+            &client,
+            &cfg.opt_in,
+            &path,
+            interval,
+            || false,
+            |stats| {
+                if stats.created > 0 || stats.updated > 0 {
+                    eprintln!(
+                        "issues-poll: created={} updated={} unchanged={}",
+                        stats.created, stats.updated, stats.unchanged
+                    );
+                }
+            },
+            |err| eprintln!("issues-poll: tick error: {err}"),
+        );
+        Ok("issues-poll: stopped".into())
+    }
+
+    /// Spawn a continuous poller when event-path env is fully configured.
+    /// Called from MCP server start so agents get auto-pickup without CLI.
+    pub fn maybe_spawn_background_from_env() {
+        let url = match std::env::var("BULLSEYE_ISSUEPIPE_URL") {
+            Ok(u) if !u.is_empty() => u,
+            _ => return,
+        };
+        let token = std::env::var("BULLSEYE_ISSUEPIPE_TOKEN")
+            .or_else(|_| std::env::var("GITHUB_TOKEN"))
+            .unwrap_or_default();
+        if token.is_empty() {
+            return;
+        }
+        let opt_in_s = std::env::var("BULLSEYE_ISSUEPIPE_OPT_IN").unwrap_or_default();
+        let opt_in = parse_opt_in(&opt_in_s);
+        if opt_in.is_empty() {
+            return;
+        }
+        let interval_secs: u64 = std::env::var("BULLSEYE_ISSUEPIPE_INTERVAL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5);
+        if interval_secs == 0 {
+            return;
+        }
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let path = match store::discover_anywhere(&cwd) {
+            Some(p) => p,
+            None => return,
+        };
+        std::thread::Builder::new()
+            .name("issuepipe-poll".into())
+            .spawn(move || {
+                let client = HttpMaster {
+                    base_url: url,
+                    token,
+                };
+                let interval = std::time::Duration::from_secs(interval_secs);
+                eprintln!(
+                    "issues-poll: background consumer every {interval_secs}s → {}",
+                    path.display()
+                );
+                run_continuous(
+                    &client,
+                    &opt_in,
+                    &path,
+                    interval,
+                    || false,
+                    |stats| {
+                        if stats.created > 0 || stats.updated > 0 {
+                            eprintln!(
+                                "issues-poll: created={} updated={} unchanged={}",
+                                stats.created, stats.updated, stats.unchanged
+                            );
+                        }
+                    },
+                    |err| eprintln!("issues-poll: tick error: {err}"),
+                );
+            })
+            .ok();
     }
 }
 
@@ -547,6 +729,86 @@ mod tests {
         let s3 = sync_once(&client, &opt, &yaml, today).unwrap();
         assert_eq!(s3.created, 1);
         assert_eq!(store::load(&yaml).unwrap().targets.len(), 2);
+    }
+
+    #[test]
+    fn continuous_loop_picks_up_issue_without_manual_resync() {
+        // Simulates T35: consumer already running; Master gains a row mid-loop;
+        // next tick creates the target without a separate CLI reconcile.
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("bullseye.yaml");
+        store::save(
+            &yaml,
+            &TargetsFile {
+                schema_version: Some(5),
+                last_evaluated: None,
+                release_surface: Vec::new(),
+                targets: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let issues = Arc::new(Mutex::new(BTreeMap::<i64, Vec<MasterIssue>>::new()));
+        let client = FakeMaster {
+            allowed: vec![5],
+            issues: issues.clone(),
+            fail_403: BTreeSet::new(),
+        };
+        let opt = BTreeSet::from([5i64]);
+        let ticks = Arc::new(Mutex::new(0u32));
+        let ticks2 = ticks.clone();
+        let issues2 = issues.clone();
+        let stop_after = Arc::new(Mutex::new(false));
+        let stop_flag = stop_after.clone();
+
+        // On tick 0: empty Master. After tick 0, inject issue.
+        // On tick 1+: issue present → create target → stop.
+        run_continuous(
+            &client,
+            &opt,
+            &yaml,
+            std::time::Duration::from_millis(20),
+            || *stop_flag.lock().unwrap(),
+            |stats| {
+                let mut t = ticks2.lock().unwrap();
+                *t += 1;
+                if *t == 1 {
+                    issues2.lock().unwrap().insert(
+                        5,
+                        vec![MasterIssue {
+                            issue_node_id: "I_live".into(),
+                            repo_id: 5,
+                            number: 42,
+                            title: "Auto pickup".into(),
+                            body: "".into(),
+                            state: "open".into(),
+                            labels_json: "[]".into(),
+                            html_url: "https://example/42".into(),
+                            updated_at: "t".into(),
+                        }],
+                    );
+                }
+                if stats.created > 0 {
+                    *stop_flag.lock().unwrap() = true;
+                }
+                if *t > 50 {
+                    *stop_flag.lock().unwrap() = true;
+                }
+            },
+            |_| {},
+        );
+
+        let loaded = store::load(&yaml).unwrap();
+        assert!(
+            loaded.targets.contains_key("GH5-42"),
+            "continuous consumer must create target without manual resync; got {:?}",
+            loaded.targets.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(loaded.targets["GH5-42"].name, "Auto pickup");
+        assert!(
+            *ticks.lock().unwrap() >= 2,
+            "need at least empty tick then pickup tick"
+        );
     }
 
     #[test]

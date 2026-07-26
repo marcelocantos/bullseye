@@ -134,6 +134,11 @@ async fn main() -> SdkResult<()> {
         protocol_version: ProtocolVersion::V2025_11_25.into(),
     };
 
+    // Event-path background consumer (🎯T35): when BULLSEYE_ISSUEPIPE_* env
+    // is set, poll the Master so issues become targets without CLI action.
+    #[cfg(feature = "github-issues")]
+    bullseye::github_issues::http::maybe_spawn_background_from_env();
+
     let transport = StdioTransport::new(TransportOptions::default())?;
     let handler = TargetHandler.to_mcp_server_handler();
     let server = server_runtime::create_server(McpServerOptions {
@@ -164,6 +169,9 @@ fn print_help() {
     println!("    bullseye github sync ...       Extended: GitHub issues ⇄ targets");
     println!(
         "    bullseye issues-poll ...       Extended: issuepipe Master → targets (feature github-issues)"
+    );
+    println!(
+        "        [--interval SECS]          continuous consumer (0=once; env BULLSEYE_ISSUEPIPE_INTERVAL)"
     );
     println!();
     println!("FLAGS:");
