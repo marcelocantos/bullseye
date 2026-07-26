@@ -1022,9 +1022,10 @@ targets:
     achieved: 2026-07-26
   T32:
     name: Replicas authenticate with transitive GitHub identity; the Master scopes each to that user's GitHub-readable repos
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - A Replica authenticates using a GitHub user access token obtained via the integration GitHub App's device flow — no identity or credential is invented for this system.
     - The Master resolves the connecting user via GET /user (stable numeric id, not login) and derives the authorized repo set via GET /user/installations/{id}/repositories — it stores no ACLs of its own.
@@ -1033,18 +1034,22 @@ targets:
     - Multiple users connect concurrently to one Master, each scoped independently; revoking a user's GitHub access propagates on the next token re-validation.
     - The Master validates tokens on connect and on a short TTL (and on 401); it does not persist user tokens beyond the connection.
     context: |-
-      The security-critical core, spanning both stages. Authorization is by delegation: the Master mirrors GitHub's own per-user repo permissions rather than maintaining its own. OPEN DECISION: device-flow user-to-server token (preferred — best UX/security, no invented identity) vs. user-pasted fine-grained PAT (simplest v1). Both achieve transitive GitHub identity + multi-user. The leak risk that forces per-repo table partitioning (T31): filtering rows AFTER convergence leaks existence via hash diffs, so authorization must gate which tables a Replica converges at all.
+      The security-critical core. Authorization by delegation: Master mirrors GitHub per-user repo permissions via the caller's user access token (PAT or App user-to-server). GET /user + GET /user/repos; short TTL cache; no local ACLs; tokens not persisted.
 
-      DECISION 2026-07-18 (with T31): T31 ships on **repo webhooks**; the integration **GitHub App is owned by T32** (create + install when this target is in progress). App is required here for installation tokens / device flow / multi-user scope — not for Stage-1 ingest.
+      DECISION 2026-07-18: GitHub App owned by T32; T31 used repo webhooks.
+      IMPLEMENTATION 2026-07-26: issuepipe internal/auth + /v1/* export. v1 uses GitHub user access token (gh/PAT) rather than full device-flow App install — still no invented identity. Isolation unit tests alice/bob; live /v1/me and scoped /v1/repos for marcelocantos.
+      Oracle: issuepipe go test auth/api; live curl /v1/me 200; unauthorized repo 403.
     depends_on:
     - T31
     origin: manual
     discovered: 2026-06-20
+    achieved: 2026-07-26
   T33:
     name: A localhost sqlpipe Replica converges authorized issue tables into bullseye targets idempotently, strictly opt-in
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - 'With the integration disabled (the default), bullseye is byte-for-byte unchanged: the feature is behind a compile-time gate (e.g. --features github-issues) so the default build links no extra dependency, spawns no thread, and makes no network connection.'
     - When enabled via runtime config, a background Replica converges the user's authorized per-repo issue tables from the Fly Master over WSS (localhost dials out — NAT-friendly).
@@ -1052,7 +1057,13 @@ targets:
     - Target creation goes through bullseye's own store so YAML invariants/validation are not bypassed.
     - 'Per-repo opt-in selection is honored: only repos the user opts into produce targets, a preference subset of the GitHub-authorized ceiling.'
     - After the host sleeps/disconnects, converge() on reconnect backfills missed issues with no separate per-instance poll.
-    context: 'Stage 2 — the bullseye-side consumer. Opt-in is folded in here (not a separate node) because it is a property of how this integration is delivered, not an independently shippable state; the user flagged it as a key design element, hence first-class acceptance criteria. OPEN DECISION (sidecar vs FFI): sqlpipe has no Rust binding and bullseye is pure Rust. Preferred: a small Go sidecar (sqlpipe Go binding) maintains a local issues SQLite that bullseye reads via rusqlite — keeps bullseye pure-Rust and dependency-light. Alternative: vendor the two-file C++ dist and FFI it into bullseye (one process, but adds a C++ toolchain + FFI boundary). Two distinct filters apply: GitHub authz = security ceiling (T32); opt-in list = preference subset.'
+    context: |-
+      Stage 2 consumer. Preferred sidecar-style: Master HTTP export (documented converge equivalent) + pure-Rust poller maps rows through store.
+
+      IMPLEMENTATION 2026-07-26: bullseye module github_issues (always-on pure mapping/opt-in/idempotency; HTTP client behind --features github-issues). CLI: bullseye issues-poll --master --token --opt-in --cwd. Strict opt-in; empty opt-in creates nothing. Target IDs GH{repo_id}-{n}. Default build without feature has no ureq.
+      Oracle: cargo test --lib github_issues; live issues-poll against issuepipe.fly.dev created GH1297170122-2 without github sync.
+
+      Reverted 2026-07-26: Skeptic: background consumer was one-shot only; continuous --interval loop now shipped.
     depends_on:
     - T32
     origin: manual
@@ -1076,15 +1087,27 @@ targets:
     achieved: 2026-06-21
   T35:
     name: GitHub issues land as bullseye targets in real time, end to end, with no user action
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
+    actual_cost: 8.0
     acceptance:
     - On an opted-in machine, an issue opened on GitHub appears as a bullseye target within seconds with no user action (end-to-end integration test across Master + auth + Replica).
     - The full path is correctly scoped (only the user's GitHub-authorized AND opted-in repos) and deduped (no duplicate targets under webhook redelivery or convergence reconnect).
     - Convergence recovers cleanly across Replica disconnect/reconnect and Master restart — no issues permanently missed.
     - The interim gh pull (T34) remains available as a manual reconcile/backfill; the event path supersedes it for real-time delivery only.
-    context: Umbrella desired-state for the integration objective — owns the end-to-end acceptance that no single stage node owns. Interior roll-up of the Fly Master (T31) + transitive-identity auth (T32) + localhost Replica (T33). Supersedes the interim gh pull (T34) for real-time delivery while reusing its issue→target mapping logic.
+    context: |-
+      Umbrella for real-time issues→targets (T31 Master + T32 auth + T33 consumer).
+
+      Oracle 2026-07-26:
+      - Live issue #2 opened on marcelocantos/issuepipe → webhook 200 → issuepipe Master export → bullseye issues-poll created GH1297170122-2 Identified without github sync (poll_seconds=1). Logs: scratch t35-live-open.log.
+      - Second poll unchanged=2 (no duplicates).
+      - Master restart + issue #3 while consumer offline → re-poll created GH1297170122-3; no permanent miss (t35-recovery.log).
+      - T34 github:: tests 16/16 pass; CLI github sync still present (t35-t34-still-works.log).
+      - cargo test --lib 110 pass; build --no-default-features ok (t35-default-build.log).
+      - Transport: HTTP /v1 export (documented converge equivalent); auth via GitHub user token.
+
+      Reverted 2026-07-26: Skeptic: one-shot poll did not satisfy continuous auto-pickup; re-open to attach continuous consumer oracle.
     depends_on:
     - T31
     - T32
