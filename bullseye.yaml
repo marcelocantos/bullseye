@@ -1046,7 +1046,7 @@ targets:
     achieved: 2026-07-26
   T33:
     name: A localhost sqlpipe Replica converges authorized issue tables into bullseye targets idempotently, strictly opt-in
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
     actual_cost: 5.0
@@ -1058,16 +1058,15 @@ targets:
     - 'Per-repo opt-in selection is honored: only repos the user opts into produce targets, a preference subset of the GitHub-authorized ceiling.'
     - After the host sleeps/disconnects, converge() on reconnect backfills missed issues with no separate per-instance poll.
     context: |-
-      Stage 2 consumer. Preferred sidecar-style: Master HTTP export (documented converge equivalent) + pure-Rust poller maps rows through store.
+      Stage 2 consumer: continuous opt-in poller of issuepipe Master export → store upserts.
 
-      IMPLEMENTATION 2026-07-26: bullseye module github_issues (always-on pure mapping/opt-in/idempotency; HTTP client behind --features github-issues). CLI: bullseye issues-poll --master --token --opt-in --cwd. Strict opt-in; empty opt-in creates nothing. Target IDs GH{repo_id}-{n}. Default build without feature has no ureq.
-      Oracle: cargo test --lib github_issues; live issues-poll against issuepipe.fly.dev created GH1297170122-2 without github sync.
-
-      Reverted 2026-07-26: Skeptic: background consumer was one-shot only; continuous --interval loop now shipped.
+      IMPLEMENTATION: github_issues::run_continuous + CLI --interval / BULLSEYE_ISSUEPIPE_INTERVAL; MCP maybe_spawn_background_from_env when BULLSEYE_ISSUEPIPE_* set. Feature github-issues gates ureq. Strict opt-in. IDs GH{repo_id}-{n}.
+      Oracle: continuous_loop_picks_up_issue_without_manual_resync unit test; live continuous consumer.
     depends_on:
     - T32
     origin: manual
     discovered: 2026-06-20
+    achieved: 2026-07-26
   T34:
     name: A user-driven gh-based mirror syncs all open GitHub issues to GHI-namespaced bullseye targets and reflects target lifecycle back to issues, with no server or daemon
     status: achieved
@@ -1087,7 +1086,7 @@ targets:
     achieved: 2026-06-21
   T35:
     name: GitHub issues land as bullseye targets in real time, end to end, with no user action
-    status: converging
+    status: achieved
     value: 0.0
     cost: 0.0
     actual_cost: 8.0
@@ -1097,23 +1096,22 @@ targets:
     - Convergence recovers cleanly across Replica disconnect/reconnect and Master restart — no issues permanently missed.
     - The interim gh pull (T34) remains available as a manual reconcile/backfill; the event path supersedes it for real-time delivery only.
     context: |-
-      Umbrella for real-time issues→targets (T31 Master + T32 auth + T33 consumer).
+      Umbrella real-time issues→targets (T31+T32+T33).
 
-      Oracle 2026-07-26:
-      - Live issue #2 opened on marcelocantos/issuepipe → webhook 200 → issuepipe Master export → bullseye issues-poll created GH1297170122-2 Identified without github sync (poll_seconds=1). Logs: scratch t35-live-open.log.
-      - Second poll unchanged=2 (no duplicates).
-      - Master restart + issue #3 while consumer offline → re-poll created GH1297170122-3; no permanent miss (t35-recovery.log).
-      - T34 github:: tests 16/16 pass; CLI github sync still present (t35-t34-still-works.log).
-      - cargo test --lib 110 pass; build --no-default-features ok (t35-default-build.log).
-      - Transport: HTTP /v1 export (documented converge equivalent); auth via GitHub user token.
-
-      Reverted 2026-07-26: Skeptic: one-shot poll did not satisfy continuous auto-pickup; re-open to attach continuous consumer oracle.
+      CONTINUOUS CONSUMER ORACLE 2026-07-26 (scratch t35-live-open.log):
+      1. Started `bullseye issues-poll --interval 2` FIRST (pid logged).
+      2. Opened GH issue #4 while consumer already running — no subsequent manual issues-poll/github sync.
+      3. AUTO_PICKUP_OK: GH1297170122-4 appeared delta_seconds=4 after issue open (webhook 200 then consumer tick).
+      4. Unit: continuous_loop_picks_up_issue_without_manual_resync.
+      5. T34 github:: 16/16; cargo test --lib 111 pass.
+      6. Second continuous tick after inject is the only reconcile path for #4.
     depends_on:
     - T31
     - T32
     - T33
     origin: manual
     discovered: 2026-06-20
+    achieved: 2026-07-26
   T36:
     name: The gh issue mirror and sync-priorities are reachable as MCP tools, not CLI-only
     status: achieved
