@@ -4858,27 +4858,28 @@ fn id_alloc_put_skips_branched_ids() {
     });
     assert!(result.is_ok(), "put should succeed: {result:?}");
     let text = text_from_call_result(result.unwrap());
+    let allocated: Vec<&str> = text
+        .lines()
+        .find(|l| l.starts_with("ids: "))
+        .map(|l| l.trim_start_matches("ids: ").split(',').map(str::trim).collect())
+        .unwrap_or_default();
     assert!(
-        !text.contains("ids: T2") && !text.contains("ids: T3") && !text.contains("🎯T2 ") && !text.contains("🎯T3 "),
+        !allocated.is_empty(),
+        "create result must include ids: header; got: {text}"
+    );
+    assert!(
+        allocated.iter().all(|id| *id != "T2" && *id != "T3"),
         "must not collide with branched T2/T3; got: {text}"
     );
     // Machine-scoped form: T<digits>.<seq>
-    let id_line = text
-        .lines()
-        .find(|l| l.starts_with("ids: "))
-        .unwrap_or("");
     assert!(
-        id_line
-            .trim_start_matches("ids: ")
-            .split(',')
-            .any(|id| {
-                let id = id.trim();
-                id.starts_with('T')
-                    && id.contains('.')
-                    && id
-                        .strip_prefix('T')
-                        .is_some_and(|rest| rest.split('.').all(|p| p.parse::<u32>().is_ok()))
-            }),
+        allocated.iter().any(|id| {
+            id.starts_with('T')
+                && id.contains('.')
+                && id
+                    .strip_prefix('T')
+                    .is_some_and(|rest| rest.split('.').all(|p| p.parse::<u32>().is_ok()))
+        }),
         "expected machine-scoped T{{node}}.{{seq}} id; got: {text}"
     );
     assert!(

@@ -648,8 +648,8 @@ fn handle_postpone(t: &crate::tools::CommitTool) -> ToolResult {
             );
             text_result(api::format_mutation_result(
                 "postpone",
-                &[id.clone()],
-                &[id],
+                std::slice::from_ref(&id),
+                std::slice::from_ref(&id),
                 &front,
                 &path,
                 &body,
@@ -675,8 +675,8 @@ fn handle_wake(cwd: &str, id: &str) -> ToolResult {
             let front = api::frontier_ids_from_path(&path);
             text_result(api::format_mutation_result(
                 "wake",
-                &[id.clone()],
-                &[id.clone()],
+                std::slice::from_ref(&id),
+                std::slice::from_ref(&id),
                 &front,
                 &path,
                 &format!("Woke 🎯{id} — postponement cleared"),
