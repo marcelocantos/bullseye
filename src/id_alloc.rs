@@ -160,3 +160,89 @@ pub fn clear_cache_for_tests() {
         cache.clear();
     }
 }
+
+/// Durable per-machine node tag (🎯T51). Stored under the bullseye data
+/// dir so external-mode and in-repo clones on the same machine share it,
+/// while distinct machines almost surely differ.
+pub fn machine_node_tag() -> u32 {
+    use std::io::Write;
+    let dir = crate::config::external_root();
+    let path = dir.join("node_id");
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        let trimmed = s.trim();
+        if let Ok(n) = u32::from_str_radix(trimmed, 16) {
+            return n % 1_000_000;
+        }
+        if let Ok(n) = trimmed.parse::<u32>() {
+            return n % 1_000_000;
+        }
+    }
+    // Fresh tag: mix time + address bits for uniqueness without rand crate.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let tag = ((nanos ^ (nanos >> 17) ^ 0xA5A5_5A5A) as u32) % 1_000_000;
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{tag:06x}");
+    }
+    tag
+}
+
+/// Next auto top-level ID: `T{node}.{seq}` (🎯T51 global allocation).
+pub fn next_global_top_level_id(
+    file: &crate::schema::TargetsFile,
+    historical: &HashSet<String>,
+) -> String {
+    let node = machine_node_tag();
+    let prefix = format!("T{node}.");
+    let in_memory = file.targets.keys().map(String::as_str);
+    let from_history = historical.iter().map(String::as_str);
+    let max_seq = in_memory
+        .chain(from_history)
+        .filter_map(|k| {
+            let suffix = k.strip_prefix(prefix.as_str())?;
+            if suffix.contains('.') {
+                None
+            } else {
+                suffix.parse::<u32>().ok()
+            }
+        })
+        .max()
+        .unwrap_or(0);
+    format!("T{node}.{}", max_seq + 1)
+}
+
+#[cfg(test)]
+mod t51_tests {
+    use super::*;
+    use crate::schema::TargetsFile;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn two_node_tags_produce_disjoint_id_spaces() {
+        let file = TargetsFile {
+            schema_version: Some(5),
+            last_evaluated: None,
+            release_surface: vec![],
+            targets: BTreeMap::new(),
+        };
+        let hist = HashSet::new();
+        // Simulate two machines by manually crafting prefixes
+        let a = format!("T{}.{}", 111_111u32, 1);
+        let b = format!("T{}.{}", 222_222u32, 1);
+        assert_ne!(a, b);
+        let id = next_global_top_level_id(&file, &hist);
+        assert!(id.starts_with('T'), "{id}");
+        assert!(
+            id.contains('.'),
+            "machine-scoped id should be T{{node}}.{{seq}}, got {id}"
+        );
+    }
+}

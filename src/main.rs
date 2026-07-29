@@ -282,11 +282,14 @@ fn cli_query(args: &[String]) -> Result<String, String> {
 fn cli_commit(args: &[String]) -> Result<String, String> {
     if has_flag(args, "--help") || args.is_empty() {
         return Ok("bullseye commit --op OP [--cwd DIR] [fields]\n\
-             ops: track|block|split|achieve|defer|reopen\n\
+             ops: track|block|split|achieve|defer|reopen|assign|unassign|postpone|wake|rehash\n\
              track:  --name NAME --acceptance A [--acceptance A2] [--id ID] [--child-of P]\n\
              block:  --id ID --blocks T1[,T2]\n\
              achieve: --id ID [--actual-cost N]\n\
-             defer/reopen: --id ID --reason TEXT\n\
+             defer/reopen/rehash: --id ID --reason TEXT (rehash: reason only)\n\
+             postpone: --id ID [--postponed-until YYYY-MM-DD] [--postpone-predicate TEXT]\n\
+             wake: --id ID\n\
+             assign: --id ID --owner HANDLE --reason TEXT\n\
              split: use MCP (children are structured); CLI split not fully wired\n"
             .to_string());
     }
@@ -340,6 +343,8 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
         }),
         actual_cost: flag_value(args, "--actual-cost").and_then(|s| s.parse().ok()),
         reason: flag_value(args, "--reason"),
+        postponed_until: flag_value(args, "--postponed-until"),
+        postpone_predicate: flag_value(args, "--postpone-predicate"),
         parent: flag_value(args, "--parent"),
         mode: flag_value(args, "--mode"),
         children: None,

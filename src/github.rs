@@ -462,6 +462,8 @@ fn new_target(repo: &str, issue: &Issue, today: NaiveDate) -> Target {
         discovered: today,
         achieved: None,
         owned_by: None,
+        postponed_until: None,
+        postpone_predicate: None,
     }
 }
 

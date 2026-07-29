@@ -265,6 +265,17 @@ pub struct Target {
     /// (🎯T43). Cleared with `bullseye_commit op=unassign`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owned_by: Option<OwnedBy>,
+
+    /// When set, this active target is excluded from the frontier until
+    /// this calendar date (inclusive wake: on/after this date the date
+    /// gate lifts). 🎯T50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postponed_until: Option<NaiveDate>,
+
+    /// Opaque agent-evaluated wake condition. Bullseye stores and
+    /// surfaces it but never interprets it. 🎯T50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postpone_predicate: Option<String>,
 }
 
 /// A cross-repo edge — a link from a target in this repo to a target

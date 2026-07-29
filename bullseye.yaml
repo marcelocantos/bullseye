@@ -1250,9 +1250,10 @@ targets:
     achieved: 2026-07-06
   T41:
     name: Agents mutate targets only through Bullseye tools unless the user explicitly permits direct file edits
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - 'The generated `bullseye.yaml` preamble contains a strongly worded agent instruction: agents must not edit this file directly unless explicitly instructed by the user or repairing an unloadable file; use Bullseye MCP/CLI mutation tools instead.'
     - The generated preamble contains a strong content hash covering the canonical target payload, excluding the generated preamble/hash field itself.
@@ -1276,6 +1277,7 @@ targets:
     - workflow
     origin: Codex direct bullseye.yaml edit investigation 2026-07-06
     discovered: 2026-07-06
+    achieved: 2026-07-29
   T42:
     name: The unreleased-fixes detector ignores fix commits that don't change the shipped surface
     status: achieved
@@ -1524,9 +1526,10 @@ targets:
     achieved: 2026-04-09
   T50:
     name: Postponed targets can wake on a date and/or an agent-evaluated predicate
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 3.0
     acceptance:
     - A target may be postponed with an optional wake date, an optional free-text predicate, or both; at least one trigger is required.
     - Low-level code (schema, load/validate, frontier/summary/convergence) understands and persists wake dates and excludes postponed-until-date targets from the frontier until the date is due (date-only or date+predicate with date not yet reached).
@@ -1536,11 +1539,13 @@ targets:
     context: 'Filed 2026-07-19. Desire: postpone work until a calendar moment and/or until some condition holds, without set_aside (terminal/parked) or ownership exclusion. Date triggers belong in core — deterministic, no agent required for the clock. Predicates are arbitrary agent-facing text (e.g. "sqlpipe Go binding ships install tokens", "after T32 lands") evaluated by humans/agents at session/convergence time; bullseye only stores and displays them. Complements set_aside (won''t-do/parked) and owned_by (in flight elsewhere).'
     origin: manual
     discovered: 2026-07-19
+    achieved: 2026-07-29
   T51:
     name: Target IDs never collide across machines, worktrees, or unfetched remotes
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 3.0
     acceptance:
     - Two independent clones (or worktrees) that allocate target IDs without having fetched each other's commits still produce disjoint IDs — no silent overwrite or dual T-number for different targets.
     - The guarantee holds for in_repo bullseye.yaml and for external shadow-tree storage (no reliance on a single clone's git history alone).
@@ -1551,6 +1556,84 @@ targets:
     context: 'Filed 2026-07-19 after clarifying 🎯T28 (git-history ID allocation). Today historical_ids unions every T* ever added across --all/--remotes in the local clone and never recycles IDs — that fixes same-clone multi-branch races. Gaps remain: two machines or worktrees that allocate before either has pushed/fetched the other''s commit; external-mode storage with empty historical scan; simultaneous worktree race between scan and commit. This target is the global allocator / reservation design that closes those holes (mechanism TBD: content-addressed or machine-scoped ID spaces, durable lease registry, push-before-allocate, portfolio-wide ID authority, etc.). Complements T28; does not reopen branch-local history scanning, which stays as the same-clone layer.'
     origin: manual
     discovered: 2026-07-19
+    achieved: 2026-07-29
+  T52:
+    name: Issuepipe continuous consumer is the default path when event-path env is complete
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 2.0
+    acceptance:
+    - When BULLSEYE_ISSUEPIPE_URL, token, and OPT_IN are all set, bullseye_open or startup/context (and MCP server start with github-issues) either auto-starts continuous poll or loudly recommends the exact missing piece / command
+    - Half-configured env (some vars set, not all) produces a clear error or warning naming what is missing — silent no-op is not acceptable
+    - Documented default interval for continuous mode; one-shot remains available via --interval 0 or equivalent
+    - Tests cover complete-env spawn-or-recommend path and half-configured warning without requiring a live Fly Master
+    context: 'Filed 2026-07-29 from T35 skeptic aftermath and origin reflection: continuous --interval exists but default-on only if agents remember env + feature. Product should make complete config mean auto-pickup without further user action.'
+    tags:
+    - github-issues
+    - dx
+    - integrations
+    origin: manual
+    discovered: 2026-07-29
+    achieved: 2026-07-29
+  T53:
+    name: Graph hygiene risks are surfaced by bullseye core without reviving showcase or kind
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 2.0
+    acceptance:
+    - validate and/or summary/convergence report advisory graph-shape warnings for tunnels, leaves with no path to a checkable outcome, and all-active-targets-blocked situations
+    - Warnings are non-blocking for mutations by default (or clearly separated from validate_blocking) so they do not recreate showcase hard-stops
+    - At least one query view or convergence section exposes the warnings so agents see them without reading AGENTS.md prose
+    - Tests cover at least one synthetic tunnel or all-blocked graph and assert the warning appears
+    - No reintroduction of kind, showcase, verifies, or tunnel-as-hard-gate schema
+    context: 'Filed 2026-07-29 from origin-report reflection: agents and humans still build depends_on webs ahead of evidence; pain was over-process in schema, not lack of visibility. Prefer advisory shape hygiene over new node types. Complements T50 (postpone) as escape hatch rather than more edges.'
+    tags:
+    - dx
+    - graph
+    - validation
+    origin: manual
+    discovered: 2026-07-29
+    achieved: 2026-07-29
+  T54:
+    name: Bullseye surfaces binary vs schema vs MCP registration skew before agents thrash
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 1.0
+    acceptance:
+    - bullseye_open or startup/context reports binary version and, when a targets file loads, schema_version and whether the binary can write that schema
+    - Missing MCP registration remains a distinct, agent-visible failure (existing behavior) with install remediation still accurate for current install path
+    - 'Optional: AGENTS.md or profile min-version note can be detected and compared to --version with a warn if binary is older'
+    - Documented or tested so Homebrew lag and schema-too-new errors are diagnosable from one context call without grepping releases
+    context: 'Filed 2026-07-29 from origin-report usage reflection: recurring tax of tool not found, homebrew behind source, and schema-too-new. Install/version skew is product UX for agents, not only ops folklore.'
+    tags:
+    - dx
+    - install
+    - mcp
+    origin: manual
+    discovered: 2026-07-29
+    achieved: 2026-07-29
+  T55:
+    name: Agents cannot miss that create IDs come only from mutation results
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    actual_cost: 1.0
+    acceptance:
+    - Every successful create path (commit track, put create, subdivide children, CLI twins) states clearly in the returned envelope or first human line that the allocated ID is only the returned ids value and must not be pre-predicted
+    - Agents guide / tool descriptions still ban read-max-add-one; regression test or doc contract pins the wording on the create result path
+    - 'Optional: create with an unnecessary guessed id that collides only with history still rejects with code= id_reserved without agents needing prose docs'
+    - No schema change required unless a structured field is added for allocated_ids
+    context: 'Filed 2026-07-29 from origin-report reflection (T44 aftermath): T39 moved allocation into bullseye but agents still grepped max T* and narrated predictions. Fix is making the return path un-missable, not more allocator logic. Distinct from T41 (direct file edit) and T51 (cross-machine allocation).'
+    tags:
+    - dx
+    - agents
+    - ids
+    origin: manual
+    discovered: 2026-07-29
+    achieved: 2026-07-29
   T6:
     name: Seamless new-user adoption
     status: achieved

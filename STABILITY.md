@@ -9,8 +9,39 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of 🎯T47–T49 (build-perf: tokio trim, sqlite feature, thresholds).
+Snapshot as of 🎯T41 and 🎯T50–T55 (store hash, postpone, global IDs, agent DX).
 Changes affecting the interaction surface, newest first:
+
+- **Store ownership, postpone, global IDs, agent DX** (🎯T41, 🎯T50–T55).
+  - **T41:** Every save stamps `# content_hash: sha256:…` over the
+    canonical YAML body (hash excludes the banner/hash lines). Agents
+    must not hand-edit `bullseye.yaml` unless the user explicitly
+    permits; `open` / startup context report a DIRECT-EDIT WARNING on
+    mismatch. Emergency repair: `bullseye commit --op rehash --reason
+    <non-empty>` (MCP: `op=rehash`). Banner includes an AGENT RULE.
+  - **T50:** Optional `postponed_until` (YYYY-MM-DD) and/or
+    `postpone_predicate` (opaque string). Frontier excludes future-dated
+    postponements and any target still holding a predicate (bullseye
+    does not evaluate predicates). Ops: `postpone`, `wake` on
+    `bullseye_commit` / CLI.
+  - **T51:** Auto top-level IDs are machine-scoped `T{node}.{seq}`
+    (`node` from a durable per-machine tag under the bullseye data
+    dir). Distinct machines/worktrees without fetching each other do
+    not collide. Explicit IDs still consult git history and reject
+    reserved slots with stable `code=`. Drops the old “unfetched remote
+    may collide” caveat as an accepted failure mode for auto-IDs.
+  - **T52:** Startup/open reports complete vs half-configured issuepipe
+    env (URL + token + OPT_IN); half-config warns loudly; complete
+    recommends continuous consumer (`issues-poll --interval` / MCP
+    spawn). No silent no-op.
+  - **T53:** Advisory graph-hygiene warnings (empty frontier while
+    active work remains; buried blocked leaves) in validate / summary /
+    startup context — never hard-block mutations like showcase.
+  - **T55:** Mutation envelopes include `allocated_id_note` on create;
+    agents must use only `ids:` from the result (never scan max `T*`).
+  - **T54:** Startup context header prints `Binary:` version and
+    `Schema: file=… binary_supports=…` for skew diagnosis.
+  Settling clock resets at the release shipping this surface.
 
 - **Build performance: no tokio `full`, optional sqlite** (🎯T47, 🎯T48,
   🎯T49). Vendored `rust-mcp-sdk` / `rust-mcp-transport` patches
@@ -43,7 +74,8 @@ Changes affecting the interaction surface, newest first:
 - **Four-tool core intent-ledger API** (🎯T45). Day-to-day agent surface is
   `bullseye_open`, `bullseye_query`, `bullseye_commit`, and
   `bullseye_plan_checks`. `commit` ops: `track | block | split | achieve |
-  defer | reopen`. `query` views: `context | frontier | target | list |
+  defer | reopen` (later extended with `assign | unassign | postpone |
+  wake | rehash`). `query` views: `context | frontier | target | list |
   summary | graph | validate` (default `context`). Successful mutations
   return a structured text envelope (`ok`, `op`, `ids`, `changed`,
   `frontier`, `file`) plus the human summary; errors include stable
@@ -139,33 +171,18 @@ Changes affecting the interaction surface, newest first:
   never duplicates or drifts. No schema or tool-surface change — comments
   are ignored on parse. First released in v0.33.0.
 
-- **Auto-assigned target IDs are now global across branches**
-  (🎯T28). `bullseye_put` (when `id` is omitted) and the
-  child-id auto-assignment in `bullseye_subdivide` no longer pick the
-  next free slot from the in-memory `TargetsFile` alone. Both now
-  union the live keys with every target ID ever recorded in
-  `bullseye.yaml`'s git history across every branch and remote the
-  local clone has fetched, surfaced via a single
-  `git log -p --all --remotes -- bullseye.yaml` invocation (cached
-  per-process for the session). Two branches that have each filed
-  new top-level targets no longer collide on merge; the same applies
-  to sub-target slots under a common parent. Behavioural changes
-  observable to callers:
-  1. An explicit `id` parameter on `bullseye_put` or
-     `bullseye_subdivide` children that collides with a slot
-     recorded in git history but **absent from the current tree**
-     (deleted from `bullseye.yaml`, or alive only on another branch)
-     is rejected with an error explaining the collision and
-     suggesting `id` be omitted or changed. Pre-T28, this would
-     have silently created a duplicate ID on merge.
-  2. Auto-assigned IDs skip historical slots, so the first new
-     top-level target in a session may land at a higher number than
-     the current file contents would suggest (e.g. master shows up
-     to `T27` but `T28` was filed on another branch — the next
-     auto-assigned ID is `T29`).
-  3. External-mode storage (shadow tree, no git history) falls back
-     to the pre-T28 in-memory-only allocator. No tool surface
-     change; same parameters, same return shapes.
+- **Auto-assigned target IDs are history-aware across branches**
+  (🎯T28; top-level form superseded by 🎯T51). `bullseye_put` (when
+  `id` is omitted) and child-id auto-assignment in `bullseye_subdivide`
+  union live keys with every target ID ever recorded in
+  `bullseye.yaml`'s git history across every branch/remote the local
+  clone has fetched (`git log -p --all --remotes`, session-cached).
+  Explicit IDs that collide with a historical slot absent from the
+  current tree are rejected. **As of 🎯T51, auto top-level IDs are
+  `T{node}.{seq}` (machine-scoped)** so two machines that never fetch
+  each other still cannot collide; git-history skip remains for
+  same-node sequences and for subtargets. External-mode still uses the
+  same machine node tag (shared data dir).
 
 Earlier v0.29.0 changes still in effect:
 

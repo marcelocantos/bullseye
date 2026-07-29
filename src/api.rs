@@ -108,6 +108,13 @@ pub fn format_mutation_result(
     out.push_str(&format!("changed: {}\n", join_ids(changed)));
     out.push_str(&format!("frontier: {}\n", join_ids(frontier)));
     out.push_str(&format!("file: {}\n", file.display()));
+    // 🎯T55: allocated IDs are knowable ONLY from this header.
+    if op == "track" || op == "split" {
+        out.push_str(
+            "allocated_id_note: Use only the ids: field above for new target IDs; \
+do not predict the next ID by scanning the file.\n",
+        );
+    }
     out.push('\n');
     out.push_str(body);
     if !body.ends_with('\n') {

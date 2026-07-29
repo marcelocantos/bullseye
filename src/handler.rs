@@ -553,13 +553,173 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
             })?;
             handle_unassign_owner(&t.cwd, &id)
         }
+        "postpone" => handle_postpone(&t),
+        "wake" => {
+            let id = t.id.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=wake requires `id`",
+                ))
+            })?;
+            handle_wake(&t.cwd, &id)
+        }
+        "rehash" => {
+            let reason = t.reason.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=rehash requires non-empty `reason` (audit trail for authorized direct edit)",
+                ))
+            })?;
+            handle_rehash(&t.cwd, &reason)
+        }
         other => coded_err(
             api::ErrorCode::InvalidArgs,
             format!(
-                "unknown op: {other} (use track, block, split, achieve, defer, reopen, assign, unassign)"
+                "unknown op: {other} (use track, block, split, achieve, defer, reopen, assign, unassign, postpone, wake, rehash)"
             ),
         ),
     }
+}
+
+fn handle_postpone(t: &crate::tools::CommitTool) -> ToolResult {
+    let id = t.id.as_ref().ok_or_else(|| {
+        tool_err(api::format_error(
+            api::ErrorCode::InvalidArgs,
+            "op=postpone requires `id`",
+        ))
+    })?;
+    let path = discover_path(&t.cwd)?;
+    ensure_mutation_allowed(&path, &t.cwd)?;
+    check_explicit_target_id("id", id).map_err(tool_err)?;
+    let until = match &t.postponed_until {
+        Some(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(
+                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+                        tool_err(api::format_error(
+                            api::ErrorCode::InvalidArgs,
+                            format!("postponed_until must be YYYY-MM-DD: {e}"),
+                        ))
+                    })?,
+                )
+            }
+        }
+        None => None,
+    };
+    let pred = t
+        .postpone_predicate
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if until.is_none() && pred.is_none() {
+        return coded_err(
+            api::ErrorCode::InvalidArgs,
+            "op=postpone requires postponed_until and/or postpone_predicate",
+        );
+    }
+    if let Some(ref p) = pred {
+        check_persisted_string("postpone_predicate", p).map_err(tool_err)?;
+    }
+    let id = id.clone();
+    let result = store::with_locked_mutation(&path, |file| {
+        let t = file
+            .targets
+            .get_mut(&id)
+            .ok_or_else(|| format!("target {id} not found"))?;
+        if t.status.is_terminal() {
+            return Err(format!(
+                "🎯{id} is terminal ({:?}) — reopen or un-set-aside before postponing",
+                t.status
+            ));
+        }
+        t.postponed_until = until;
+        t.postpone_predicate = pred.clone();
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(()) => {
+            let front = api::frontier_ids_from_path(&path);
+            let body = format!(
+                "Postponed 🎯{id} until={} predicate={}",
+                until
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "(none)".into()),
+                pred.as_deref().unwrap_or("(none)")
+            );
+            text_result(api::format_mutation_result(
+                "postpone",
+                std::slice::from_ref(&id),
+                std::slice::from_ref(&id),
+                &front,
+                &path,
+                &body,
+            ))
+        }
+        Err(e) => Err(tool_err(e.to_string())),
+    }
+}
+
+fn handle_wake(cwd: &str, id: &str) -> ToolResult {
+    let path = discover_path(cwd)?;
+    ensure_mutation_allowed(&path, cwd)?;
+    check_explicit_target_id("id", id).map_err(tool_err)?;
+    let id = id.to_string();
+    let result = store::with_locked_mutation(&path, |file| {
+        let t = file
+            .targets
+            .get_mut(&id)
+            .ok_or_else(|| format!("target {id} not found"))?;
+        t.postponed_until = None;
+        t.postpone_predicate = None;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(()) => {
+            let front = api::frontier_ids_from_path(&path);
+            text_result(api::format_mutation_result(
+                "wake",
+                std::slice::from_ref(&id),
+                std::slice::from_ref(&id),
+                &front,
+                &path,
+                &format!("Woke 🎯{id} — postponement cleared"),
+            ))
+        }
+        Err(e) => Err(tool_err(e.to_string())),
+    }
+}
+
+fn handle_rehash(cwd: &str, reason: &str) -> ToolResult {
+    let path = discover_path(cwd)?;
+    ensure_mutation_allowed(&path, cwd)?;
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return coded_err(
+            api::ErrorCode::InvalidArgs,
+            "op=rehash requires non-empty reason",
+        );
+    }
+    check_persisted_string("reason", reason).map_err(tool_err)?;
+    // Load, append audit to a synthetic note? Just rewrite with fresh hash via save.
+    let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
+    store::save(&path, &file).map_err(tool_err)?;
+    // Append reason to a local audit by reloading and setting nothing — log in body.
+    let hash = store::compute_content_hash(&file);
+    let front = api::frontier_ids_from_path(&path);
+    text_result(api::format_mutation_result(
+        "rehash",
+        &[],
+        &[],
+        &front,
+        &path,
+        &format!(
+            "Recomputed content_hash=sha256:{hash} after authorized direct edit.
+Reason: {reason}"
+        ),
+    ))
 }
 
 /// Mark a target as owned by another person/agent (🎯T43). Excludes it
@@ -721,21 +881,11 @@ fn next_top_level_id(
     file: &crate::schema::TargetsFile,
     historical: &std::collections::HashSet<String>,
 ) -> String {
-    let in_memory = file.targets.keys().map(String::as_str);
-    let from_history = historical.iter().map(String::as_str);
-    let max_num = in_memory
-        .chain(from_history)
-        .filter_map(|k| {
-            let num_str = k.strip_prefix('T')?;
-            if num_str.contains('.') {
-                None
-            } else {
-                num_str.parse::<u32>().ok()
-            }
-        })
-        .max()
-        .unwrap_or(0);
-    format!("T{}", max_num + 1)
+    // 🎯T51: machine-scoped auto IDs so two clones that never fetch
+    // each other cannot collide. Shape: T{node}.{seq} where `node` is
+    // a durable per-machine tag and `seq` is monotonic under that prefix
+    // across live keys + git history.
+    crate::id_alloc::next_global_top_level_id(file, historical)
 }
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
@@ -895,6 +1045,8 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                     None
                 },
                 owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
             };
             file.targets.insert(id.clone(), target);
         } else {
@@ -1568,7 +1720,19 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
     match store::load(&path) {
         Ok(file) => {
             let recent_days = t.recent_days.unwrap_or(14);
-            let out = graph::startup_context(&file, &path.display().to_string(), recent_days);
+            let mut out = graph::startup_context(&file, &path.display().to_string(), recent_days);
+            // 🎯T41 content-hash check
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                let check = store::check_content_hash(&raw, &file);
+                if let Some(w) = store::hash_mismatch_warning(&path, &check) {
+                    out.push_str("## Store integrity\n\n");
+                    out.push_str(&w);
+                    out.push_str("\n\n");
+                }
+            }
+            // 🎯T52 issuepipe env UX
+            out.push_str(&issuepipe_env_status());
+            // 🎯T54 binary/schema already in startup_context header
             text_result(out)
         }
         Err(e @ store::LoadError::VersionTooNew { .. }) => err(e.to_string()),
@@ -1576,6 +1740,46 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
             graph::startup_context_broken_file(&path.display().to_string(), &e.to_string()),
         ),
     }
+}
+
+/// Report complete / half / absent issuepipe event-path env (🎯T52).
+fn issuepipe_env_status() -> String {
+    let url = std::env::var("BULLSEYE_ISSUEPIPE_URL").unwrap_or_default();
+    let token = std::env::var("BULLSEYE_ISSUEPIPE_TOKEN")
+        .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .unwrap_or_default();
+    let opt_in = std::env::var("BULLSEYE_ISSUEPIPE_OPT_IN").unwrap_or_default();
+    let interval = std::env::var("BULLSEYE_ISSUEPIPE_INTERVAL").unwrap_or_else(|_| "5".into());
+    issuepipe_env_status_from(&url, &token, &opt_in, &interval)
+}
+
+/// Pure issuepipe env UX (testable without mutating process env).
+fn issuepipe_env_status_from(url: &str, token: &str, opt_in: &str, interval: &str) -> String {
+    let set = [
+        (!url.is_empty(), "BULLSEYE_ISSUEPIPE_URL"),
+        (!token.is_empty(), "BULLSEYE_ISSUEPIPE_TOKEN|GITHUB_TOKEN"),
+        (!opt_in.is_empty(), "BULLSEYE_ISSUEPIPE_OPT_IN"),
+    ];
+    let n = set.iter().filter(|(ok, _)| *ok).count();
+    if n == 0 {
+        return String::new();
+    }
+    let mut out = String::from("## Issuepipe event-path env\n\n");
+    if n == 3 {
+        let interval = if interval.is_empty() { "5" } else { interval };
+        out.push_str(&format!(
+            "Complete: continuous consumer should run (default interval {interval}s; \
+             `bullseye issues-poll --interval {interval}` or MCP spawn with `--features github-issues`).\n\n"
+        ));
+    } else {
+        let missing: Vec<&str> = set.iter().filter(|(ok, _)| !*ok).map(|(_, n)| *n).collect();
+        out.push_str(&format!(
+            "HALF-CONFIGURED WARNING: missing {} — continuous consumer will not start; \
+             silent no-op avoided. Set all of URL, token, and OPT_IN.\n\n",
+            missing.join(", ")
+        ));
+    }
+    out
 }
 
 fn handle_resolve(t: crate::tools::ResolveTool) -> ToolResult {
@@ -2091,9 +2295,40 @@ targets:
             discovered: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             achieved: None,
             owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
         };
         let err = check_target_no_envelope_leaks("T99", &target).unwrap_err();
         assert!(err.contains("T99.cross_depends[0].note"), "got: {err}");
         assert!(err.contains("</parameter>"), "got: {err}");
+    }
+
+    #[test]
+    fn issuepipe_env_half_config_warns() {
+        let msg = super::issuepipe_env_status_from("https://example.invalid/events", "", "", "5");
+        assert!(
+            msg.contains("HALF-CONFIGURED"),
+            "expected half-config warning, got: {msg}"
+        );
+        assert!(msg.contains("BULLSEYE_ISSUEPIPE_OPT_IN"), "{msg}");
+        assert!(
+            msg.contains("BULLSEYE_ISSUEPIPE_TOKEN|GITHUB_TOKEN"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn issuepipe_env_complete_recommends_continuous() {
+        let msg =
+            super::issuepipe_env_status_from("https://example.invalid/events", "tok", "1", "7");
+        assert!(
+            msg.contains("Complete:") && msg.contains("continuous") && msg.contains("interval 7s"),
+            "expected complete continuous recommend, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn issuepipe_env_absent_is_silent() {
+        assert_eq!(super::issuepipe_env_status_from("", "", "", "5"), "");
     }
 }

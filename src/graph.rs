@@ -48,6 +48,11 @@ pub struct FrontierTarget {
 /// Ownership exclusion does **not** make a target terminal: dependents
 /// stay blocked until the target is achieved or set aside.
 pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
+    frontier_on(file, chrono::Utc::now().date_naive())
+}
+
+/// Frontier as of `today` (🎯T50 date-gated postponement).
+pub fn frontier_on(file: &TargetsFile, today: chrono::NaiveDate) -> Vec<FrontierTarget> {
     let active = file.active();
 
     active
@@ -57,6 +62,23 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
             // blocking but are not work for *this* owner.
             if t.owned_by.is_some() {
                 return false;
+            }
+            // Date gate: still postponed until a future calendar day.
+            if let Some(until) = t.postponed_until
+                && until > today
+            {
+                return false;
+            }
+            // Opaque predicate still set: excluded until agent clears via wake.
+            if t.postpone_predicate
+                .as_ref()
+                .is_some_and(|p| !p.trim().is_empty())
+            {
+                // If date was set and is now due (or absent), predicate alone
+                // still holds the target off the frontier.
+                if t.postponed_until.is_none_or(|u| u <= today) {
+                    return false;
+                }
             }
             // All dependencies must be in a terminal disposition
             // (achieved or set aside).
@@ -73,6 +95,23 @@ pub fn frontier(file: &TargetsFile) -> Vec<FrontierTarget> {
             tags: t.tags.clone(),
         })
         .collect()
+}
+
+/// Whether an active target is currently postponed off the frontier.
+pub fn is_postponed(t: &crate::schema::Target, today: chrono::NaiveDate) -> bool {
+    if let Some(until) = t.postponed_until
+        && until > today
+    {
+        return true;
+    }
+    if t.postpone_predicate
+        .as_ref()
+        .is_some_and(|p| !p.trim().is_empty())
+        && t.postponed_until.is_none_or(|u| u <= today)
+    {
+        return true;
+    }
+    false
 }
 
 /// Active targets excluded from the local frontier because another
@@ -180,6 +219,58 @@ pub fn validate_warnings(file: &TargetsFile) -> Vec<String> {
                 "{id}: invalid target ID format (expected T<N>, T<N>.<M>, or GH<N>) — \
                  advisory; the target is fully operable, retire or rename it via direct \
                  YAML edit if you want the warning gone"
+            ));
+        }
+    }
+    warnings.extend(graph_hygiene_warnings(file));
+    warnings
+}
+
+/// Advisory graph-shape risks (🎯T53). Never hard-block mutations.
+pub fn graph_hygiene_warnings(file: &TargetsFile) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let active = file.active();
+    if active.is_empty() {
+        return warnings;
+    }
+    let today = chrono::Utc::now().date_naive();
+    let front = frontier_on(file, today);
+    if front.is_empty() {
+        let blocked = active
+            .iter()
+            .filter(|(_, t)| t.owned_by.is_none() && !is_postponed(t, today))
+            .count();
+        if blocked > 0 {
+            warnings.push(format!(
+                "graph hygiene: {blocked} active target(s) but frontier is empty \
+                 (all blocked on unfinished depends_on) — review dependencies or \
+                 achieve/defer blockers; advisory only"
+            ));
+        }
+    }
+    // Leaves: active, unblocked, no dependents, and no acceptance? Skip.
+    // Tunnel-ish: active target whose every path to a terminal is blocked by
+    // many active deps — simpler: active with depends_on all active (not on
+    // frontier) and no active target depends on it (work leaf buried).
+    for (id, t) in &active {
+        if t.owned_by.is_some() || is_postponed(t, today) {
+            continue;
+        }
+        let on_front = front.iter().any(|f| f.id == *id);
+        if on_front {
+            continue;
+        }
+        // Buried active node: not frontier, still active.
+        let has_active_dep = t.depends_on.iter().any(|d| {
+            file.targets
+                .get(d.as_str())
+                .is_some_and(|x| !x.status.is_terminal())
+        });
+        let fanout = unblocking_fanout(file, id);
+        if has_active_dep && fanout == 0 {
+            warnings.push(format!(
+                "{id}: graph hygiene: active leaf blocked by unfinished deps and \
+                 unblocks nothing — possible tunnel/dead branch; advisory only"
             ));
         }
     }
@@ -379,9 +470,23 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
     let mut out = String::new();
 
     out.push_str(&format!(
-        "# Startup context\nFile: {file_path}\nActive: {active_count} target(s), Frontier: {} ready for work\n\n",
+        "# Startup context\nFile: {file_path}\nBinary: bullseye {}\nSchema: file={} binary_supports={}\nActive: {active_count} target(s), Frontier: {} ready for work\n\n",
+        env!("CARGO_PKG_VERSION"),
+        file.schema_version
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unset".into()),
+        crate::schema::CURRENT_SCHEMA_VERSION,
         front.len(),
     ));
+
+    let hy = graph_hygiene_warnings(file);
+    if !hy.is_empty() {
+        out.push_str("## Graph hygiene (advisory)\n\n");
+        for w in &hy {
+            out.push_str(&format!("- {w}\n"));
+        }
+        out.push('\n');
+    }
 
     if !front.is_empty() {
         out.push_str("## Frontier (unblocked, ready for work)\n\n");
@@ -849,5 +954,99 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         let end: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{end}…")
+    }
+}
+
+#[cfg(test)]
+mod t50_t53_tests {
+    use super::*;
+    use crate::schema::{Status, Target, TargetsFile};
+    use chrono::NaiveDate;
+    use std::collections::BTreeMap;
+
+    fn tgt(name: &str, deps: &[&str]) -> Target {
+        Target {
+            name: name.into(),
+            status: Status::Identified,
+            value: 0.0,
+            cost: 0.0,
+            actual_cost: None,
+            set_aside_reason: None,
+            acceptance: vec!["a".into()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: deps.iter().map(|s| (*s).to_string()).collect(),
+            cross_depends: vec![],
+            cross_enables: vec![],
+            tags: vec![],
+            strategy: None,
+            origin: "test".into(),
+            discovered: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            achieved: None,
+            owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
+        }
+    }
+
+    #[test]
+    fn future_postponement_excludes_from_frontier() {
+        let mut file = TargetsFile {
+            schema_version: Some(5),
+            last_evaluated: None,
+            release_surface: vec![],
+            targets: BTreeMap::new(),
+        };
+        let mut t = tgt("p", &[]);
+        t.postponed_until = Some(NaiveDate::from_ymd_opt(2099, 1, 1).unwrap());
+        file.targets.insert("T1".into(), t);
+        let today = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
+        assert!(frontier_on(&file, today).is_empty());
+        // Past date + no predicate → on frontier
+        file.targets.get_mut("T1").unwrap().postponed_until =
+            Some(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());
+        assert_eq!(frontier_on(&file, today).len(), 1);
+    }
+
+    #[test]
+    fn predicate_keeps_off_frontier_after_date_due() {
+        let mut file = TargetsFile {
+            schema_version: Some(5),
+            last_evaluated: None,
+            release_surface: vec![],
+            targets: BTreeMap::new(),
+        };
+        let mut t = tgt("p", &[]);
+        t.postponed_until = Some(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());
+        t.postpone_predicate = Some("wait for release".into());
+        file.targets.insert("T1".into(), t);
+        let today = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
+        assert!(frontier_on(&file, today).is_empty());
+        file.targets.get_mut("T1").unwrap().postpone_predicate = None;
+        assert_eq!(frontier_on(&file, today).len(), 1);
+    }
+
+    #[test]
+    fn hygiene_warns_when_all_active_blocked() {
+        let mut file = TargetsFile {
+            schema_version: Some(5),
+            last_evaluated: None,
+            release_surface: vec![],
+            targets: BTreeMap::new(),
+        };
+        file.targets.insert("T1".into(), tgt("blocker", &[]));
+        file.targets.insert("T2".into(), tgt("blocked", &["T1"]));
+        // Put T1 in converging with dep on missing terminal - make T1 depend on missing
+        file.targets.get_mut("T1").unwrap().depends_on = vec!["T99".into()];
+        // T99 doesn't exist - validate_blocking would error; for hygiene we need
+        // active with empty frontier: T1 blocked on T99 (dangling), T2 on T1.
+        // Actually dangling deps: is_some_and false means not terminal → blocks frontier
+        let w = graph_hygiene_warnings(&file);
+        assert!(
+            w.iter()
+                .any(|s| s.contains("frontier is empty") || s.contains("tunnel")),
+            "warnings={w:?}"
+        );
     }
 }
