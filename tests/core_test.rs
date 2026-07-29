@@ -1647,8 +1647,8 @@ fn summary_stale_parent_all_children_achieved() {
                 discovered: date,
                 achieved: Some(date),
                 owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                postponed_until: None,
+                postpone_predicate: None,
             },
         );
     }
@@ -2477,8 +2477,8 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 discovered: chrono::Local::now().date_naive(),
                                 achieved: None,
                                 owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                                postponed_until: None,
+                                postpone_predicate: None,
                             },
                         );
                         Ok(())
@@ -3938,8 +3938,8 @@ fn subdivide_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
                 discovered: today,
                 achieved: None,
                 owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                postponed_until: None,
+                postpone_predicate: None,
             },
         );
     }
@@ -4623,8 +4623,8 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     discovered: today,
                     achieved: None,
                     owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                    postponed_until: None,
+                    postpone_predicate: None,
                 },
             );
         }
@@ -4651,8 +4651,8 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     discovered: today,
                     achieved: None,
                     owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                    postponed_until: None,
+                    postpone_predicate: None,
                 },
             );
         }
@@ -4790,8 +4790,8 @@ fn t28_repo_with_branched_id() -> tempfile::TempDir {
                     discovered: today,
                     achieved: None,
                     owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                    postponed_until: None,
+                    postpone_predicate: None,
                 },
             );
         }
@@ -4861,7 +4861,12 @@ fn id_alloc_put_skips_branched_ids() {
     let allocated: Vec<&str> = text
         .lines()
         .find(|l| l.starts_with("ids: "))
-        .map(|l| l.trim_start_matches("ids: ").split(',').map(str::trim).collect())
+        .map(|l| {
+            l.trim_start_matches("ids: ")
+                .split(',')
+                .map(str::trim)
+                .collect()
+        })
         .unwrap_or_default();
     assert!(
         !allocated.is_empty(),
@@ -5051,8 +5056,8 @@ fn id_alloc_memoised_within_session() {
                 discovered: today,
                 achieved: None,
                 owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                postponed_until: None,
+                postpone_predicate: None,
             },
         );
         store::save(&yaml, &file).unwrap();
@@ -5120,8 +5125,8 @@ fn id_alloc_deleted_targets_remain_reserved() {
                 discovered: today,
                 achieved: None,
                 owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                postponed_until: None,
+                postpone_predicate: None,
             },
         );
         store::save(&path, &file).unwrap();

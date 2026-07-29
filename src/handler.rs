@@ -625,9 +625,10 @@ fn handle_postpone(t: &crate::tools::CommitTool) -> ToolResult {
     }
     let id = id.clone();
     let result = store::with_locked_mutation(&path, |file| {
-        let t = file.targets.get_mut(&id).ok_or_else(|| {
-            format!("target {id} not found")
-        })?;
+        let t = file
+            .targets
+            .get_mut(&id)
+            .ok_or_else(|| format!("target {id} not found"))?;
         if t.status.is_terminal() {
             return Err(format!(
                 "🎯{id} is terminal ({:?}) — reopen or un-set-aside before postponing",
@@ -643,7 +644,9 @@ fn handle_postpone(t: &crate::tools::CommitTool) -> ToolResult {
             let front = api::frontier_ids_from_path(&path);
             let body = format!(
                 "Postponed 🎯{id} until={} predicate={}",
-                until.map(|d| d.to_string()).unwrap_or_else(|| "(none)".into()),
+                until
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "(none)".into()),
                 pred.as_deref().unwrap_or("(none)")
             );
             text_result(api::format_mutation_result(
@@ -665,7 +668,10 @@ fn handle_wake(cwd: &str, id: &str) -> ToolResult {
     check_explicit_target_id("id", id).map_err(tool_err)?;
     let id = id.to_string();
     let result = store::with_locked_mutation(&path, |file| {
-        let t = file.targets.get_mut(&id).ok_or_else(|| format!("target {id} not found"))?;
+        let t = file
+            .targets
+            .get_mut(&id)
+            .ok_or_else(|| format!("target {id} not found"))?;
         t.postponed_until = None;
         t.postpone_predicate = None;
         Ok::<(), String>(())
@@ -715,7 +721,6 @@ Reason: {reason}"
         ),
     ))
 }
-
 
 /// Mark a target as owned by another person/agent (🎯T43). Excludes it
 /// from the local frontier without unblocking dependents.
@@ -1715,8 +1720,7 @@ fn handle_startup_context(t: crate::tools::StartupContextTool) -> ToolResult {
     match store::load(&path) {
         Ok(file) => {
             let recent_days = t.recent_days.unwrap_or(14);
-            let mut out =
-                graph::startup_context(&file, &path.display().to_string(), recent_days);
+            let mut out = graph::startup_context(&file, &path.display().to_string(), recent_days);
             // 🎯T41 content-hash check
             if let Ok(raw) = std::fs::read_to_string(&path) {
                 let check = store::check_content_hash(&raw, &file);
@@ -1768,11 +1772,7 @@ fn issuepipe_env_status_from(url: &str, token: &str, opt_in: &str, interval: &st
              `bullseye issues-poll --interval {interval}` or MCP spawn with `--features github-issues`).\n\n"
         ));
     } else {
-        let missing: Vec<&str> = set
-            .iter()
-            .filter(|(ok, _)| !*ok)
-            .map(|(_, n)| *n)
-            .collect();
+        let missing: Vec<&str> = set.iter().filter(|(ok, _)| !*ok).map(|(_, n)| *n).collect();
         out.push_str(&format!(
             "HALF-CONFIGURED WARNING: missing {} — continuous consumer will not start; \
              silent no-op avoided. Set all of URL, token, and OPT_IN.\n\n",
@@ -2305,28 +2305,22 @@ targets:
 
     #[test]
     fn issuepipe_env_half_config_warns() {
-        let msg = super::issuepipe_env_status_from(
-            "https://example.invalid/events",
-            "",
-            "",
-            "5",
-        );
+        let msg = super::issuepipe_env_status_from("https://example.invalid/events", "", "", "5");
         assert!(
             msg.contains("HALF-CONFIGURED"),
             "expected half-config warning, got: {msg}"
         );
         assert!(msg.contains("BULLSEYE_ISSUEPIPE_OPT_IN"), "{msg}");
-        assert!(msg.contains("BULLSEYE_ISSUEPIPE_TOKEN|GITHUB_TOKEN"), "{msg}");
+        assert!(
+            msg.contains("BULLSEYE_ISSUEPIPE_TOKEN|GITHUB_TOKEN"),
+            "{msg}"
+        );
     }
 
     #[test]
     fn issuepipe_env_complete_recommends_continuous() {
-        let msg = super::issuepipe_env_status_from(
-            "https://example.invalid/events",
-            "tok",
-            "1",
-            "7",
-        );
+        let msg =
+            super::issuepipe_env_status_from("https://example.invalid/events", "tok", "1", "7");
         assert!(
             msg.contains("Complete:") && msg.contains("continuous") && msg.contains("interval 7s"),
             "expected complete continuous recommend, got: {msg}"

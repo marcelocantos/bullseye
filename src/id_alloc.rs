@@ -240,6 +240,9 @@ mod t51_tests {
         assert_ne!(a, b);
         let id = next_global_top_level_id(&file, &hist);
         assert!(id.starts_with('T'), "{id}");
-        assert!(id.contains('.'), "machine-scoped id should be T{{node}}.{{seq}}, got {id}");
+        assert!(
+            id.contains('.'),
+            "machine-scoped id should be T{{node}}.{{seq}}, got {id}"
+        );
     }
 }

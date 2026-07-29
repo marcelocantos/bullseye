@@ -885,8 +885,8 @@ mod header_tests {
                 discovered: chrono::NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
                 achieved: None,
                 owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                postponed_until: None,
+                postpone_predicate: None,
             },
         );
         TargetsFile {
@@ -1041,7 +1041,11 @@ mod t41_hash_tests {
         let loaded = load(&path).unwrap();
         let check = check_content_hash(&raw, &loaded);
         assert!(matches!(check, HashCheck::Mismatch { .. }), "{check:?}");
-        assert!(hash_mismatch_warning(&path, &check).unwrap().contains("DIRECT-EDIT"));
+        assert!(
+            hash_mismatch_warning(&path, &check)
+                .unwrap()
+                .contains("DIRECT-EDIT")
+        );
     }
 
     #[test]

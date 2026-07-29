@@ -1044,7 +1044,8 @@ mod t50_t53_tests {
         // Actually dangling deps: is_some_and false means not terminal → blocks frontier
         let w = graph_hygiene_warnings(&file);
         assert!(
-            w.iter().any(|s| s.contains("frontier is empty") || s.contains("tunnel")),
+            w.iter()
+                .any(|s| s.contains("frontier is empty") || s.contains("tunnel")),
             "warnings={w:?}"
         );
     }
