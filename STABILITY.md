@@ -24,12 +24,12 @@ Changes affecting the interaction surface, newest first:
     postponements and any target still holding a predicate (bullseye
     does not evaluate predicates). Ops: `postpone`, `wake` on
     `bullseye_commit` / CLI.
-  - **T51:** Auto top-level IDs are machine-scoped `T{node}.{seq}`
-    (`node` from a durable per-machine tag under the bullseye data
-    dir). Distinct machines/worktrees without fetching each other do
-    not collide. Explicit IDs still consult git history and reject
-    reserved slots with stable `code=`. Drops the old “unfetched remote
-    may collide” caveat as an accepted failure mode for auto-IDs.
+  - **T51:** Auto top-level IDs are clone-scoped `T{scope}.{seq}`:
+    `scope` mixes a durable per-machine tag (bullseye data dir) with
+    the absolute path of this clone’s `bullseye.yaml`. Distinct machines
+    **and** same-machine independent clones/worktrees that never fetch
+    each other allocate disjoint IDs. Explicit IDs still consult git
+    history and reject reserved slots with stable `code=`.
   - **T52:** Startup/open reports complete vs half-configured issuepipe
     env (URL + token + OPT_IN); half-config warns loudly; complete
     recommends continuous consumer (`issues-poll --interval` / MCP
