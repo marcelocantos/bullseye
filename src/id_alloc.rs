@@ -23,22 +23,15 @@
 //!   path so a single session's many puts/subdivides pay the scan
 //!   cost once.
 //!
-//! Cross-clone / cross-machine allocation (🎯T51) layers a clone-scoped
-//! prefix `T{scope}.{seq}` on top of the history scan: `scope` mixes a
-//! durable machine tag with the absolute path of this clone's
-//! `bullseye.yaml`, so two independent clones or worktrees that never
-//! fetch each other still produce disjoint IDs (including two checkouts
-//! on the same machine).
+//! Accepted residual collision risk (T51 clone-scoped IDs backed out for
+//! human ergonomics — short sequential `T{n}` restored):
 //! - External-mode storage (shadow tree, no git repo): falls back to
-//!   in-memory-only allocation — `historical_ids` returns an empty
-//!   set and callers behave identically to pre-T28.
-//! - Two worktrees of the same repo allocating simultaneously: the
-//!   per-`bullseye.yaml` flock doesn't serialise across worktrees
-//!   (each has its own yaml file and so its own lock). The race
-//!   window is "between the scan and the commit of the first
-//!   worktree's tool call", typically milliseconds. Much narrower
-//!   than pre-T28, where the failure mode required nothing more than
-//!   "two sessions on different branches".
+//!   in-memory-only allocation — `historical_ids` returns an empty set.
+//! - Two machines / clones that allocate without fetching each other can
+//!   still pick the same next `T{n}`; resolve by hand (or later policy
+//!   such as even/odd developer ranges) if it becomes a major issue.
+//! - Two worktrees allocating simultaneously: narrow race between scan
+//!   and commit; flock is per yaml path, not cross-worktree.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -162,101 +155,36 @@ pub fn clear_cache_for_tests() {
     }
 }
 
-/// Durable per-machine node tag (🎯T51). Stored under the bullseye data
-/// dir so external-mode and in-repo clones on the same machine share it,
-/// while distinct machines almost surely differ. Mixed with the clone
-/// path in [`clone_scope_tag`] so same-machine dual clones still diverge.
-pub fn machine_node_tag() -> u32 {
-    use std::io::Write;
-    let dir = crate::config::external_root();
-    let path = dir.join("node_id");
-    if let Ok(s) = std::fs::read_to_string(&path) {
-        let trimmed = s.trim();
-        if let Ok(n) = u32::from_str_radix(trimmed, 16) {
-            return n;
-        }
-        if let Ok(n) = trimmed.parse::<u32>() {
-            return n;
-        }
-    }
-    // Fresh tag: mix time + address bits for uniqueness without rand crate.
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let tag = (nanos ^ (nanos >> 17) ^ 0xA5A5_5A5A) as u32;
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&path)
-    {
-        let _ = writeln!(f, "{tag:08x}");
-    }
-    tag
-}
-
-/// FNV-1a 64-bit over raw bytes (no_std-friendly, no extra deps).
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    h
-}
-
-/// Clone/worktree scope tag (🎯T51): mixes the durable machine tag with
-/// the absolute path of this clone's `bullseye.yaml`. Two independent
-/// clones or worktrees on the **same machine** get different scopes even
-/// without fetching each other; two processes on the same path share
-/// the scope and advance `{seq}` under live keys + git history.
-pub fn clone_scope_tag(yaml_path: &Path) -> u32 {
-    let machine = machine_node_tag();
-    let abs = std::fs::canonicalize(yaml_path).unwrap_or_else(|_| yaml_path.to_path_buf());
-    let mut buf = Vec::with_capacity(16 + abs.as_os_str().len());
-    buf.extend_from_slice(&machine.to_le_bytes());
-    buf.extend_from_slice(abs.to_string_lossy().as_bytes());
-    // Keep full u32 space (avoid % 1e6 birthday collisions across paths).
-    fnv1a64(&buf) as u32
-}
-
-/// Next auto top-level ID: `T{scope}.{seq}` (🎯T51 global allocation).
-///
-/// `yaml_path` is the path of the `bullseye.yaml` being mutated — used
-/// only to derive the clone/worktree scope, not read again.
-pub fn next_global_top_level_id(
-    yaml_path: &Path,
+/// Next auto top-level ID: short sequential `T{n}` over live keys ∪ git
+/// history (🎯T28). Cross-machine uniqueness is not guaranteed — T51's
+/// clone-scoped form was backed out for hand-typing ergonomics.
+pub fn next_top_level_id(
     file: &crate::schema::TargetsFile,
     historical: &HashSet<String>,
 ) -> String {
-    let scope = clone_scope_tag(yaml_path);
-    let prefix = format!("T{scope}.");
     let in_memory = file.targets.keys().map(String::as_str);
     let from_history = historical.iter().map(String::as_str);
-    let max_seq = in_memory
+    let max_num = in_memory
         .chain(from_history)
         .filter_map(|k| {
-            let suffix = k.strip_prefix(prefix.as_str())?;
-            // Only the top-level slot under this scope (no T{scope}.1.2).
-            if suffix.contains('.') {
+            let num_str = k.strip_prefix('T')?;
+            // Only plain top-level T{n}, not T1.2 or scoped leftovers.
+            if num_str.contains('.') {
                 None
             } else {
-                suffix.parse::<u32>().ok()
+                num_str.parse::<u32>().ok()
             }
         })
         .max()
         .unwrap_or(0);
-    format!("T{scope}.{}", max_seq + 1)
+    format!("T{}", max_num + 1)
 }
 
 #[cfg(test)]
-mod t51_tests {
+mod top_level_id_tests {
     use super::*;
     use crate::schema::TargetsFile;
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
 
     fn empty_file() -> TargetsFile {
         TargetsFile {
@@ -268,45 +196,28 @@ mod t51_tests {
     }
 
     #[test]
-    fn two_clone_paths_produce_disjoint_id_spaces() {
-        // Real dual-clone proof: two distinct filesystem paths (as two
-        // independent clones/worktrees would have) must allocate
-        // different first IDs under the same machine tag + empty history.
-        let a_dir = tempfile::tempdir().unwrap();
-        let b_dir = tempfile::tempdir().unwrap();
-        let a_yaml = a_dir.path().join("bullseye.yaml");
-        let b_yaml = b_dir.path().join("bullseye.yaml");
-        // Touch so canonicalize can succeed when possible.
-        std::fs::write(&a_yaml, "schema_version: 5\ntargets: {}\n").unwrap();
-        std::fs::write(&b_yaml, "schema_version: 5\ntargets: {}\n").unwrap();
-
-        let file = empty_file();
-        let hist = HashSet::new();
-        let id_a = next_global_top_level_id(&a_yaml, &file, &hist);
-        let id_b = next_global_top_level_id(&b_yaml, &file, &hist);
-        assert_ne!(
-            id_a, id_b,
-            "same-machine dual clones must not share T{{scope}}.1; got {id_a} and {id_b}"
-        );
-        assert!(id_a.starts_with('T') && id_a.contains('.'), "{id_a}");
-        assert!(id_b.starts_with('T') && id_b.contains('.'), "{id_b}");
-        // Same path twice → same first id (seq starts at 1 for empty file).
-        let id_a2 = next_global_top_level_id(&a_yaml, &file, &hist);
-        assert_eq!(id_a, id_a2, "same clone path must be stable for empty file");
+    fn empty_file_starts_at_t1() {
+        let id = next_top_level_id(&empty_file(), &HashSet::new());
+        assert_eq!(id, "T1");
     }
 
     #[test]
-    fn same_clone_advances_seq_under_live_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        let yaml = dir.path().join("bullseye.yaml");
-        std::fs::write(&yaml, "schema_version: 5\ntargets: {}\n").unwrap();
-        let hist = HashSet::new();
+    fn skips_historical_slots() {
+        let mut hist = HashSet::new();
+        hist.insert("T1".into());
+        hist.insert("T2".into());
+        hist.insert("T3".into());
+        let id = next_top_level_id(&empty_file(), &hist);
+        assert_eq!(id, "T4");
+    }
+
+    #[test]
+    fn advances_past_live_plain_t_ids() {
         let mut file = empty_file();
-        let first = next_global_top_level_id(&yaml, &file, &hist);
         file.targets.insert(
-            first.clone(),
+            "T5".into(),
             crate::schema::Target {
-                name: "one".into(),
+                name: "five".into(),
                 status: crate::schema::Status::Identified,
                 value: 0.0,
                 cost: 0.0,
@@ -329,20 +240,7 @@ mod t51_tests {
                 postpone_predicate: None,
             },
         );
-        let second = next_global_top_level_id(&yaml, &file, &hist);
-        assert_ne!(first, second);
-        // Same scope prefix, higher seq.
-        let prefix = first.rsplit_once('.').unwrap().0;
-        assert!(
-            second.starts_with(&format!("{prefix}.")),
-            "expected same scope prefix {prefix}, got {second}"
-        );
-    }
-
-    #[test]
-    fn clone_scope_tag_differs_by_path() {
-        let a = PathBuf::from("/tmp/bullseye-clone-a/bullseye.yaml");
-        let b = PathBuf::from("/tmp/bullseye-clone-b/bullseye.yaml");
-        assert_ne!(clone_scope_tag(&a), clone_scope_tag(&b));
+        let id = next_top_level_id(&file, &HashSet::new());
+        assert_eq!(id, "T6");
     }
 }

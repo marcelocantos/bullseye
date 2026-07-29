@@ -184,15 +184,15 @@ Get a single target by ID.
 ### bullseye_put
 
 Upsert a target: create if the ID doesn't exist, patch if it does.
-Omit `id` to create a new target with an auto-assigned **clone-scoped**
-top-level ID (`T{scope}.{seq}`, 🎯T51). To create a child target without
-choosing the final number, omit `id` and set `child_of` to the parent ID
-(`child_of: "T4"` creates the next free `T4.N`). Provide `id` only
-when the exact target ID is part of the user's intent, or to patch an
-existing target — the handler decides create-vs-patch based on
-whether the ID exists. Explicit dotted IDs whose final segment is
-zero (such as `T4.0`) are rejected because humans conflate them with
-their parent in conversation and reports.
+Omit `id` to create a new target with an auto-assigned top-level ID
+(`T1`, `T2`, … — next free over live file ∪ git history, 🎯T28). To
+create a child target without choosing the final number, omit `id` and
+set `child_of` to the parent ID (`child_of: "T4"` creates the next free
+`T4.N`). Provide `id` only when the exact target ID is part of the
+user's intent, or to patch an existing target — the handler decides
+create-vs-patch based on whether the ID exists. Explicit dotted IDs
+whose final segment is zero (such as `T4.0`) are rejected because
+humans conflate them with their parent in conversation and reports.
 
 On create, `name` and `acceptance` are required. `value` and `cost`
 default to `0` (the "not set at repo scope" sentinel) when omitted —
@@ -690,13 +690,8 @@ which is a content edit in disguise). See 🎯T8.
 
 ### Target IDs
 
-Hand-authored and starter IDs may still be plain `T<N>` (e.g. `T1`).
-**Auto top-level allocation** (omit `id`) produces clone-scoped
-`T{scope}.{seq}` (e.g. `T2847392011.1`) so two machines, worktrees, or
-unfetched remotes — including two independent clones on the same machine
-— do not collide (🎯T51). `scope` mixes a durable machine tag with this
-clone’s absolute `bullseye.yaml` path. Sub-targets remain `T….<M>` under
-their parent (e.g. `T1.2`, `T2847392011.1.2`).
+Targets use short `T<N>` for top-level (e.g. `T1`, `T56`) and
+`T<N>.<M>` for sub-targets (e.g. `T1.2`).
 
 **Never predict an allocated ID.** On create (`bullseye_commit`
 `op=track` or `bullseye_put` without `id`), the assigned ID is knowable
@@ -705,15 +700,17 @@ their parent (e.g. `T1.2`, `T2847392011.1.2`).
 `bullseye.yaml` (or scan max `T*` + 1) to guess the next number. That
 read-then-act is a TOCTOU race (🎯T44, 🎯T55).
 
-Auto-assignment unions the live file with **git history** of
-`bullseye.yaml` (every branch/remote the clone has fetched) so same-node
-sequences and subtargets skip reserved slots. Explicit `id` values that
-collide with history but not the live file are **rejected** with
-`code=id_reserved`. IDs are never recycled.
+Auto-assignment (omit `id`) picks the next free plain top-level `T{n}`
+across **the live file and git history** of `bullseye.yaml` on every
+branch/remote the local clone knows about (🎯T28). IDs are never
+recycled. Explicit `id` that appears only in history is **rejected**
+(`code=id_reserved`).
 
-Machine node tags live under the bullseye data dir (shared by in-repo
-and external storage on the same machine); clone path is mixed in so
-same-machine dual clones still get disjoint scopes.
+**Cross-machine caveat:** two clones that allocate without fetching
+each other can still land on the same `T{n}`. That is accepted for
+hand-typing ergonomics (clone-scoped IDs were tried as 🎯T51 and backed
+out). Resolve collisions by hand if they happen; optional future
+policies (e.g. even/odd per developer) are open.
 
 ### Status lifecycle
 
