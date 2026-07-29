@@ -4837,9 +4837,9 @@ fn id_alloc_put_skips_branched_ids() {
     let shadow_tmp = tempfile::tempdir().unwrap();
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
-    // 🎯T51: top-level auto IDs are machine-scoped `T{node}.{seq}`, so they
-    // cannot collide with feature-branch T2/T3 even without git history.
-    // (Historical scan still covers same-node seq and subtargets.)
+    // Master's bullseye.yaml has only T1, so the in-memory-only
+    // allocator would pick T2 — which collides with the feature
+    // branch. The git-history-aware path must pick T4.
     let cwd = tmp.path().to_string_lossy().to_string();
     let result = handle_put(PutTool {
         cwd: cwd.clone(),
@@ -4858,34 +4858,9 @@ fn id_alloc_put_skips_branched_ids() {
     });
     assert!(result.is_ok(), "put should succeed: {result:?}");
     let text = text_from_call_result(result.unwrap());
-    let allocated: Vec<&str> = text
-        .lines()
-        .find(|l| l.starts_with("ids: "))
-        .map(|l| {
-            l.trim_start_matches("ids: ")
-                .split(',')
-                .map(str::trim)
-                .collect()
-        })
-        .unwrap_or_default();
     assert!(
-        !allocated.is_empty(),
-        "create result must include ids: header; got: {text}"
-    );
-    assert!(
-        allocated.iter().all(|id| *id != "T2" && *id != "T3"),
-        "must not collide with branched T2/T3; got: {text}"
-    );
-    // Machine-scoped form: T<digits>.<seq>
-    assert!(
-        allocated.iter().any(|id| {
-            id.starts_with('T')
-                && id.contains('.')
-                && id
-                    .strip_prefix('T')
-                    .is_some_and(|rest| rest.split('.').all(|p| p.parse::<u32>().is_ok()))
-        }),
-        "expected clone-scoped T{{scope}}.{{seq}} id; got: {text}"
+        text.contains("ids: T4") || text.contains("🎯T4 "),
+        "expected next free slot to skip T2 and T3; got: {text}"
     );
     assert!(
         text.contains("allocated_id_note:"),
@@ -4893,70 +4868,6 @@ fn id_alloc_put_skips_branched_ids() {
     );
 
     let _ = Location::InRepo; // keep import alive
-    config::set_external_root_override(None);
-}
-
-/// 🎯T51: two independent clones on the same machine (no shared git
-/// fetch of each other's commits) must allocate disjoint top-level IDs
-/// via the real put path — not a hand-rolled format! string.
-#[test]
-fn t51_two_independent_clones_allocate_disjoint_ids() {
-    let _guard = t28_lock();
-    use bullseye::config::{self, Location};
-    use bullseye::handler::handle_put;
-    use bullseye::tools::PutTool;
-
-    let shadow_tmp = tempfile::tempdir().unwrap();
-    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
-
-    let clone_a = tempfile::tempdir().unwrap();
-    let clone_b = tempfile::tempdir().unwrap();
-    // Separate in-repo ledgers (same machine, no mutual fetch).
-    bullseye::store::create_at(clone_a.path(), Location::InRepo, "clone-a").unwrap();
-    bullseye::store::create_at(clone_b.path(), Location::InRepo, "clone-b").unwrap();
-
-    let put = |cwd: &str, name: &str| {
-        let result = handle_put(PutTool {
-            cwd: cwd.to_string(),
-            id: None,
-            child_of: None,
-            name: Some(name.to_string()),
-            value: None,
-            cost: None,
-            acceptance: Some(vec!["done".to_string()]),
-            context: None,
-            status: None,
-            depends_on: None,
-            blocks: None,
-            origin: None,
-            tags: None,
-        });
-        assert!(result.is_ok(), "put should succeed: {result:?}");
-        let text = text_from_call_result(result.unwrap());
-        text.lines()
-            .find(|l| l.starts_with("ids: "))
-            .map(|l| l.trim_start_matches("ids: ").trim().to_string())
-            .expect("ids: header")
-    };
-
-    let id_a = put(&clone_a.path().to_string_lossy(), "from clone A");
-    let id_b = put(&clone_b.path().to_string_lossy(), "from clone B");
-    assert_ne!(
-        id_a, id_b,
-        "same-machine dual clones must not both get {id_a}"
-    );
-    // Both must be clone-scoped form T{{scope}}.{{seq}}
-    for id in [&id_a, &id_b] {
-        assert!(
-            id.starts_with('T')
-                && id.contains('.')
-                && id
-                    .strip_prefix('T')
-                    .is_some_and(|rest| rest.split('.').all(|p| p.parse::<u32>().is_ok())),
-            "expected T{{scope}}.{{seq}}, got {id}"
-        );
-    }
-
     config::set_external_root_override(None);
 }
 

@@ -24,12 +24,12 @@ Changes affecting the interaction surface, newest first:
     postponements and any target still holding a predicate (bullseye
     does not evaluate predicates). Ops: `postpone`, `wake` on
     `bullseye_commit` / CLI.
-  - **T51:** Auto top-level IDs are clone-scoped `T{scope}.{seq}`:
-    `scope` mixes a durable per-machine tag (bullseye data dir) with
-    the absolute path of this clone’s `bullseye.yaml`. Distinct machines
-    **and** same-machine independent clones/worktrees that never fetch
-    each other allocate disjoint IDs. Explicit IDs still consult git
-    history and reject reserved slots with stable `code=`.
+  - **T51 (backed out):** Clone-scoped `T{scope}.{seq}` auto IDs were
+    shipped then **reverted** for hand-typing ergonomics. Auto top-level
+    IDs are again short sequential `T{n}` over live keys ∪ git history
+    (🎯T28). Cross-machine / unfetched-clone collisions are accepted;
+    resolve manually if they matter. Explicit IDs still reject
+    history-reserved slots with stable `code=`.
   - **T52:** Startup/open reports complete vs half-configured issuepipe
     env (URL + token + OPT_IN); half-config warns loudly; complete
     recommends continuous consumer (`issues-poll --interval` / MCP
@@ -172,17 +172,14 @@ Changes affecting the interaction surface, newest first:
   are ignored on parse. First released in v0.33.0.
 
 - **Auto-assigned target IDs are history-aware across branches**
-  (🎯T28; top-level form superseded by 🎯T51). `bullseye_put` (when
-  `id` is omitted) and child-id auto-assignment in `bullseye_subdivide`
-  union live keys with every target ID ever recorded in
-  `bullseye.yaml`'s git history across every branch/remote the local
-  clone has fetched (`git log -p --all --remotes`, session-cached).
-  Explicit IDs that collide with a historical slot absent from the
-  current tree are rejected. **As of 🎯T51, auto top-level IDs are
-  `T{node}.{seq}` (machine-scoped)** so two machines that never fetch
-  each other still cannot collide; git-history skip remains for
-  same-node sequences and for subtargets. External-mode still uses the
-  same machine node tag (shared data dir).
+  (🎯T28). `bullseye_put` (when `id` is omitted) and child-id
+  auto-assignment in `bullseye_subdivide` union live keys with every
+  target ID ever recorded in `bullseye.yaml`'s git history across every
+  branch/remote the local clone has fetched (`git log -p --all
+  --remotes`, session-cached). Explicit IDs that collide with a
+  historical slot absent from the current tree are rejected. Auto
+  top-level form is short sequential `T{n}` (T51 clone-scoped form was
+  backed out).
 
 Earlier v0.29.0 changes still in effect:
 
