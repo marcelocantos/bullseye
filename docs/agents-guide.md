@@ -135,17 +135,29 @@ Unified reads. `view` defaults to `context`.
 
 ### bullseye_commit (core)
 
-Unified writes. Ops: `track`, `block`, `split`, `achieve`, `defer`, `reopen`.
+Unified writes. Ops: `track`, `block`, `split`, `achieve`, `defer`,
+`reopen`, `assign`, `unassign`, `postpone`, `wake`, `rehash`.
 On create (`track`), `name` and `acceptance` are required; **value/cost optional**.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `cwd` | string | Working directory |
 | `op` | string | Operation name |
-| (op-specific) | — | Same fields as the shim tools (`id`, `name`, `acceptance`, `blocks`, `reason`, `parent`, `children`, …) |
+| (op-specific) | — | Same fields as the shim tools (`id`, `name`, `acceptance`, `blocks`, `reason`, `parent`, `children`, `postponed_until`, `postpone_predicate`, …) |
 
 Mutation results start with a structured `# result` header (`ok`, `op`,
-`ids`, `changed`, `frontier`, `file`).
+`ids`, `changed`, `frontier`, `file`). On create, an `allocated_id_note`
+line reminds callers that new IDs come **only** from `ids:` (🎯T55).
+
+**Postpone / wake (🎯T50):** `op=postpone` with `id` plus at least one of
+`postponed_until` (YYYY-MM-DD) or `postpone_predicate` (opaque agent
+string). Future-dated postponements leave the frontier; predicates stay
+off the frontier until `op=wake` clears them (bullseye never evaluates
+the predicate).
+
+**Rehash (🎯T41):** After an **authorized** direct file edit, `op=rehash`
+with non-empty `reason` recomputes `content_hash`. Prefer mutation tools;
+do not hand-edit unless the user explicitly permits.
 
 ### bullseye_plan_checks (core)
 
@@ -172,9 +184,9 @@ Get a single target by ID.
 ### bullseye_put
 
 Upsert a target: create if the ID doesn't exist, patch if it does.
-Omit `id` to create a new target with an auto-assigned top-level ID
-(`T1`, `T2`, ...). To create a child target without choosing the
-final number, omit `id` and set `child_of` to the parent ID
+Omit `id` to create a new target with an auto-assigned **machine-scoped**
+top-level ID (`T{node}.{seq}`, 🎯T51). To create a child target without
+choosing the final number, omit `id` and set `child_of` to the parent ID
 (`child_of: "T4"` creates the next free `T4.N`). Provide `id` only
 when the exact target ID is part of the user's intent, or to patch an
 existing target — the handler decides create-vs-patch based on
@@ -678,39 +690,27 @@ which is a content edit in disguise). See 🎯T8.
 
 ### Target IDs
 
-Targets use `T<N>` for top-level targets (e.g., `T1`, `T2`) and
-`T<N>.<M>` for sub-targets (e.g., `T1.2`).
+Hand-authored and starter IDs may still be plain `T<N>` (e.g. `T1`).
+**Auto top-level allocation** (omit `id`) produces machine-scoped
+`T{node}.{seq}` (e.g. `T877223.1`) so two machines, worktrees, or
+unfetched remotes do not collide (🎯T51). Sub-targets remain
+`T….<M>` under their parent (e.g. `T1.2`, `T877223.1.2`).
 
 **Never predict an allocated ID.** On create (`bullseye_commit`
 `op=track` or `bullseye_put` without `id`), the assigned ID is knowable
-**only** from the tool result — the structured `ids:` header and the
-`Created 🎯…` line. Do **not** pre-read `bullseye.yaml` (or scan max
-`T*` + 1) to guess the next number. That read-then-act is a TOCTOU race:
-any concurrent session, git-history-reserved slot, or portfolio write
-between your read and Bullseye's locked allocation makes a predicted ID
-diverge from the one written, while the file stays correct and you never
-notice. Refer to the new target solely by the returned ID (🎯T44).
+**only** from the tool result — the structured `ids:` header, the
+`allocated_id_note`, and the `Created 🎯…` line. Do **not** pre-read
+`bullseye.yaml` (or scan max `T*` + 1) to guess the next number. That
+read-then-act is a TOCTOU race (🎯T44, 🎯T55).
 
-Auto-assignment (omit `id` on `bullseye_put` / `bullseye_commit` track or
-`bullseye_subdivide` children) picks the next free slot across **the live
-file *and* git history of `bullseye.yaml` on every branch and remote the
-local clone knows about**, so parallel sessions on different branches
-don't both land on the same number. IDs are never recycled: a target that
-once existed on any branch — even one that has since been deleted from
-the current tree — stays reserved.
+Auto-assignment unions the live file with **git history** of
+`bullseye.yaml` (every branch/remote the clone has fetched) so same-node
+sequences and subtargets skip reserved slots. Explicit `id` values that
+collide with history but not the live file are **rejected** with
+`code=id_reserved`. IDs are never recycled.
 
-Explicit `id` values are checked against the same union. If you ask
-for an ID that's already in the file, `bullseye_put` patches the
-existing target (or refuses, if it's achieved). If you ask for an ID
-that isn't in the file but appears in git history, the create is
-**rejected** — the historical slot is reserved, even if the original
-target was deleted or lives on an unmerged branch.
-
-Coverage caveats: the scan only sees commits the local clone has
-fetched. Two machines that haven't synced, or a worktree race within
-a few milliseconds, can still produce a collision. External-mode
-storage (shadow tree, no git history) falls back to in-memory-only
-allocation.
+Machine node tags live under the bullseye data dir (shared by in-repo
+and external storage on the same machine).
 
 ### Status lifecycle
 
@@ -863,7 +863,7 @@ task assigner. Agents plan; bullseye records, unblocks, and hardens claims.
 
 - `bullseye_open` — discover/init/context snapshot
 - `bullseye_query` — reads (`view`: context|frontier|target|list|summary|graph|validate)
-- `bullseye_commit` — writes (`op`: track|block|split|achieve|defer|reopen)
+- `bullseye_commit` — writes (`op`: track|block|split|achieve|defer|reopen|assign|unassign|postpone|wake|rehash)
 - `bullseye_plan_checks` — emit sawmill check plan only (does not run checks)
 
 ### Policy

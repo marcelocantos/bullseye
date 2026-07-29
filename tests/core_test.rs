@@ -41,8 +41,17 @@ fn achieved_filter() {
 #[test]
 fn validates_ok() {
     let file = load_fixture();
-    let errors = graph::validate(&file);
-    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    // Blocking errors must be empty; advisory graph-hygiene (🎯T53) may
+    // warn on fixture T5 (blocked leaf that unblocks nothing).
+    let errors = graph::validate_blocking(&file);
+    assert!(errors.is_empty(), "unexpected blocking errors: {errors:?}");
+    let warnings = graph::validate_warnings(&file);
+    assert!(
+        warnings
+            .iter()
+            .all(|w| w.contains("advisory") || w.contains("hygiene")),
+        "unexpected non-advisory warnings: {warnings:?}"
+    );
 }
 
 #[test]
@@ -1638,6 +1647,8 @@ fn summary_stale_parent_all_children_achieved() {
                 discovered: date,
                 achieved: Some(date),
                 owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
             },
         );
     }
@@ -1680,6 +1691,8 @@ fn summary_shows_grouped_children() {
             discovered: date,
             achieved: None,
             owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
         },
     );
 
@@ -2464,6 +2477,8 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 discovered: chrono::Local::now().date_naive(),
                                 achieved: None,
                                 owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
                             },
                         );
                         Ok(())
@@ -3923,6 +3938,8 @@ fn subdivide_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
                 discovered: today,
                 achieved: None,
                 owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
             },
         );
     }
@@ -4606,6 +4623,8 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     discovered: today,
                     achieved: None,
                     owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
                 },
             );
         }
@@ -4632,6 +4651,8 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     discovered: today,
                     achieved: None,
                     owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
                 },
             );
         }
@@ -4769,6 +4790,8 @@ fn t28_repo_with_branched_id() -> tempfile::TempDir {
                     discovered: today,
                     achieved: None,
                     owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
                 },
             );
         }
@@ -4814,9 +4837,9 @@ fn id_alloc_put_skips_branched_ids() {
     let shadow_tmp = tempfile::tempdir().unwrap();
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
-    // Master's bullseye.yaml has only T1, so the in-memory-only
-    // allocator would pick T2 — which collides with the feature
-    // branch. The git-history-aware path must pick T4.
+    // 🎯T51: top-level auto IDs are machine-scoped `T{node}.{seq}`, so they
+    // cannot collide with feature-branch T2/T3 even without git history.
+    // (Historical scan still covers same-node seq and subtargets.)
     let cwd = tmp.path().to_string_lossy().to_string();
     let result = handle_put(PutTool {
         cwd: cwd.clone(),
@@ -4836,8 +4859,31 @@ fn id_alloc_put_skips_branched_ids() {
     assert!(result.is_ok(), "put should succeed: {result:?}");
     let text = text_from_call_result(result.unwrap());
     assert!(
-        text.contains("🎯T4 "),
-        "expected next free slot to skip T2 and T3; got: {text}"
+        !text.contains("ids: T2") && !text.contains("ids: T3") && !text.contains("🎯T2 ") && !text.contains("🎯T3 "),
+        "must not collide with branched T2/T3; got: {text}"
+    );
+    // Machine-scoped form: T<digits>.<seq>
+    let id_line = text
+        .lines()
+        .find(|l| l.starts_with("ids: "))
+        .unwrap_or("");
+    assert!(
+        id_line
+            .trim_start_matches("ids: ")
+            .split(',')
+            .any(|id| {
+                let id = id.trim();
+                id.starts_with('T')
+                    && id.contains('.')
+                    && id
+                        .strip_prefix('T')
+                        .is_some_and(|rest| rest.split('.').all(|p| p.parse::<u32>().is_ok()))
+            }),
+        "expected machine-scoped T{{node}}.{{seq}} id; got: {text}"
+    );
+    assert!(
+        text.contains("allocated_id_note:"),
+        "create result must surface un-missable id note (🎯T55); got: {text}"
     );
 
     let _ = Location::InRepo; // keep import alive
@@ -5004,6 +5050,8 @@ fn id_alloc_memoised_within_session() {
                 discovered: today,
                 achieved: None,
                 owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
             },
         );
         store::save(&yaml, &file).unwrap();
@@ -5071,6 +5119,8 @@ fn id_alloc_deleted_targets_remain_reserved() {
                 discovered: today,
                 achieved: None,
                 owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
             },
         );
         store::save(&path, &file).unwrap();
@@ -5345,6 +5395,8 @@ fn t45_commit_track_returns_envelope_and_frontier() {
         tags: None,
         actual_cost: None,
         reason: None,
+        postponed_until: None,
+        postpone_predicate: None,
         parent: None,
         mode: None,
         children: None,
@@ -5450,6 +5502,8 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         tags: None,
         actual_cost: None,
         reason: None,
+        postponed_until: None,
+        postpone_predicate: None,
         parent: None,
         mode: None,
         children: None,
@@ -5478,6 +5532,8 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         tags: None,
         actual_cost: None,
         reason: None,
+        postponed_until: None,
+        postpone_predicate: None,
         parent: None,
         mode: None,
         children: None,
@@ -5505,6 +5561,8 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         tags: None,
         actual_cost: None,
         reason: Some("premature".to_string()),
+        postponed_until: None,
+        postpone_predicate: None,
         parent: None,
         mode: None,
         children: None,
@@ -5603,6 +5661,8 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
                 owner: "alice".into(),
                 reason: "open PR".into(),
             }),
+            postponed_until: None,
+            postpone_predicate: None,
         },
     );
     targets.insert(
@@ -5627,6 +5687,8 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
             discovered: today,
             achieved: None,
             owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
         },
     );
     let file = TargetsFile {
@@ -5692,6 +5754,8 @@ fn t43_assign_and_unassign_via_commit() {
         tags: None,
         actual_cost: None,
         reason: Some("collaborator PR".to_string()),
+        postponed_until: None,
+        postpone_predicate: None,
         parent: None,
         mode: None,
         children: None,
@@ -5724,6 +5788,8 @@ fn t43_assign_and_unassign_via_commit() {
         tags: None,
         actual_cost: None,
         reason: None,
+        postponed_until: None,
+        postpone_predicate: None,
         parent: None,
         mode: None,
         children: None,

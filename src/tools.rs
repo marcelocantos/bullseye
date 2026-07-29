@@ -93,7 +93,7 @@ pub struct CommitTool {
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
-    /// track | block | split | achieve | defer | reopen | assign | unassign
+    /// track | block | split | achieve | defer | reopen | assign | unassign | postpone | wake | rehash
     pub op: String,
 
     /// Target ID (achieve/defer/reopen/block/patch; optional on track create).
@@ -148,9 +148,17 @@ pub struct CommitTool {
     #[serde(default)]
     pub actual_cost: Option<f64>,
 
-    /// Reason for defer / reopen.
+    /// Reason for defer / reopen / rehash / postpone audit.
     #[serde(default)]
     pub reason: Option<String>,
+
+    /// Wake date (YYYY-MM-DD) for op=postpone (🎯T50).
+    #[serde(default)]
+    pub postponed_until: Option<String>,
+
+    /// Opaque postpone predicate for op=postpone (🎯T50).
+    #[serde(default)]
+    pub postpone_predicate: Option<String>,
 
     /// Parent ID for split.
     #[serde(default)]

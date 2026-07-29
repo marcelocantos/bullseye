@@ -165,6 +165,8 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                     .unwrap_or_else(|| chrono::Local::now().date_naive()),
                 achieved: fields.achieved,
                 owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
             };
 
             if let Some(ref parent_id) = fields.parent_ref {

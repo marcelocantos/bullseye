@@ -426,6 +426,8 @@ pub fn subdivide(
             discovered: today,
             achieved: None,
             owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
         };
         file.targets.insert(id.clone(), target);
     }
