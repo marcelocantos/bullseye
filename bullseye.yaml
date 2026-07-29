@@ -1545,7 +1545,7 @@ targets:
     status: achieved
     value: 0.0
     cost: 0.0
-    actual_cost: 3.0
+    actual_cost: 5.0
     acceptance:
     - Two independent clones (or worktrees) that allocate target IDs without having fetched each other's commits still produce disjoint IDs — no silent overwrite or dual T-number for different targets.
     - The guarantee holds for in_repo bullseye.yaml and for external shadow-tree storage (no reliance on a single clone's git history alone).
@@ -1553,7 +1553,10 @@ targets:
     - Auto-assign remains the only supported way for agents to obtain new IDs; agents still must not predict IDs from local scans alone.
     - Tests (or a documented multi-clone integration check) demonstrate the cross-machine / unfetched-remote case that historical_ids alone cannot cover.
     - STABILITY.md / agents guide document the new global allocation contract and retire the "neither machine has fetched" caveat as an accepted edge case.
-    context: 'Filed 2026-07-19 after clarifying 🎯T28 (git-history ID allocation). Today historical_ids unions every T* ever added across --all/--remotes in the local clone and never recycles IDs — that fixes same-clone multi-branch races. Gaps remain: two machines or worktrees that allocate before either has pushed/fetched the other''s commit; external-mode storage with empty historical scan; simultaneous worktree race between scan and commit. This target is the global allocator / reservation design that closes those holes (mechanism TBD: content-addressed or machine-scoped ID spaces, durable lease registry, push-before-allocate, portfolio-wide ID authority, etc.). Complements T28; does not reopen branch-local history scanning, which stays as the same-clone layer.'
+    context: |-
+      Filed 2026-07-19 after clarifying 🎯T28 (git-history ID allocation). Today historical_ids unions every T* ever added across --all/--remotes in the local clone and never recycles IDs — that fixes same-clone multi-branch races. Gaps remain: two machines or worktrees that allocate before either has pushed/fetched the other's commit; external-mode storage with empty historical scan; simultaneous worktree race between scan and commit. This target is the global allocator / reservation design that closes those holes (mechanism TBD: content-addressed or machine-scoped ID spaces, durable lease registry, push-before-allocate, portfolio-wide ID authority, etc.). Complements T28; does not reopen branch-local history scanning, which stays as the same-clone layer.
+
+      Reverted 2026-07-29: v0.40.0 machine-only scope still collided for same-machine dual clones; reopening until clone-path-scoped fix ships
     origin: manual
     discovered: 2026-07-19
     achieved: 2026-07-29

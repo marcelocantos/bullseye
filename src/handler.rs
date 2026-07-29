@@ -878,14 +878,16 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
 /// external-mode shadow storage) and the function then behaves
 /// exactly like the pre-T28 in-memory-only allocator.
 fn next_top_level_id(
+    yaml_path: &std::path::Path,
     file: &crate::schema::TargetsFile,
     historical: &std::collections::HashSet<String>,
 ) -> String {
-    // 🎯T51: machine-scoped auto IDs so two clones that never fetch
-    // each other cannot collide. Shape: T{node}.{seq} where `node` is
-    // a durable per-machine tag and `seq` is monotonic under that prefix
-    // across live keys + git history.
-    crate::id_alloc::next_global_top_level_id(file, historical)
+    // 🎯T51: clone-scoped auto IDs so two independent clones/worktrees
+    // (including same-machine dual checkouts that never fetch each other)
+    // cannot collide. Shape: T{scope}.{seq} where `scope` mixes a durable
+    // per-machine tag with this yaml's absolute path, and `seq` is
+    // monotonic under that prefix across live keys + git history.
+    crate::id_alloc::next_global_top_level_id(yaml_path, file, historical)
 }
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
@@ -981,7 +983,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 }
                 (ops::next_subtarget_id(file, &parent, &historical), true)
             }
-            (None, None) => (next_top_level_id(file, &historical), true),
+            (None, None) => (next_top_level_id(&path, file, &historical), true),
         };
 
         // 🎯T28: an explicit-id create that collides with a target
