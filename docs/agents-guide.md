@@ -132,6 +132,7 @@ Unified reads. `view` defaults to `context`.
 | `filter` | string | `active` | For `view=list` |
 | `recent_days` | int | 14 | For `view=context` |
 | `momentum` / `frontier_details` | — | — | For `view=summary` |
+| `scope` / `nodes` / `seeds` / `expand` | — | — | For `view=graph` (🎯T57): status scope, explicit IDs, seed expansion — see [bullseye_graph](#bullseye_graph) |
 
 ### bullseye_commit (core)
 
@@ -388,11 +389,36 @@ cycle detection.
 
 ### bullseye_graph
 
-Generate a Mermaid dependency graph of active targets.
+Generate a Mermaid dependency graph (shim for `bullseye_query view=graph`).
+Returns fenced ` ```mermaid ` source for chat clients (e.g. jevons 🎯T59).
+
+**Default (no filters):** whole **active** graph with `depends_on` edges —
+same as pre-T57 behaviour. Terminal targets (achieved / set_aside) are
+excluded unless `scope` widens the set.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
+| `scope` | string | `active` | Status filter: `active` \| `all` \| `achieved` \| `set_aside` (🎯T57) |
+| `nodes` | string[] | null | Explicit node-ID list — naive subgraph; only those IDs (filtered by scope); edges only when both endpoints selected (🎯T57) |
+| `seeds` | string[] | null | Seed IDs for intelligent expansion (🎯T57) |
+| `expand` | string[] | null | Expansion from seeds (🎯T57): `ancestors` (walk `depends_on` / deps seed needs), `descendants` (reverse-blocks / who lists seed in `depends_on`), `children` / `parents` (hierarchical ID convention `T1.1` ↔ `T1`), `frontier` (also include 1-hop dependency neighbors that are on the frontier) |
+
+**Selection modes:**
+1. No `nodes`/`seeds` → whole graph for `scope` (default active).
+2. `nodes` only → explicit set (disjoint OK).
+3. `seeds` + `expand` → grow neighborhood along the documented edge policy.
+4. Both `nodes` and `seeds` → **union**.
+
+Disjoint components never error; an empty selection yields a valid
+`graph TD` with a placeholder node. CLI twin:
+
+```
+bullseye query --view graph
+bullseye query --view graph --scope all
+bullseye query --view graph --nodes T2,T5
+bullseye query --view graph --seeds T5 --expand ancestors,descendants
+```
 
 ### bullseye_init
 
@@ -842,7 +868,9 @@ bullseye_revert(cwd, id, reason)
 
 ```
 bullseye_validate(cwd)  → schema conformance and cycle detection
-bullseye_graph(cwd)     → visual dependency map
+bullseye_graph(cwd)                          → whole active Mermaid graph
+bullseye_query(cwd, view=graph, seeds=[T5],
+  expand=[ancestors])                        → subgraph around seeds (🎯T57)
 ```
 
 ### Execute acceptance checks

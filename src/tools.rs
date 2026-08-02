@@ -39,7 +39,8 @@ pub struct OpenTool {
     name = "bullseye_query",
     description = "Core: read the intent ledger. `view` selects the projection: \
         context (default — session snapshot), frontier, target (requires id), list \
-        (optional filter), summary, graph, validate. Replaces separate list/get/\
+        (optional filter), summary, graph (Mermaid; optional scope/nodes/seeds/expand — 🎯T57), \
+        validate. Replaces separate list/get/\
         frontier/summary/graph/validate/startup_context calls for new agents."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -71,6 +72,25 @@ pub struct QueryTool {
     /// Expand frontier details when view=summary.
     #[serde(default)]
     pub frontier_details: Option<bool>,
+
+    /// Status scope when view=graph: `active` (default) | `all` |
+    /// `achieved` | `set_aside` (🎯T57).
+    #[serde(default)]
+    pub scope: Option<String>,
+
+    /// Explicit target IDs for graph subgraph selection (naive mode,
+    /// 🎯T57). Comma-separated on CLI; list on MCP.
+    #[serde(default)]
+    pub nodes: Option<Vec<String>>,
+
+    /// Seed IDs for intelligent graph expansion (🎯T57).
+    #[serde(default)]
+    pub seeds: Option<Vec<String>>,
+
+    /// Expansion steps for seeds: ancestors, descendants, children,
+    /// parents, frontier (🎯T57). Comma-separated string or list.
+    #[serde(default)]
+    pub expand: Option<Vec<String>>,
 }
 
 /// Unified mutation path for the intent ledger.
@@ -458,12 +478,32 @@ pub struct ValidateTool {
 /// Generate a Mermaid dependency graph.
 #[mcp_tool(
     name = "bullseye_graph",
-    description = "Shim for bullseye_query view=graph. Generate a Mermaid dependency graph of active targets."
+    description = "Shim for bullseye_query view=graph. Generate a Mermaid dependency graph \
+        (fenced ```mermaid). Default: whole active graph with depends_on edges (pre-T57 \
+        behaviour). Optional scope=active|all|achieved|set_aside; nodes= explicit ID list; \
+        seeds= + expand=ancestors|descendants|children|parents|frontier for intelligent \
+        subgraph selection. Disjoint components are fine. See 🎯T57."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GraphTool {
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
+
+    /// Status scope: `active` (default) | `all` | `achieved` | `set_aside`.
+    #[serde(default)]
+    pub scope: Option<String>,
+
+    /// Explicit node IDs (naive subgraph).
+    #[serde(default)]
+    pub nodes: Option<Vec<String>>,
+
+    /// Seed IDs for intelligent expansion.
+    #[serde(default)]
+    pub seeds: Option<Vec<String>>,
+
+    /// Expansion steps from seeds: ancestors, descendants, children, parents, frontier.
+    #[serde(default)]
+    pub expand: Option<Vec<String>>,
 }
 
 /// Initialise a new targets file with a starter template.

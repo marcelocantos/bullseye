@@ -41,8 +41,22 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 | `target` | Full record for `id` |
 | `list` | Filtered index (`filter`: active / achieved / set_aside / all) |
 | `summary` | Groups, frontier, blocked, stale |
-| `graph` | Mermaid dependency graph |
+| `graph` | Mermaid dependency graph (default: whole **active** graph; optional `scope` / `nodes` / `seeds` / `expand` — 🎯T57) |
 | `validate` | Schema / graph errors only |
+
+#### `view=graph` parameters (🎯T57)
+
+| Param | Default | Meaning |
+|-------|---------|---------|
+| `scope` | `active` | Status filter: `active` \| `all` \| `achieved` \| `set_aside` |
+| `nodes` | — | Explicit node-ID list (naive subgraph; edges only when both ends selected) |
+| `seeds` | — | Seed IDs for intelligent expansion |
+| `expand` | — | From seeds: `ancestors` (walk `depends_on`), `descendants` (reverse-blocks), `children` / `parents` (ID hierarchy), `frontier` (1-hop frontier neighbors) |
+
+Default with no filters = pre-T57 behaviour (full active graph, `depends_on` edges).
+Disjoint components are allowed (no error solely for disconnected selection).
+Response is fenced ` ```mermaid ` source suitable for chat renderers (e.g. jevons 🎯T59).
+CLI twin: `bullseye query --view graph [--scope …] [--nodes A,B] [--seeds S] [--expand ancestors,…]`.
 
 ### `bullseye_commit` ops
 

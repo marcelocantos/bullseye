@@ -389,7 +389,13 @@ pub fn handle_query(t: crate::tools::QueryTool) -> ToolResult {
             momentum: t.momentum,
             frontier_details: t.frontier_details,
         }),
-        "graph" => handle_graph(crate::tools::GraphTool { cwd: t.cwd }),
+        "graph" => handle_graph(crate::tools::GraphTool {
+            cwd: t.cwd,
+            scope: t.scope,
+            nodes: t.nodes,
+            seeds: t.seeds,
+            expand: t.expand,
+        }),
         "validate" => handle_validate(crate::tools::ValidateTool { cwd: t.cwd }),
         other => coded_err(
             api::ErrorCode::InvalidArgs,
@@ -1650,8 +1656,36 @@ fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
 
 fn handle_graph(t: crate::tools::GraphTool) -> ToolResult {
     let (_path, file) = load_file(&t.cwd)?;
-    let mermaid = graph::mermaid(&file);
+    let opts = mermaid_opts_from_params(t.scope.as_deref(), t.nodes, t.seeds, t.expand)
+        .map_err(tool_err)?;
+    let mermaid = graph::mermaid_with_opts(&file, &opts);
     text_result(format!("```mermaid\n{mermaid}\n```"))
+}
+
+/// Build [`graph::MermaidOpts`] from MCP/CLI graph params (🎯T57).
+fn mermaid_opts_from_params(
+    scope: Option<&str>,
+    nodes: Option<Vec<String>>,
+    seeds: Option<Vec<String>>,
+    expand: Option<Vec<String>>,
+) -> Result<graph::MermaidOpts, String> {
+    let scope = match scope {
+        Some(s) => graph::MermaidScope::parse(s)?,
+        None => graph::MermaidScope::default(),
+    };
+    let expand = match expand {
+        Some(parts) if !parts.is_empty() => {
+            let joined = parts.join(",");
+            graph::MermaidExpand::parse_list(&joined)?
+        }
+        _ => graph::MermaidExpand::default(),
+    };
+    Ok(graph::MermaidOpts {
+        scope,
+        nodes: nodes.unwrap_or_default(),
+        seeds: seeds.unwrap_or_default(),
+        expand,
+    })
 }
 
 pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {

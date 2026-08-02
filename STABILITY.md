@@ -71,6 +71,15 @@ Changes affecting the interaction surface, newest first:
   optional `channel` — no hard-coded flavor strings. Settling clock
   resets at the release shipping this surface.
 
+- **Mermaid graph subgraph selection** (🎯T57). `bullseye_query
+  view=graph` / `bullseye_graph` / CLI `query --view graph` still default
+  to the whole **active** graph (pre-T57 path). Optional `scope`
+  (`active`\|`all`\|`achieved`\|`set_aside`), explicit `nodes`, and
+  `seeds`+`expand` (`ancestors` / `descendants` / `children` / `parents` /
+  `frontier`) select subgraphs. Disjoint components allowed. Fenced
+  ` ```mermaid ` output for chat renderers. Settling clock resets at the
+  release that ships this surface.
+
 - **Achieve requires free-text `attestation`** (🎯T58). `bullseye_commit
   op=achieve`, `bullseye_retire`, and CLI `commit --op achieve
   --attestation …` reject missing / whitespace-only attestation (same
