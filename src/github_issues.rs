@@ -121,6 +121,7 @@ pub fn target_from_issue(issue: &MasterIssue, today: NaiveDate) -> (String, Targ
         cost: 0.0,
         actual_cost: None,
         set_aside_reason: None,
+        attestation: None,
         acceptance: stub_acceptance(&issue.html_url),
         checks: Vec::new(),
         context: mirror_context(issue),

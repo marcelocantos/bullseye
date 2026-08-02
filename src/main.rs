@@ -285,7 +285,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
              ops: track|block|split|achieve|defer|reopen|assign|unassign|postpone|wake|rehash\n\
              track:  --name NAME --acceptance A [--acceptance A2] [--id ID] [--child-of P]\n\
              block:  --id ID --blocks T1[,T2]\n\
-             achieve: --id ID [--actual-cost N]\n\
+             achieve: --id ID --attestation TEXT [--actual-cost N]\n\
              defer/reopen/rehash: --id ID --reason TEXT (rehash: reason only)\n\
              postpone: --id ID [--postponed-until YYYY-MM-DD] [--postpone-predicate TEXT]\n\
              wake: --id ID\n\
@@ -342,6 +342,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
                 .collect()
         }),
         actual_cost: flag_value(args, "--actual-cost").and_then(|s| s.parse().ok()),
+        attestation: flag_value(args, "--attestation"),
         reason: flag_value(args, "--reason"),
         postponed_until: flag_value(args, "--postponed-until"),
         postpone_predicate: flag_value(args, "--postpone-predicate"),

@@ -449,6 +449,7 @@ fn new_target(repo: &str, issue: &Issue, today: NaiveDate) -> Target {
         cost: 0.0,
         actual_cost: None,
         set_aside_reason: None,
+        attestation: None,
         acceptance: stub_acceptance(&issue.url),
         checks: Vec::new(),
         context: mirror_context(issue),

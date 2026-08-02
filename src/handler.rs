@@ -289,6 +289,9 @@ fn check_target_no_envelope_leaks(id: &str, target: &crate::schema::Target) -> R
     if let Some(r) = &target.set_aside_reason {
         check_persisted_string(&format!("{id}.set_aside_reason"), r)?;
     }
+    if let Some(a) = &target.attestation {
+        check_persisted_string(&format!("{id}.attestation"), a)?;
+    }
     if let Some(ob) = &target.owned_by {
         check_persisted_string(&format!("{id}.owned_by.owner"), &ob.owner)?;
         check_persisted_string(&format!("{id}.owned_by.reason"), &ob.reason)?;
@@ -479,9 +482,18 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     "op=achieve requires `id`",
                 ))
             })?;
+            let attestation = t.attestation.ok_or_else(|| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    "op=achieve requires non-empty `attestation` — a short note on how you \
+                     believe the target is met (SHA, test name, persona oracle, owner smoke, \
+                     residual risk). Not formal proof.",
+                ))
+            })?;
             handle_retire(crate::tools::RetireTool {
                 cwd: t.cwd,
                 id,
+                attestation,
                 actual_cost: t.actual_cost,
             })
         }
@@ -848,6 +860,9 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
         if let Some(reason) = &target.set_aside_reason {
             out.push_str(&format!("  reason: {reason}\n"));
         }
+        if let Some(att) = &target.attestation {
+            out.push_str(&format!("  attestation: {att}\n"));
+        }
         if !target.tags.is_empty() {
             out.push_str(&format!("  tags: {}\n", target.tags.join(", ")));
         }
@@ -1026,6 +1041,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 cost,
                 actual_cost: None,
                 set_aside_reason: None,
+                attestation: None,
                 acceptance,
                 checks: Vec::new(),
                 context: t.context.clone().unwrap_or_default(),
@@ -1043,8 +1059,8 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                     None
                 },
                 owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
+                postponed_until: None,
+                postpone_predicate: None,
             };
             file.targets.insert(id.clone(), target);
         } else {
@@ -1192,6 +1208,20 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
     ensure_mutation_allowed(&path, &t.cwd)?;
 
+    // Write-boundary guards (🎯T20 / 🎯T40) before trim/empty check.
+    check_explicit_target_id("id", &t.id).map_err(tool_err)?;
+    check_persisted_string("attestation", &t.attestation).map_err(tool_err)?;
+
+    let attestation = match normalize_attestation(&t.attestation) {
+        Ok(a) => a,
+        Err(msg) => {
+            return Err(tool_err(api::format_error(
+                api::ErrorCode::InvalidArgs,
+                msg,
+            )));
+        }
+    };
+
     enum Outcome {
         AlreadyAchieved,
         Retired { name: String, cost: f64 },
@@ -1206,7 +1236,18 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             return Ok(Outcome::AlreadyAchieved);
         }
         target.status = Status::Achieved;
-        target.achieved = Some(Local::now().date_naive());
+        let today = Local::now().date_naive();
+        target.achieved = Some(today);
+        target.attestation = Some(attestation.clone());
+        // Context audit line so the note is visible even when readers
+        // only skim context (dedicated field remains SoT for round-trip).
+        let entry = format!("Achieved {today}: {attestation}");
+        if target.context.is_empty() {
+            target.context = entry;
+        } else {
+            target.context.push_str("\n\n");
+            target.context.push_str(&entry);
+        }
         if let Some(actual) = t.actual_cost {
             target.actual_cost = Some(actual);
         }
@@ -1222,7 +1263,7 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
         Outcome::Retired { name, cost } => {
             git_commit::auto_commit_yaml(&path);
 
-            let mut out = format!("Retired 🎯{} \"{name}\"", t.id);
+            let mut out = format!("Retired 🎯{} \"{name}\"\nAttestation: {attestation}", t.id);
             if let Some(actual) = t.actual_cost {
                 out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
             }
@@ -1235,6 +1276,57 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             )
         }
     }
+}
+
+/// Normalize and validate achieve attestation (🎯T58).
+///
+/// Soft API nudge: non-empty free text, reject a few trivial tokens
+/// (`done`, `ok`, …). Not a semantic judge of truth.
+fn normalize_attestation(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "achieve requires a non-empty `attestation` — a short note on how you believe \
+             the target is met (SHA, test name, persona oracle, owner smoke, residual risk). \
+             Not formal proof."
+                .to_string(),
+        );
+    }
+    // Cheap trivial-string reject (optional acceptance). Case-insensitive
+    // whole-string match only — not a semantic judge.
+    const TRIVIAL: &[&str] = &[
+        "done",
+        "ok",
+        "yes",
+        "yep",
+        "fixed",
+        "n/a",
+        "na",
+        "pass",
+        "passed",
+        "lgtm",
+        "shipped",
+        "complete",
+        "completed",
+        "achieved",
+        "finished",
+    ];
+    let lower = trimmed.to_ascii_lowercase();
+    if TRIVIAL.contains(&lower.as_str()) {
+        return Err(format!(
+            "attestation `{trimmed}` is too trivial — write a short note on how you believe \
+             the target is met (SHA, test name, persona oracle, owner smoke, residual risk). \
+             Not formal proof."
+        ));
+    }
+    if trimmed.chars().count() < 4 {
+        return Err(
+            "attestation is too short — write a short note on how you believe the target is \
+             met (SHA, test name, persona oracle, owner smoke, residual risk). Not formal proof."
+                .to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
 }
 
 /// Re-open a previously-retired target (🎯T25). Replaces the v4
@@ -2275,6 +2367,7 @@ targets:
             cost: 0.0,
             actual_cost: None,
             set_aside_reason: None,
+            attestation: None,
             acceptance: vec!["fine".into()],
             checks: Vec::new(),
             context: "fine".into(),

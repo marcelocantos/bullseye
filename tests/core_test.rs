@@ -1632,6 +1632,7 @@ fn summary_stale_parent_all_children_achieved() {
                 value: 2.0,
                 cost: 1.0,
                 actual_cost: None,
+                attestation: None,
                 set_aside_reason: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
@@ -1676,6 +1677,7 @@ fn summary_shows_grouped_children() {
             value: 2.0,
             cost: 1.0,
             actual_cost: None,
+            attestation: None,
             set_aside_reason: None,
             acceptance: vec!["done".to_string()],
             checks: vec![],
@@ -2462,6 +2464,7 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 value: 1.0,
                                 cost: 1.0,
                                 actual_cost: None,
+                                attestation: None,
                                 set_aside_reason: None,
                                 acceptance: vec!["done".to_string()],
                                 checks: Vec::new(),
@@ -2887,6 +2890,211 @@ fn list_set_aside_filter_returns_set_aside_targets() {
             );
         }
     }
+
+    config::set_external_root_override(None);
+}
+
+// --- 🎯T58: achieve requires free-text attestation ---
+
+/// `op=achieve` / `bullseye_retire` rejects missing and whitespace-only
+/// attestation; with a real note it succeeds, persists the field, and
+/// surfaces it on list / get / summary.
+#[test]
+fn achieve_requires_and_persists_attestation() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::{handle_commit, handle_list, handle_query, handle_retire};
+    use bullseye::tools::{CommitTool, ListTool, QueryTool, RetireTool};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "attestation").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    // Missing / empty / whitespace / trivial → reject; file untouched.
+    for bad in [
+        None,
+        Some(""),
+        Some("   "),
+        Some("\n\t"),
+        Some("done"),
+        Some("OK"),
+    ] {
+        let result = handle_commit(CommitTool {
+            cwd: cwd.clone(),
+            op: "achieve".into(),
+            id: Some("T1".into()),
+            child_of: None,
+            name: None,
+            value: None,
+            cost: None,
+            acceptance: None,
+            context: None,
+            status: None,
+            depends_on: None,
+            blocks: None,
+            origin: None,
+            tags: None,
+            actual_cost: None,
+            attestation: bad.map(str::to_string),
+            reason: None,
+            postponed_until: None,
+            postpone_predicate: None,
+            parent: None,
+            mode: None,
+            children: None,
+            retire_reason: None,
+            tail: None,
+            owner: None,
+        });
+        assert!(
+            result.is_err(),
+            "achieve without real attestation must fail: input={bad:?}"
+        );
+        let err = format!("{result:?}");
+        assert!(
+            err.to_ascii_lowercase().contains("attestation"),
+            "error should name attestation: {err}"
+        );
+    }
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T1"].status, Status::Identified);
+    assert!(file.targets["T1"].attestation.is_none());
+
+    // Shim path: whitespace-only also fails.
+    let shim_empty = handle_retire(RetireTool {
+        cwd: cwd.clone(),
+        id: "T1".into(),
+        attestation: "  ".into(),
+        actual_cost: None,
+    });
+    assert!(
+        shim_empty.is_err(),
+        "retire shim empty attestation must fail"
+    );
+
+    let note = "cargo test achieve_requires_and_persists_attestation green; SHA local dogfood";
+    let ok = handle_retire(RetireTool {
+        cwd: cwd.clone(),
+        id: "T1".into(),
+        attestation: note.into(),
+        actual_cost: Some(2.0),
+    });
+    assert!(ok.is_ok(), "retire with attestation must succeed: {ok:?}");
+    let body = format!("{ok:?}");
+    assert!(
+        body.contains("Attestation:") && body.contains(note),
+        "success body should echo attestation: {body}"
+    );
+
+    let file = store::load(&path).unwrap();
+    let t1 = &file.targets["T1"];
+    assert_eq!(t1.status, Status::Achieved);
+    assert_eq!(t1.attestation.as_deref(), Some(note));
+    assert!(
+        t1.context.contains("Achieved ") && t1.context.contains(note),
+        "context should carry Achieved date line; got: {}",
+        t1.context
+    );
+    assert_eq!(t1.actual_cost, Some(2.0));
+
+    // view=target / list / summary surface the note.
+    let get = handle_query(QueryTool {
+        cwd: cwd.clone(),
+        view: Some("target".into()),
+        id: Some("T1".into()),
+        filter: None,
+        recent_days: None,
+        momentum: None,
+        frontier_details: None,
+    })
+    .expect("view=target");
+    let get_body = format!("{get:?}");
+    assert!(
+        get_body.contains("attestation") && get_body.contains(note),
+        "view=target must show attestation: {get_body}"
+    );
+
+    let list = handle_list(ListTool {
+        cwd: cwd.clone(),
+        filter: "achieved".into(),
+    })
+    .expect("list achieved");
+    let list_body = format!("{list:?}");
+    assert!(
+        list_body.contains("attestation:") && list_body.contains(note),
+        "list achieved must show attestation: {list_body}"
+    );
+
+    let summary = handle_query(QueryTool {
+        cwd: cwd.clone(),
+        view: Some("summary".into()),
+        id: None,
+        filter: None,
+        recent_days: None,
+        momentum: None,
+        frontier_details: None,
+    })
+    .expect("summary");
+    let sum_body = format!("{summary:?}");
+    assert!(
+        sum_body.contains("attestation:") && sum_body.contains(note),
+        "summary must show attestation: {sum_body}"
+    );
+
+    // validate: attestation on non-achieved is rejected.
+    {
+        let mut file = store::load(&path).unwrap();
+        file.targets.get_mut("T1").unwrap().status = Status::Identified;
+        file.targets.get_mut("T1").unwrap().achieved = None;
+        // keep attestation
+        let errs = bullseye::graph::validate(&file);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("attestation") && e.contains("only valid")),
+            "stale attestation on identified must error: {errs:?}"
+        );
+    }
+
+    config::set_external_root_override(None);
+}
+
+/// Revert clears attestation so a later re-achieve must re-attest.
+#[test]
+fn revert_clears_attestation() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::{handle_retire, handle_revert};
+    use bullseye::tools::{RetireTool, RevertTool};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "attestation-revert").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    handle_retire(RetireTool {
+        cwd: cwd.clone(),
+        id: "T1".into(),
+        attestation: "tests green; smoke on fixture".into(),
+        actual_cost: None,
+    })
+    .expect("retire");
+
+    handle_revert(RevertTool {
+        cwd: cwd.clone(),
+        id: "T1".into(),
+        reason: "regression in CI".into(),
+    })
+    .expect("revert");
+
+    let file = store::load(&path).unwrap();
+    let t1 = &file.targets["T1"];
+    assert_eq!(t1.status, Status::Converging);
+    assert!(t1.attestation.is_none(), "attestation must clear on revert");
+    assert!(t1.achieved.is_none());
 
     config::set_external_root_override(None);
 }
@@ -3924,6 +4132,7 @@ fn subdivide_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
                 value: 0.0,
                 cost: 0.0,
                 actual_cost: None,
+                attestation: None,
                 set_aside_reason: None,
                 acceptance: vec!["done".to_string()],
                 checks: vec![],
@@ -4609,6 +4818,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     value: 0.0,
                     cost: 0.0,
                     actual_cost: None,
+                    attestation: None,
                     set_aside_reason: None,
                     acceptance: vec!["done".to_string()],
                     checks: vec![],
@@ -4637,6 +4847,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     value: 0.0,
                     cost: 0.0,
                     actual_cost: None,
+                    attestation: None,
                     set_aside_reason: None,
                     acceptance: vec!["done".to_string()],
                     checks: vec![],
@@ -4776,6 +4987,7 @@ fn t28_repo_with_branched_id() -> tempfile::TempDir {
                     value: 0.0,
                     cost: 0.0,
                     actual_cost: None,
+                    attestation: None,
                     set_aside_reason: None,
                     acceptance: vec!["done".to_string()],
                     checks: vec![],
@@ -5017,6 +5229,7 @@ fn id_alloc_memoised_within_session() {
                 value: 0.0,
                 cost: 0.0,
                 actual_cost: None,
+                attestation: None,
                 set_aside_reason: None,
                 acceptance: vec!["a".to_string()],
                 checks: vec![],
@@ -5086,6 +5299,7 @@ fn id_alloc_deleted_targets_remain_reserved() {
                 value: 0.0,
                 cost: 0.0,
                 actual_cost: None,
+                attestation: None,
                 set_aside_reason: None,
                 acceptance: vec!["a".to_string()],
                 checks: vec![],
@@ -5375,6 +5589,7 @@ fn t45_commit_track_returns_envelope_and_frontier() {
         origin: None,
         tags: None,
         actual_cost: None,
+        attestation: None,
         reason: None,
         postponed_until: None,
         postpone_predicate: None,
@@ -5482,6 +5697,7 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         origin: None,
         tags: None,
         actual_cost: None,
+        attestation: None,
         reason: None,
         postponed_until: None,
         postpone_predicate: None,
@@ -5512,6 +5728,7 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         origin: None,
         tags: None,
         actual_cost: None,
+        attestation: Some("t45 lifecycle roundtrip: hermetic fixture".to_string()),
         reason: None,
         postponed_until: None,
         postpone_predicate: None,
@@ -5541,6 +5758,7 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         origin: None,
         tags: None,
         actual_cost: None,
+        attestation: None,
         reason: Some("premature".to_string()),
         postponed_until: None,
         postpone_predicate: None,
@@ -5625,6 +5843,7 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
             value: 0.0,
             cost: 0.0,
             actual_cost: None,
+            attestation: None,
             set_aside_reason: None,
             acceptance: vec!["ok".into()],
             checks: vec![],
@@ -5654,6 +5873,7 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
             value: 0.0,
             cost: 0.0,
             actual_cost: None,
+            attestation: None,
             set_aside_reason: None,
             acceptance: vec!["ok".into()],
             checks: vec![],
@@ -5734,6 +5954,7 @@ fn t43_assign_and_unassign_via_commit() {
         origin: None,
         tags: None,
         actual_cost: None,
+        attestation: None,
         reason: Some("collaborator PR".to_string()),
         postponed_until: None,
         postpone_predicate: None,
@@ -5768,6 +5989,7 @@ fn t43_assign_and_unassign_via_commit() {
         origin: None,
         tags: None,
         actual_cost: None,
+        attestation: None,
         reason: None,
         postponed_until: None,
         postpone_predicate: None,

@@ -61,6 +61,9 @@ pub fn revert(
 
     target.status = Status::Converging;
     target.achieved = None;
+    // Achieved-only field (🎯T58); clear so a later re-achieve must
+    // supply a fresh attestation rather than reusing a stale one.
+    target.attestation = None;
 
     let trimmed = reason.trim();
     if !trimmed.is_empty() {
@@ -413,6 +416,7 @@ pub fn subdivide(
             cost: 0.0,
             actual_cost: None,
             set_aside_reason: None,
+            attestation: None,
             acceptance: child.acceptance.clone(),
             checks: Vec::new(),
             context: child.context.clone().unwrap_or_default(),

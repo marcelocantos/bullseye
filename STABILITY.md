@@ -71,6 +71,17 @@ Changes affecting the interaction surface, newest first:
   optional `channel` — no hard-coded flavor strings. Settling clock
   resets at the release shipping this surface.
 
+- **Achieve requires free-text `attestation`** (🎯T58). `bullseye_commit
+  op=achieve`, `bullseye_retire`, and CLI `commit --op achieve
+  --attestation …` reject missing / whitespace-only attestation (same
+  class as `set_aside` reason). Field is named `attestation` (not
+  evidence/proof/verify) so agents are not steered into formal-proof
+  theatre. Persisted on the target and as `Achieved YYYY-MM-DD: …` in
+  context; visible on `view=target` / list / summary / startup context.
+  Trivial tokens (`done`, `ok`, …) rejected. `bullseye_revert` clears
+  attestation. Not a semantic judge of truth — soft API nudge only.
+  Settling clock resets at the release that ships this surface.
+
 - **Four-tool core intent-ledger API** (🎯T45). Day-to-day agent surface is
   `bullseye_open`, `bullseye_query`, `bullseye_commit`, and
   `bullseye_plan_checks`. `commit` ops: `track | block | split | achieve |
@@ -616,8 +627,8 @@ tag after 🎯T25.
 | `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
 | `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. v0.20.0 rejects `status: set_aside` and routes callers to `bullseye_set_aside` so the rationale is always recorded — see 🎯T18. v0.27.0 removes the `showcase` parameter — see 🎯T23. 🎯T25 drops the `kind` and `verifies` parameters — every target is now structurally uniform. |
-| `bullseye_retire(cwd, id, actual_cost?)` | Needs review | v0.27.0 removes the `demonstration` parameter alongside the showcase construct; retirement is achievement-only. See 🎯T23. |
-| `bullseye_revert(cwd, id, reason)` | Fluid | New in 🎯T25. Moves an achieved target back to `converging`, clears the achieved date, and appends `Reverted YYYY-MM-DD: <reason>` to the target's context. Achievement-only — to resume a set-aside target use `bullseye_put` with `status: identified`. |
+| `bullseye_retire(cwd, id, attestation, actual_cost?)` | Needs review | v0.27.0 removes the `demonstration` parameter alongside the showcase construct; retirement is achievement-only. See 🎯T23. **🎯T58:** `attestation` is required (non-empty free text — how you believe the target is met). Not formal proof. Persisted as `Target.attestation` + `Achieved YYYY-MM-DD: …` context line; visible on target/list/summary. Trivial tokens (`done`, `ok`, …) rejected. Core path: `bullseye_commit op=achieve` with `attestation`. |
+| `bullseye_revert(cwd, id, reason)` | Fluid | New in 🎯T25. Moves an achieved target back to `converging`, clears the achieved date **and attestation** (🎯T58), and appends `Reverted YYYY-MM-DD: <reason>` to the target's context. Achievement-only — to resume a set-aside target use `bullseye_put` with `status: identified`. |
 | `bullseye_set_aside(cwd, id, reason)` | Needs review | New in v0.20.0. Sets the target's status to `set_aside` and records the rationale (parked / deferred / wont_fix — the schema deliberately doesn't taxonomise; the free-text reason carries the nuance). Refuses already-achieved targets and is idempotent on already-set-aside targets (original reason wins). Empty / whitespace-only reasons are rejected — the rationale is the load-bearing artefact of the disposition. See 🎯T18. |
 | `bullseye_frontier(cwd)` | Stable | 🎯T25 ordering: descending unblocking fanout, then ascending ID. Per-target value/cost are NOT consumed. The checkpoint-distance term is gone alongside the verify-kind distinction that made it meaningful. |
 | `bullseye_verify(cwd, id)` | Fluid | New in v0.13.0. Emits a structured plan (markdown + JSON) mapping each check on the target to a sawmill tool invocation. Bullseye does not execute the plan — the calling agent runs it against sawmill and folds results back into a report. The plan-only (no result-feedback) shape may evolve once we see how `/cv` or similar wrappers consume it. |

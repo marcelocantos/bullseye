@@ -51,7 +51,7 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 | `track` | Create or patch a target | `bullseye_put` |
 | `block` | Inject this target into others' `depends_on` (`id` + `blocks`) | `put` with `blocks` |
 | `split` | Subdivide parent into children | `bullseye_subdivide` |
-| `achieve` | Retire as achieved | `bullseye_retire` |
+| `achieve` | Retire as achieved (requires `attestation`) | `bullseye_retire` |
 | `defer` | Set aside with reason | `bullseye_set_aside` |
 | `reopen` | Revert an achieved target | `bullseye_revert` |
 | `assign` | Mark owned-by-another (`id` + `owner` + `reason`) | — |
@@ -62,6 +62,13 @@ result envelope (`ids:`) — never predict it (TOCTOU).
 
 Create requires `name` + `acceptance`. **`value` / `cost` are optional**
 (portfolio annex; omit at repo scope → stored as 0.0 unscored).
+
+**`op=achieve` requires `attestation`** (🎯T58): non-empty free text on how
+you believe the target is met (SHA, test name, persona oracle, owner smoke,
+residual risk). Same class of check as `defer`'s `reason` — words in a box,
+not formal proof. Persisted on the target (`attestation` field +
+`Achieved YYYY-MM-DD: …` context line). Missing / whitespace-only / trivial
+tokens (`done`, `ok`, …) are rejected with a nudge in the error copy.
 
 ### `bullseye_plan_checks`
 

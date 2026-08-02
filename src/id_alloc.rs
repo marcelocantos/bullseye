@@ -223,6 +223,7 @@ mod top_level_id_tests {
                 cost: 0.0,
                 actual_cost: None,
                 set_aside_reason: None,
+                attestation: None,
                 acceptance: vec!["ok".into()],
                 checks: vec![],
                 context: String::new(),

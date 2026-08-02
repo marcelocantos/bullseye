@@ -325,6 +325,7 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
             cost: 3.0,
             actual_cost: None,
             set_aside_reason: None,
+            attestation: None,
             acceptance: vec![
                 "First milestone is defined with measurable success criteria".to_string(),
                 "At least one sub-target breaks the milestone into actionable work".to_string(),
@@ -872,6 +873,7 @@ mod header_tests {
                 cost: 0.0,
                 actual_cost: None,
                 set_aside_reason: None,
+                attestation: None,
                 acceptance: vec!["it works".to_string()],
                 checks: Vec::new(),
                 context: String::new(),
@@ -992,6 +994,7 @@ mod t41_hash_tests {
                 cost: 0.0,
                 actual_cost: None,
                 set_aside_reason: None,
+                attestation: None,
                 acceptance: vec!["a".into()],
                 checks: vec![],
                 context: String::new(),

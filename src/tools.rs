@@ -79,7 +79,8 @@ pub struct QueryTool {
     description = "Core: mutate the intent ledger. `op` selects the write: \
         track (create/patch target — name+acceptance on create; value/cost optional), \
         block (id + blocks sugar), split (subdivide parent into children), \
-        achieve (retire), defer (set_aside with reason), reopen (revert achieved), \
+        achieve (retire with required attestation), defer (set_aside with reason), \
+        reopen (revert achieved), \
         assign (mark owned-by-another: id + owner + reason — excludes from frontier without \
         unblocking dependents), unassign (clear ownership exclusion). \
         Successful results include a structured header (ok, op, ids, changed, frontier, file). \
@@ -147,6 +148,12 @@ pub struct CommitTool {
     /// Actual cost on achieve.
     #[serde(default)]
     pub actual_cost: Option<f64>,
+
+    /// Short free-text attestation on achieve (🎯T58). Required for
+    /// `op=achieve` — how you believe the target is met (SHA, test,
+    /// persona oracle, owner smoke, residual). Not formal proof.
+    #[serde(default)]
+    pub attestation: Option<String>,
 
     /// Reason for defer / reopen / rehash / postpone audit.
     #[serde(default)]
@@ -344,7 +351,10 @@ pub struct PutTool {
 /// Retire a target (move to achieved).
 #[mcp_tool(
     name = "bullseye_retire",
-    description = "Shim for bullseye_commit op=achieve. Retire a target by marking it achieved with today's date. Optionally records actual cost for calibration."
+    description = "Shim for bullseye_commit op=achieve. Retire a target by marking it achieved with today's date. \
+        Requires a short free-text `attestation` (how you believe the target is met — SHA, test name, \
+        persona oracle, owner smoke, residual risk). Not formal proof — same class of words-in-a-box as \
+        set_aside's reason. Optionally records actual cost for calibration."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct RetireTool {
@@ -353,6 +363,12 @@ pub struct RetireTool {
 
     /// Target ID to retire.
     pub id: String,
+
+    /// Short free-text note on how you believe the target is met
+    /// (SHA, test name, persona oracle, owner smoke, residual risk).
+    /// Required and must be non-empty after trimming. Not formal proof
+    /// — a soft API nudge so achievements leave a trace. See 🎯T58.
+    pub attestation: String,
 
     /// Actual cost (Fibonacci scale) for calibration against the estimate.
     #[serde(default)]

@@ -370,6 +370,21 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
             }
         }
 
+        // Achieve attestation (🎯T58): soft words-in-a-box on retirement.
+        // Required by the achieve API path; legacy achieved targets may
+        // lack the field. Empty / whitespace-only values are invalid when
+        // present. Attestation on a non-achieved status is stale noise.
+        if let Some(a) = &t.attestation {
+            if a.trim().is_empty() {
+                errors.push(format!("{id}: attestation must be non-empty when present",));
+            } else if t.status != Status::Achieved {
+                errors.push(format!(
+                    "{id}: attestation is only valid on status achieved (status is {:?})",
+                    t.status,
+                ));
+            }
+        }
+
         // Ownership exclusion (🎯T43): both owner and reason must be
         // non-empty when the field is present. Terminal targets should
         // not carry ownership — clear it first.
@@ -506,6 +521,9 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
         for (id, target) in &recent_achieved {
             let date = target.achieved.map_or("?".to_string(), |d| d.to_string());
             out.push_str(&format!("🎯{id} {} (achieved {date})\n", target.name));
+            if let Some(att) = &target.attestation {
+                out.push_str(&format!("  attestation: {att}\n"));
+            }
         }
         out.push('\n');
     }
@@ -893,6 +911,30 @@ pub fn summary(
         out.push('\n');
     }
 
+    // --- 7. Recently achieved (with attestation when present) ---
+    //
+    // Soft visibility for 🎯T58: achievements that carry a free-text
+    // attestation show the note here so summary does not require a
+    // round-trip to view=target. Legacy achievements without the field
+    // still appear with date only. Window matches startup context default.
+    let recent_cutoff = chrono::Local::now().date_naive() - chrono::Duration::days(14);
+    let mut recent_achieved: Vec<(&str, &crate::schema::Target)> = achieved
+        .into_iter()
+        .filter(|(_, t)| t.achieved.is_some_and(|d| d >= recent_cutoff))
+        .collect();
+    if !recent_achieved.is_empty() {
+        recent_achieved.sort_by_key(|b| std::cmp::Reverse(b.1.achieved));
+        out.push_str("## Recently achieved (last 14 days)\n\n");
+        for (id, t) in &recent_achieved {
+            let date = t.achieved.map_or("?".to_string(), |d| d.to_string());
+            out.push_str(&format!("🎯{id} {} (achieved {date})\n", t.name));
+            if let Some(att) = &t.attestation {
+                out.push_str(&format!("  attestation: {att}\n"));
+            }
+        }
+        out.push('\n');
+    }
+
     if !stale.is_empty() {
         out.push_str("## Stale targets\n\n");
         for s in &stale {
@@ -972,6 +1014,7 @@ mod t50_t53_tests {
             cost: 0.0,
             actual_cost: None,
             set_aside_reason: None,
+            attestation: None,
             acceptance: vec!["a".into()],
             checks: vec![],
             context: String::new(),

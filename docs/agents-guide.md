@@ -138,12 +138,13 @@ Unified reads. `view` defaults to `context`.
 Unified writes. Ops: `track`, `block`, `split`, `achieve`, `defer`,
 `reopen`, `assign`, `unassign`, `postpone`, `wake`, `rehash`.
 On create (`track`), `name` and `acceptance` are required; **value/cost optional**.
+`op=achieve` requires non-empty `attestation` (🎯T58).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `cwd` | string | Working directory |
 | `op` | string | Operation name |
-| (op-specific) | — | Same fields as the shim tools (`id`, `name`, `acceptance`, `blocks`, `reason`, `parent`, `children`, `postponed_until`, `postpone_predicate`, …) |
+| (op-specific) | — | Same fields as the shim tools (`id`, `name`, `acceptance`, `blocks`, `attestation`, `reason`, `parent`, `children`, `postponed_until`, `postpone_predicate`, …) |
 
 Mutation results start with a structured `# result` header (`ok`, `op`,
 `ids`, `changed`, `frontier`, `file`). On create, an `allocated_id_note`
@@ -229,13 +230,25 @@ transitions on achieved targets remain allowed.
 
 ### bullseye_retire
 
-Mark a target achieved.
+Mark a target achieved (shim for `bullseye_commit op=achieve`). Requires
+a short free-text **`attestation`** (🎯T58) — same class of words-in-a-box
+as `set_aside`'s `reason`. Not formal proof: a soft API nudge so
+achievements leave a trace of *how you believe the target is met*.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | required | Target ID |
+| `attestation` | string | required | Short free-text note on how you believe the target is met (SHA, test name, persona oracle, owner smoke, residual risk). Must be non-empty after trimming. Trivial tokens like `done` / `ok` are rejected. Named `attestation` (not evidence/proof/verify) so agents are not steered into formal-proof theatre. |
 | `actual_cost` | number | null | Actual cost for calibration |
+
+**Behaviour:**
+- Status flips to `achieved`; `achieved` date set to today; `attestation` stored on the target.
+- Appends `Achieved YYYY-MM-DD: <attestation>` to `context` as a skim-friendly audit line.
+- Visible on `view=target` (YAML field), `view=list` filter `achieved`, `view=summary` / context recent-achieved, and the mutation result body.
+- Rejects missing / whitespace-only / trivially short or denylisted attestation.
+- Already-achieved targets are a no-op report (idempotent).
+- `bullseye_revert` clears `attestation` so a later re-achieve must re-attest.
 
 ### bullseye_set_aside
 
@@ -628,6 +641,7 @@ targets:
     value: 8                              # Fibonacci (portfolio-scope input only)
     cost: 3                               # Fibonacci (portfolio-scope input only)
     actual_cost: 5                        # recorded on retirement (optional)
+    attestation: "cargo test green; SHA abc1234"  # required on achieve (🎯T58); free text, not formal proof
     acceptance:                           # verification contract (required):
       - CI green on all platforms         # prose describing what "done" looks like.
       - No test skips without documented reason  # whether pass signal comes from
@@ -802,8 +816,10 @@ bullseye_put(cwd, name, acceptance)
     at repo scope (set them only for portfolio-scope ranking)
 bullseye_put(cwd, id, status: "converging")
   → mark as in progress (patch by ID)
-bullseye_retire(cwd, id, actual_cost)
-  → mark as achieved
+bullseye_retire(cwd, id, attestation, actual_cost?)
+  → mark as achieved (attestation required — short note, not formal proof)
+bullseye_commit(cwd, op: "achieve", id, attestation)
+  → same via core commit path
 ```
 
 ### Add a new prerequisite above existing work
