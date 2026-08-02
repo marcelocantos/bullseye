@@ -348,13 +348,13 @@ fn expand_from_seeds(
             }
         }
 
-        if expand.descendants {
-            if let Some(deps) = dependents.get(cur.as_str()) {
-                for &d in deps {
-                    if in_scope.contains(d) && seen.insert(d.to_string()) {
-                        selected.insert(d.to_string());
-                        queue.push(d.to_string());
-                    }
+        if expand.descendants
+            && let Some(deps) = dependents.get(cur.as_str())
+        {
+            for &d in deps {
+                if in_scope.contains(d) && seen.insert(d.to_string()) {
+                    selected.insert(d.to_string());
+                    queue.push(d.to_string());
                 }
             }
         }
@@ -372,13 +372,13 @@ fn expand_from_seeds(
             }
         }
 
-        if expand.parents {
-            if let Some(dot) = cur.rfind('.') {
-                let parent = &cur[..dot];
-                if in_scope.contains(parent) && seen.insert(parent.to_string()) {
-                    selected.insert(parent.to_string());
-                    queue.push(parent.to_string());
-                }
+        if expand.parents
+            && let Some(dot) = cur.rfind('.')
+        {
+            let parent = &cur[..dot];
+            if in_scope.contains(parent) && seen.insert(parent.to_string()) {
+                selected.insert(parent.to_string());
+                queue.push(parent.to_string());
             }
         }
     }
