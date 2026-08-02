@@ -264,10 +264,32 @@ fn cli_query(args: &[String]) -> Result<String, String> {
     if has_flag(args, "--help") {
         return Ok(
             "bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter active|achieved|set_aside|all]\n\
-             views: context|frontier|target|list|summary|graph|validate\n"
+             views: context|frontier|target|list|summary|graph|validate\n\
+             graph (🎯T57): [--scope active|all|achieved|set_aside] [--nodes ID,ID]\n\
+                           [--seeds ID,ID] [--expand ancestors,descendants,children,parents,frontier]\n\
+               default: whole active graph (depends_on edges). nodes= explicit set;\n\
+               seeds+expand= intelligent neighborhood. Disjoint components OK.\n"
                 .to_string(),
         );
     }
+    let nodes = flag_value(args, "--nodes").map(|s| {
+        s.split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let seeds = flag_value(args, "--seeds").map(|s| {
+        s.split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let expand = flag_value(args, "--expand").map(|s| {
+        s.split(|c: char| c == ',' || c.is_whitespace())
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+    });
     tool_result_text(handle_query(QueryTool {
         cwd: default_cwd(args),
         view: flag_value(args, "--view"),
@@ -276,6 +298,10 @@ fn cli_query(args: &[String]) -> Result<String, String> {
         recent_days: flag_value(args, "--recent-days").and_then(|s| s.parse().ok()),
         momentum: None,
         frontier_details: None,
+        scope: flag_value(args, "--scope"),
+        nodes,
+        seeds,
+        expand,
     }))
 }
 
@@ -285,7 +311,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
              ops: track|block|split|achieve|defer|reopen|assign|unassign|postpone|wake|rehash\n\
              track:  --name NAME --acceptance A [--acceptance A2] [--id ID] [--child-of P]\n\
              block:  --id ID --blocks T1[,T2]\n\
-             achieve: --id ID [--actual-cost N]\n\
+             achieve: --id ID --attestation TEXT [--actual-cost N]\n\
              defer/reopen/rehash: --id ID --reason TEXT (rehash: reason only)\n\
              postpone: --id ID [--postponed-until YYYY-MM-DD] [--postpone-predicate TEXT]\n\
              wake: --id ID\n\
@@ -342,6 +368,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
                 .collect()
         }),
         actual_cost: flag_value(args, "--actual-cost").and_then(|s| s.parse().ok()),
+        attestation: flag_value(args, "--attestation"),
         reason: flag_value(args, "--reason"),
         postponed_until: flag_value(args, "--postponed-until"),
         postpone_predicate: flag_value(args, "--postpone-predicate"),

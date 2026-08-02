@@ -39,7 +39,8 @@ pub struct OpenTool {
     name = "bullseye_query",
     description = "Core: read the intent ledger. `view` selects the projection: \
         context (default — session snapshot), frontier, target (requires id), list \
-        (optional filter), summary, graph, validate. Replaces separate list/get/\
+        (optional filter), summary, graph (Mermaid; optional scope/nodes/seeds/expand — 🎯T57), \
+        validate. Replaces separate list/get/\
         frontier/summary/graph/validate/startup_context calls for new agents."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -71,6 +72,25 @@ pub struct QueryTool {
     /// Expand frontier details when view=summary.
     #[serde(default)]
     pub frontier_details: Option<bool>,
+
+    /// Status scope when view=graph: `active` (default) | `all` |
+    /// `achieved` | `set_aside` (🎯T57).
+    #[serde(default)]
+    pub scope: Option<String>,
+
+    /// Explicit target IDs for graph subgraph selection (naive mode,
+    /// 🎯T57). Comma-separated on CLI; list on MCP.
+    #[serde(default)]
+    pub nodes: Option<Vec<String>>,
+
+    /// Seed IDs for intelligent graph expansion (🎯T57).
+    #[serde(default)]
+    pub seeds: Option<Vec<String>>,
+
+    /// Expansion steps for seeds: ancestors, descendants, children,
+    /// parents, frontier (🎯T57). Comma-separated string or list.
+    #[serde(default)]
+    pub expand: Option<Vec<String>>,
 }
 
 /// Unified mutation path for the intent ledger.
@@ -79,7 +99,8 @@ pub struct QueryTool {
     description = "Core: mutate the intent ledger. `op` selects the write: \
         track (create/patch target — name+acceptance on create; value/cost optional), \
         block (id + blocks sugar), split (subdivide parent into children), \
-        achieve (retire), defer (set_aside with reason), reopen (revert achieved), \
+        achieve (retire with required attestation), defer (set_aside with reason), \
+        reopen (revert achieved), \
         assign (mark owned-by-another: id + owner + reason — excludes from frontier without \
         unblocking dependents), unassign (clear ownership exclusion). \
         Successful results include a structured header (ok, op, ids, changed, frontier, file). \
@@ -147,6 +168,12 @@ pub struct CommitTool {
     /// Actual cost on achieve.
     #[serde(default)]
     pub actual_cost: Option<f64>,
+
+    /// Short free-text attestation on achieve (🎯T58). Required for
+    /// `op=achieve` — how you believe the target is met (SHA, test,
+    /// persona oracle, owner smoke, residual). Not formal proof.
+    #[serde(default)]
+    pub attestation: Option<String>,
 
     /// Reason for defer / reopen / rehash / postpone audit.
     #[serde(default)]
@@ -344,7 +371,10 @@ pub struct PutTool {
 /// Retire a target (move to achieved).
 #[mcp_tool(
     name = "bullseye_retire",
-    description = "Shim for bullseye_commit op=achieve. Retire a target by marking it achieved with today's date. Optionally records actual cost for calibration."
+    description = "Shim for bullseye_commit op=achieve. Retire a target by marking it achieved with today's date. \
+        Requires a short free-text `attestation` (how you believe the target is met — SHA, test name, \
+        persona oracle, owner smoke, residual risk). Not formal proof — same class of words-in-a-box as \
+        set_aside's reason. Optionally records actual cost for calibration."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct RetireTool {
@@ -353,6 +383,12 @@ pub struct RetireTool {
 
     /// Target ID to retire.
     pub id: String,
+
+    /// Short free-text note on how you believe the target is met
+    /// (SHA, test name, persona oracle, owner smoke, residual risk).
+    /// Required and must be non-empty after trimming. Not formal proof
+    /// — a soft API nudge so achievements leave a trace. See 🎯T58.
+    pub attestation: String,
 
     /// Actual cost (Fibonacci scale) for calibration against the estimate.
     #[serde(default)]
@@ -442,12 +478,32 @@ pub struct ValidateTool {
 /// Generate a Mermaid dependency graph.
 #[mcp_tool(
     name = "bullseye_graph",
-    description = "Shim for bullseye_query view=graph. Generate a Mermaid dependency graph of active targets."
+    description = "Shim for bullseye_query view=graph. Generate a Mermaid dependency graph \
+        (fenced ```mermaid). Default: whole active graph with depends_on edges (pre-T57 \
+        behaviour). Optional scope=active|all|achieved|set_aside; nodes= explicit ID list; \
+        seeds= + expand=ancestors|descendants|children|parents|frontier for intelligent \
+        subgraph selection. Disjoint components are fine. See 🎯T57."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GraphTool {
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
+
+    /// Status scope: `active` (default) | `all` | `achieved` | `set_aside`.
+    #[serde(default)]
+    pub scope: Option<String>,
+
+    /// Explicit node IDs (naive subgraph).
+    #[serde(default)]
+    pub nodes: Option<Vec<String>>,
+
+    /// Seed IDs for intelligent expansion.
+    #[serde(default)]
+    pub seeds: Option<Vec<String>>,
+
+    /// Expansion steps from seeds: ancestors, descendants, children, parents, frontier.
+    #[serde(default)]
+    pub expand: Option<Vec<String>>,
 }
 
 /// Initialise a new targets file with a starter template.

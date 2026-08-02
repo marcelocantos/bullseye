@@ -190,6 +190,18 @@ pub struct Target {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_aside_reason: Option<String>,
 
+    /// Short free-text note recorded when the target is achieved
+    /// (🎯T58) — how the agent/owner believes the target is met
+    /// (SHA, test name, persona oracle, owner smoke, residual risk).
+    /// Required (non-empty) by `op=achieve` / `bullseye_retire`; not a
+    /// formal proof. Optional on legacy achieved targets written
+    /// before this field existed. Named `attestation` (not evidence /
+    /// proof / verify) so agents are not steered into formal-proof
+    /// theatre. Same class as [`Target::set_aside_reason`]: words in a
+    /// box, persisted, visible later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<String>,
+
     /// How to verify the desired state is achieved.
     pub acceptance: Vec<String>,
 

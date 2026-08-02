@@ -41,8 +41,22 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 | `target` | Full record for `id` |
 | `list` | Filtered index (`filter`: active / achieved / set_aside / all) |
 | `summary` | Groups, frontier, blocked, stale |
-| `graph` | Mermaid dependency graph |
+| `graph` | Mermaid dependency graph (default: whole **active** graph; optional `scope` / `nodes` / `seeds` / `expand` — 🎯T57) |
 | `validate` | Schema / graph errors only |
+
+#### `view=graph` parameters (🎯T57)
+
+| Param | Default | Meaning |
+|-------|---------|---------|
+| `scope` | `active` | Status filter: `active` \| `all` \| `achieved` \| `set_aside` |
+| `nodes` | — | Explicit node-ID list (naive subgraph; edges only when both ends selected) |
+| `seeds` | — | Seed IDs for intelligent expansion |
+| `expand` | — | From seeds: `ancestors` (walk `depends_on`), `descendants` (reverse-blocks), `children` / `parents` (ID hierarchy), `frontier` (1-hop frontier neighbors) |
+
+Default with no filters = pre-T57 behaviour (full active graph, `depends_on` edges).
+Disjoint components are allowed (no error solely for disconnected selection).
+Response is fenced ` ```mermaid ` source suitable for chat renderers (e.g. jevons 🎯T59).
+CLI twin: `bullseye query --view graph [--scope …] [--nodes A,B] [--seeds S] [--expand ancestors,…]`.
 
 ### `bullseye_commit` ops
 
@@ -51,7 +65,7 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 | `track` | Create or patch a target | `bullseye_put` |
 | `block` | Inject this target into others' `depends_on` (`id` + `blocks`) | `put` with `blocks` |
 | `split` | Subdivide parent into children | `bullseye_subdivide` |
-| `achieve` | Retire as achieved | `bullseye_retire` |
+| `achieve` | Retire as achieved (requires `attestation`) | `bullseye_retire` |
 | `defer` | Set aside with reason | `bullseye_set_aside` |
 | `reopen` | Revert an achieved target | `bullseye_revert` |
 | `assign` | Mark owned-by-another (`id` + `owner` + `reason`) | — |
@@ -62,6 +76,13 @@ result envelope (`ids:`) — never predict it (TOCTOU).
 
 Create requires `name` + `acceptance`. **`value` / `cost` are optional**
 (portfolio annex; omit at repo scope → stored as 0.0 unscored).
+
+**`op=achieve` requires `attestation`** (🎯T58): non-empty free text on how
+you believe the target is met (SHA, test name, persona oracle, owner smoke,
+residual risk). Same class of check as `defer`'s `reason` — words in a box,
+not formal proof. Persisted on the target (`attestation` field +
+`Achieved YYYY-MM-DD: …` context line). Missing / whitespace-only / trivial
+tokens (`done`, `ok`, …) are rejected with a nudge in the error copy.
 
 ### `bullseye_plan_checks`
 
