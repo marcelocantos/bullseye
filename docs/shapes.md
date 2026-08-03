@@ -196,6 +196,15 @@ hygiene reports expected vs terminal predecessor counts on nodes with
 Vocabulary and agents-guide: *merge completeness*. Source:
 `docs/analysis/graph-engineering-evaluation-2026-08.md` §3.3.
 
+**Fake edge (🎯T60).** A `depends_on` is real only when the dependent
+**consumes** the predecessor’s outcome. validate/summary **advisory**
+hygiene (`fake_edge_warnings` inside `graph_hygiene_warnings`) flags
+edges where B’s acceptance/context does not mention A’s id, a
+significant name token, or a significant acceptance token — typed order
+only. Vocabulary: *fake edge*. Source:
+`docs/analysis/graph-engineering-evaluation-2026-08.md` §3.1. See
+agents-guide “Graph discipline” for the full heuristic.
+
 **Tool call.** Build chains incrementally with `bullseye_put`,
 threading `depends_on` as you go:
 

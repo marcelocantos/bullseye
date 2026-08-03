@@ -849,9 +849,19 @@ counts and names *partial fan-in* / *merge completeness*. Advisory only —
 no hard block. Origin:
 `docs/analysis/graph-engineering-evaluation-2026-08.md` §3.3.
 
-**Fake-edge test** (before adding `depends_on`): does B’s acceptance or
-context actually need A’s result? If no, there is no edge — run in
-parallel or leave sequential work in one node.
+**Fake-edge hygiene (product, 🎯T60).** For each `depends_on` edge A→B
+where B is active and A exists, validate/summary **advisory** hygiene
+flags edges that look sequential-only: B’s acceptance/context does not
+reference A’s id, a significant name token, or a significant acceptance
+(“outcome”) token. Message vocabulary: *fake edge* / *sequential-only*.
+Heuristic prefers precision over spam (id token boundaries so `T1` ≠
+`T10` / `T1.2`; tokens length ≥ 4 minus stopwords). Advisory only — no
+hard block on mutations (same class as T53 / T59). Origin:
+`docs/analysis/graph-engineering-evaluation-2026-08.md` §3.1.
+
+**Fake-edge test** (before adding `depends_on`, and via the warning
+above): does B’s acceptance or context actually need A’s result? If no,
+there is no edge — run in parallel or leave sequential work in one node.
 
 **When not to graph.** Exploratory work, a single isolated bug, fully
 sequential steps, or “human wants to approve every step” → stay linear
