@@ -525,7 +525,8 @@ pub fn validate_warnings(file: &TargetsFile) -> Vec<String> {
     warnings
 }
 
-/// Advisory graph-shape risks (🎯T53). Never hard-block mutations.
+/// Advisory graph-shape risks (🎯T53 empty-frontier / buried-leaf;
+/// 🎯T59 merge completeness). Never hard-block mutations.
 pub fn graph_hygiene_warnings(file: &TargetsFile) -> Vec<String> {
     let mut warnings = Vec::new();
     let active = file.active();
@@ -570,6 +571,42 @@ pub fn graph_hygiene_warnings(file: &TargetsFile) -> Vec<String> {
             warnings.push(format!(
                 "{id}: graph hygiene: active leaf blocked by unfinished deps and \
                  unblocks nothing — possible tunnel/dead branch; advisory only"
+            ));
+        }
+    }
+    warnings.extend(merge_completeness_warnings(file));
+    warnings
+}
+
+/// Advisory merge-step completeness for multi-predecessor nodes (🎯T59).
+///
+/// When a target has 2+ `depends_on` edges and some but not all
+/// predecessors are terminal (achieved/set_aside), "almost green"
+/// partial fan-in can look complete while unfinished preds remain.
+/// Counts expected vs terminal; never hard-blocks.
+pub fn merge_completeness_warnings(file: &TargetsFile) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (id, t) in file.active() {
+        let expected = t.depends_on.len();
+        if expected < 2 {
+            continue;
+        }
+        let mut terminal = 0usize;
+        let mut unfinished = 0usize;
+        for dep in &t.depends_on {
+            match file.targets.get(dep.as_str()) {
+                Some(d) if d.status.is_terminal() => terminal += 1,
+                // Missing deps are unfinished (validate_blocking will also
+                // hard-error; still count for a consistent advisory).
+                _ => unfinished += 1,
+            }
+        }
+        // Partial fan-in only: some progress and some remaining work.
+        if terminal > 0 && unfinished > 0 {
+            warnings.push(format!(
+                "{id}: merge completeness: {terminal}/{expected} predecessors \
+                 terminal, {unfinished} still active — partial fan-in (almost \
+                 green); advisory only"
             ));
         }
     }
@@ -964,6 +1001,18 @@ pub fn summary(
         "# Summary\nFile: {file_path}\nTotal: {} target(s) — {disposition_parts}\n\n",
         all_targets.len(),
     ));
+
+    // Advisory graph hygiene (🎯T53 / 🎯T59) — same surface as validate
+    // warnings and startup_context. Non-blocking; partial fan-in and
+    // empty-frontier shape risks belong here so summary does not hide them.
+    let hy = graph_hygiene_warnings(file);
+    if !hy.is_empty() {
+        out.push_str("## Graph hygiene (advisory)\n\n");
+        for w in &hy {
+            out.push_str(&format!("- {w}\n"));
+        }
+        out.push('\n');
+    }
 
     // --- 1. Active targets grouped by parent ---
     out.push_str("## Active targets by group\n\n");
@@ -1390,5 +1439,110 @@ mod t50_t53_tests {
                 .any(|s| s.contains("frontier is empty") || s.contains("tunnel")),
             "warnings={w:?}"
         );
+    }
+
+    /// 🎯T59: multi-predecessor merge with mixed terminal/active deps
+    /// surfaces expected vs terminal counts and partial-fan-in language.
+    #[test]
+    fn merge_completeness_flags_partial_fan_in() {
+        let mut file = TargetsFile {
+            schema_version: Some(5),
+            last_evaluated: None,
+            release_surface: vec![],
+            targets: BTreeMap::new(),
+        };
+        let mut a = tgt("pred-a", &[]);
+        a.status = Status::Achieved;
+        a.achieved = Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+        file.targets.insert("T1".into(), a);
+        // T2 still active (identified).
+        file.targets.insert("T2".into(), tgt("pred-b", &[]));
+        // Set-aside also counts as terminal.
+        let mut c = tgt("pred-c", &[]);
+        c.status = Status::SetAside;
+        c.set_aside_reason = Some("parked".into());
+        file.targets.insert("T3".into(), c);
+        // Merge node with 3 preds: 2 terminal, 1 active.
+        file.targets
+            .insert("T4".into(), tgt("merge", &["T1", "T2", "T3"]));
+
+        let w = merge_completeness_warnings(&file);
+        assert_eq!(w.len(), 1, "warnings={w:?}");
+        assert!(
+            w[0].contains("merge completeness")
+                && w[0].contains("2/3")
+                && w[0].contains("partial fan-in")
+                && w[0].contains("advisory only"),
+            "warnings={w:?}"
+        );
+
+        // Folded into full hygiene / validate warnings.
+        let hy = graph_hygiene_warnings(&file);
+        assert!(
+            hy.iter().any(|s| s.contains("merge completeness") && s.contains("T4")),
+            "hygiene={hy:?}"
+        );
+        let vw = validate_warnings(&file);
+        assert!(
+            vw.iter().any(|s| s.contains("merge completeness")),
+            "validate_warnings={vw:?}"
+        );
+
+        // Summary surfaces the same advisory section.
+        let sum = summary(&file, "test.yaml", None, false);
+        assert!(
+            sum.contains("## Graph hygiene (advisory)")
+                && sum.contains("merge completeness")
+                && sum.contains("2/3"),
+            "summary={sum}"
+        );
+    }
+
+    #[test]
+    fn merge_completeness_skips_all_active_or_single_dep() {
+        let mut file = TargetsFile {
+            schema_version: Some(5),
+            last_evaluated: None,
+            release_surface: vec![],
+            targets: BTreeMap::new(),
+        };
+        file.targets.insert("T1".into(), tgt("a", &[]));
+        file.targets.insert("T2".into(), tgt("b", &[]));
+        // Multi-pred but zero terminal — not "almost green".
+        file.targets
+            .insert("T3".into(), tgt("merge-all-active", &["T1", "T2"]));
+        // Single dep with terminal pred — not multi-pred.
+        let mut done = tgt("done", &[]);
+        done.status = Status::Achieved;
+        done.achieved = Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+        file.targets.insert("T4".into(), done);
+        file.targets
+            .insert("T5".into(), tgt("single-dep", &["T4"]));
+
+        let w = merge_completeness_warnings(&file);
+        assert!(w.is_empty(), "unexpected merge warnings: {w:?}");
+    }
+
+    #[test]
+    fn merge_completeness_skips_fully_terminal_fan_in() {
+        let mut file = TargetsFile {
+            schema_version: Some(5),
+            last_evaluated: None,
+            release_surface: vec![],
+            targets: BTreeMap::new(),
+        };
+        for (id, name) in [("T1", "a"), ("T2", "b")] {
+            let mut t = tgt(name, &[]);
+            t.status = Status::Achieved;
+            t.achieved = Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+            file.targets.insert(id.into(), t);
+        }
+        file.targets
+            .insert("T3".into(), tgt("ready-merge", &["T1", "T2"]));
+        let w = merge_completeness_warnings(&file);
+        assert!(w.is_empty(), "fully terminal fan-in should not warn: {w:?}");
+        // Merge node should be on the frontier.
+        assert_eq!(frontier(&file).len(), 1);
+        assert_eq!(frontier(&file)[0].id, "T3");
     }
 }

@@ -840,6 +840,15 @@ vocabulary (from the graph-engineering evaluation —
 | **Anchor** | A check that cannot be argued with (tests that **ran**, CI/shipped path green). Distinct from a **report** (agent narrative, “should pass”). |
 | **Fresh-context verifier** | The checker must not share the worker’s transcript; use a new subagent, tool run, or CI job (oracle-first rule 9). |
 
+**Merge completeness (product, 🎯T59).** For active targets with **2+**
+`depends_on` edges, `bullseye_validate` (warnings) and `bullseye_summary`
+/ startup context surface an **advisory** when fan-in is only partial:
+some predecessors are terminal (achieved or set_aside) and some are
+still active. The message reports `{terminal}/{expected}` predecessor
+counts and names *partial fan-in* / *merge completeness*. Advisory only —
+no hard block. Origin:
+`docs/analysis/graph-engineering-evaluation-2026-08.md` §3.3.
+
 **Fake-edge test** (before adding `depends_on`): does B’s acceptance or
 context actually need A’s result? If no, there is no edge — run in
 parallel or leave sequential work in one node.
