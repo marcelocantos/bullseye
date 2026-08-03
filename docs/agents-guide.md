@@ -826,6 +826,35 @@ on load (the owning target absorbs its gates as blockers).
 - **depends_on**: Hard blocking. A target cannot be worked until all
   of its dependencies are achieved. This is the only structural edge.
 
+### Graph discipline (fake edges, width, anchors)
+
+Bullseye is an **intent ledger**, not an orchestration runtime. Shared
+vocabulary (from the graph-engineering evaluation —
+`docs/analysis/graph-engineering-evaluation-2026-08.md`, 🎯T56):
+
+| Term | Meaning |
+|------|---------|
+| **Fake edge** | A `depends_on` that is typed order only: the dependent’s acceptance/context does **not** consume the predecessor’s outcome. Candidates for parallel work or for dropping the edge. |
+| **Width / diamond** | Real parallelism: fan-out → independent work → merge. Named shapes live in `docs/shapes.md`. |
+| **Merge completeness** | On multi-predecessor nodes, “all deps terminal” can hide partial fan-in; prefer expected-vs-achieved counts (advisory hygiene). |
+| **Anchor** | A check that cannot be argued with (tests that **ran**, CI/shipped path green). Distinct from a **report** (agent narrative, “should pass”). |
+| **Fresh-context verifier** | The checker must not share the worker’s transcript; use a new subagent, tool run, or CI job (oracle-first rule 9). |
+
+**Fake-edge test** (before adding `depends_on`): does B’s acceptance or
+context actually need A’s result? If no, there is no edge — run in
+parallel or leave sequential work in one node.
+
+**When not to graph.** Exploratory work, a single isolated bug, fully
+sequential steps, or “human wants to approve every step” → stay linear
+(one loop + one oracle). Graph structure buys **width**, not judgment.
+Over-`depends_on` webs are process pain (see T53 advisory hygiene), not
+product features.
+
+**Optional node contracts (docs convention, not schema).** In
+acceptance or context, free-text lines like `produces: …` /
+`consumes: …` make real edges machine-legible without reviving `kind`
+or new fields. Prefer conventions in `docs/shapes.md` over schema.
+
 ## Typical workflows
 
 ### Assess what to work on

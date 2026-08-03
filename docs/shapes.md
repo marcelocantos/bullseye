@@ -173,6 +173,21 @@ commit" is one node's acceptance, not a chain — the steps have no
 independent meaning. Chains earn their place when intermediates
 deserve to be addressable on their own.
 
+**Fake-edge test.** Before wiring `B depends_on A`, ask: does B’s
+acceptance or context actually **consume** A’s outcome? If not, the
+edge is sequential prose only — drop it or keep A and B as one node.
+See agents-guide “Graph discipline” and
+`docs/analysis/graph-engineering-evaluation-2026-08.md` (🎯T56).
+
+**Optional contracts (convention, not schema).** Free-text lines in
+acceptance or context:
+
+- `produces: <artifact or outcome the next node needs>`
+- `consumes: <what this node needs from predecessors>`
+
+These make real edges legible without new fields or a `kind`
+discriminator. Prefer them on diamonds and multi-predecessor merges.
+
 **Tool call.** Build chains incrementally with `bullseye_put`,
 threading `depends_on` as you go:
 
