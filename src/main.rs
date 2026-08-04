@@ -190,11 +190,11 @@ fn split_server_flags(args: &[String]) -> (Vec<String>, Vec<String>) {
 }
 
 fn apply_server_flags(flags: &[String]) {
-    if let Some(val) = flag_value(flags, "--default-location") {
-        if let Err(e) = bullseye::config::set_process_default_location(&val) {
-            eprintln!("--default-location: {e}");
-            process::exit(1);
-        }
+    if let Some(val) = flag_value(flags, "--default-location")
+        && let Err(e) = bullseye::config::set_process_default_location(&val)
+    {
+        eprintln!("--default-location: {e}");
+        process::exit(1);
     }
 }
 
