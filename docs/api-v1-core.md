@@ -27,10 +27,17 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 
 ### `bullseye_open`
 
-- If `bullseye.yaml` exists (in-repo or external): return context view.
-- If missing and `location` is set: init, then return context.
-- If missing and `location` omitted: error `not_initialized` with the
-  location prompt.
+- If `bullseye.yaml` exists (in-repo or external via `discover_anywhere`):
+  return context view. **Discovery never uses `default_location`.**
+- If missing and `location` is set: init at that location, then context.
+- If missing and `location` omitted but server `default_location` is set
+  (`--default-location` / `BULLSEYE_DEFAULT_LOCATION`, 🎯T61): init using
+  that default (create-path only), then context.
+- If missing and neither per-call location nor server default: error
+  `not_initialized` with the location prompt.
+
+**Collision policy:** when both in-repo and external files exist,
+`discover_anywhere` returns the **in-repo** path (v0.16).
 
 ### `bullseye_query` views
 
@@ -144,9 +151,25 @@ Not part of the core agent happy path:
 Legacy tools (`list`, `get`, `put`, `retire`, …) remain as **shims**
 that call the same handlers.
 
+## Create default location (🎯T61)
+
+Server-level **create-only** default — does not affect discovery:
+
+| Mechanism | Example |
+|-----------|---------|
+| CLI (MCP start) | `bullseye --default-location external` |
+| Environment | `BULLSEYE_DEFAULT_LOCATION=external` |
+
+Resolution for create tools (`init`, `open` create, `import`):
+
+1. Per-call `location` → always wins.
+2. Else server `default_location` if set.
+3. Else location prompt / `not_initialized`.
+
 ## CLI twins
 
 ```text
+bullseye [--default-location in_repo|external]   # MCP server; create default only
 bullseye open [--location in_repo|external] [--cwd DIR]
 bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter FILTER]
 bullseye commit --op OP …   # see --help

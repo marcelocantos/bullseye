@@ -21,8 +21,13 @@ const AGENT_GUIDE: &str = include_str!("../docs/agents-guide.md");
 #[tokio::main]
 async fn main() -> SdkResult<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        match args[1].as_str() {
+    // Server create default (🎯T61) may appear as a global flag before any
+    // subcommand, or alone when starting MCP: `bullseye --default-location external`.
+    let (server_flags, rest) = split_server_flags(&args[1..]);
+    apply_server_flags(&server_flags);
+
+    if !rest.is_empty() {
+        match rest[0].as_str() {
             "--version" => {
                 println!("bullseye {}", env!("CARGO_PKG_VERSION"));
                 process::exit(0);
@@ -37,13 +42,13 @@ async fn main() -> SdkResult<()> {
                 print!("{AGENT_GUIDE}");
                 process::exit(0);
             }
-            "open" => cli_exit(cli_open(&args[2..])),
-            "query" => cli_exit(cli_query(&args[2..])),
-            "commit" => cli_exit(cli_commit(&args[2..])),
-            "plan-checks" => cli_exit(cli_plan_checks(&args[2..])),
+            "open" => cli_exit(cli_open(&rest[1..])),
+            "query" => cli_exit(cli_query(&rest[1..])),
+            "commit" => cli_exit(cli_commit(&rest[1..])),
+            "plan-checks" => cli_exit(cli_plan_checks(&rest[1..])),
             "sync-priorities" => {
                 #[cfg(feature = "sqlite")]
-                match bullseye::priorities::run_sync(&args[2..]) {
+                match bullseye::priorities::run_sync(&rest[1..]) {
                     Ok(msg) => {
                         println!("{msg}");
                         process::exit(0);
@@ -63,7 +68,7 @@ async fn main() -> SdkResult<()> {
                     process::exit(1);
                 }
             }
-            "github" => match bullseye::github::run(&args[2..]) {
+            "github" => match bullseye::github::run(&rest[1..]) {
                 Ok(msg) => {
                     println!("{msg}");
                     process::exit(0);
@@ -75,7 +80,7 @@ async fn main() -> SdkResult<()> {
             },
             "issues-poll" => {
                 #[cfg(feature = "github-issues")]
-                match bullseye::github_issues::http::run(&args[2..]) {
+                match bullseye::github_issues::http::run(&rest[1..]) {
                     Ok(msg) => {
                         println!("{msg}");
                         process::exit(0);
@@ -153,6 +158,46 @@ async fn main() -> SdkResult<()> {
     server.start().await
 }
 
+/// Peel global server flags from argv. Recognises
+/// `--default-location VALUE` and `--default-location=VALUE` (🎯T61).
+fn split_server_flags(args: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut flags = Vec::new();
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--default-location" {
+            flags.push(a.clone());
+            if let Some(v) = args.get(i + 1) {
+                flags.push(v.clone());
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(rest_eq) = a.strip_prefix("--default-location=") {
+            flags.push("--default-location".to_string());
+            flags.push(rest_eq.to_string());
+            i += 1;
+            continue;
+        }
+        // First non-server-flag token starts the subcommand / remaining args.
+        rest.extend_from_slice(&args[i..]);
+        break;
+    }
+    (flags, rest)
+}
+
+fn apply_server_flags(flags: &[String]) {
+    if let Some(val) = flag_value(flags, "--default-location")
+        && let Err(e) = bullseye::config::set_process_default_location(&val)
+    {
+        eprintln!("--default-location: {e}");
+        process::exit(1);
+    }
+}
+
 fn print_help() {
     println!(
         "bullseye {} — Intent Ledger MCP Server",
@@ -160,7 +205,8 @@ fn print_help() {
     );
     println!();
     println!("USAGE:");
-    println!("    bullseye                       Start the MCP server (stdio transport)");
+    println!("    bullseye [--default-location in_repo|external]");
+    println!("                               Start the MCP server (stdio transport)");
     println!("    bullseye open [--cwd DIR] [--location in_repo|external]");
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
     println!("    bullseye commit --op OP [flags]   # see bullseye commit --help");
@@ -178,6 +224,12 @@ fn print_help() {
     println!("    --version             Print version");
     println!("    --help                Print this help");
     println!("    --help-agent          Print help and agent guide");
+    println!(
+        "    --default-location L  Create default when location omitted (in_repo|external; 🎯T61)"
+    );
+    println!(
+        "                           Also: env BULLSEYE_DEFAULT_LOCATION. Discovery unchanged."
+    );
     println!();
     println!("Core contract: docs/api-v1-core.md");
 }

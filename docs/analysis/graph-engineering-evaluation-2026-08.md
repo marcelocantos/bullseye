@@ -138,15 +138,40 @@ If the fake-edge test finds no independent work: **one loop + one oracle** is co
 
 ---
 
-## 6. Disposition
+## 6. Disposition (re-review 2026-08-03)
 
-| Item | Status as of capture |
-|------|----------------------|
-| This document | Written for deferred review |
-| Implementation targets for 3.x / 4.x | **Not** filed yet — wait for re-read |
-| Bullseye as runtime | Explicit non-goal |
+**Re-read:** Full document re-read on 2026-08-03 (written 2026-08-01 — deliberate multi-day delay).  
+**Scope guard:** No orchestration-runtime, dynamic workflow engine, or per-run cost metering is filed for bullseye. Intent ledger stays intent-only.
 
-When re-reviewing: re-read §3–5, decide which items become bullseye targets vs oracle-first skill/doctrine edits vs docs-only, and drop anything that still looks like orchestration creep.
+### §3 bullseye
+
+| Item | Disposition | Detail |
+|------|-------------|--------|
+| **3.1 Fake-edge audit** (high) | **Implement** | Filed **🎯T60**: extend T53-style **advisory** hygiene so sequential-only `depends_on` edges can be flagged (B’s acceptance/context does not consume A’s outcome). No hard block. Vocabulary: *fake edge*. |
+| **3.2 Node contracts** (medium) | **Docs-only** | Optional free-text `produces:` / `consumes:` convention in `docs/shapes.md` + agents-guide. **No** schema fields, no `kind`. Landed with T56 disposition commit. |
+| **3.3 Merge-step completeness** (medium) | **Implement** | Filed **🎯T59**: for nodes with many predecessors, validate/summary advisory counts expected vs terminal deps and flags partial fan-in that looks complete. Vocabulary: *merge completeness*. |
+| **3.4 Diamond filing assist** (medium–low) | **Won't-do** | `docs/shapes.md` diamond + `bullseye_subdivide` `mode=retire` + `tail` already encode the only shape needed; no one-shot helper until measured filing friction. |
+| **3.5 Explicit “not a graph”** (low) | **Docs-only** | Agents-guide: exploratory / single-bug / fully sequential → stay linear; graph is for **width**. Landed with T56 disposition commit. |
+| **3.6 Out of scope** | **Confirmed non-goal** | Multi-agent orchestration runtime, dynamic workflows, per-run cost caps — **won't-do** in bullseye. Execution coordination stays in skills/runners (mnemo, `/cv`, workflows). |
+
+### §4 oracle-first
+
+| Item | Disposition | Detail |
+|------|-------------|--------|
+| **4.1 Name anchors** (high) | **Docs-only** | Name **anchors** (checks that cannot be argued with: tests that ran, shipped-path green) vs **report nodes** (narratives, “should pass”). Landed in `oracle-first` skill; shared words in bullseye agents-guide. |
+| **4.2 Worker ≠ verifier context** (high) | **Docs-only** | **Fresh-context verifier**: verifier must not share the worker’s transcript; prefer new subagent / new tool run / CI. Landed next to rule 9 independence in oracle-first skill. |
+| **4.3 Multiple lenses** (medium) | **Docs-only** | Where residue is large, split acceptance: correctness / freshness / provenance. Short note in oracle-first; no new product surface. |
+| **4.4 False independence** (medium) | **Docs-only** | Hidden edges (shared worktree, rate-limited API) are part of the **verification plan**; name isolation (worktree/cwd). Pointer in oracle-first; fan-out skill already leans this way. |
+| **4.5 Fan-in layering** (medium) | **Won't-do (product)** | Process guidance only (batch → summarize → synthesize); no bullseye ledger surface. One line in oracle-first skill is enough. |
+| **4.6 When a loop is enough** (low) | **Docs-only** | Paired with 3.5: if the fake-edge test finds no independent work, one loop + one oracle — do not graph for ceremony. |
+
+### Highest-leverage trio (§5) — actioned
+
+1. **Bullseye:** fake-edge hygiene (**🎯T60**) + merge completeness (**🎯T59**) → **implementation targets filed** (reference this doc).  
+2. **Oracle-first:** anchors + fresh-context verifier → **docs-only** in `~/.claude/skills/oracle-first/SKILL.md`.  
+3. **Shared vocabulary** (diamond / fake edge / anchor / fresh-context) → **agents-guide + shapes**.  
+
+**Do not** reopen clone-scoped IDs or heavy schema for this evaluation.
 
 ---
 

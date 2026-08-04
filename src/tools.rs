@@ -13,15 +13,17 @@ use rust_mcp_sdk::tool_box;
     description = "Core: open the project's intent ledger. If bullseye.yaml exists, returns \
         the session snapshot (active count, frontier, recent achievements). If missing and \
         `location` is set (in_repo|external), creates a starter file then returns context. \
-        If missing and location is omitted, returns code=not_initialized with the location \
-        prompt. Prefer this over separate init + startup_context calls."
+        If missing and location is omitted: uses server `default_location` when configured \
+        (BULLSEYE_DEFAULT_LOCATION / --default-location); otherwise returns code=not_initialized \
+        with the location prompt. Prefer this over separate init + startup_context calls."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct OpenTool {
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
-    /// When no file exists: \"in_repo\" or \"external\". Omit to only probe.
+    /// When no file exists: \"in_repo\" or \"external\". Overrides server default_location. \
+    /// Omit to use default_location if set, else probe-only (not_initialized).
     #[serde(default)]
     pub location: Option<String>,
 
@@ -510,12 +512,10 @@ pub struct GraphTool {
 #[mcp_tool(
     name = "bullseye_init",
     description = "Shim for bullseye_open with location. Create a starter bullseye.yaml with a sample target. \
-        Requires a `location` argument that is either \"in_repo\" (file is \
-        committed into the repo, for repos you own where the team uses bullseye) \
-        or \"external\" (file is stored in a shadow tree under \
-        ~/.local/share/bullseye/ mirroring the cwd's absolute path — for \
-        read-only repos, or personal use of bullseye). Refuses to create a \
-        file if one already exists at either location."
+        `location` is \"in_repo\" (committed into the repo) or \"external\" (shadow tree under \
+        ~/.local/share/bullseye/ mirroring the cwd's absolute path). Optional when the server has \
+        `default_location` set (BULLSEYE_DEFAULT_LOCATION / --default-location); per-call location \
+        always overrides that default. Refuses to create a file if one already exists at either location."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct InitTool {
@@ -525,9 +525,10 @@ pub struct InitTool {
     pub cwd: String,
 
     /// Where to store the new bullseye.yaml: "in_repo" or "external".
-    /// Ask the user if you don't know. This is a per-repo choice, not
-    /// a machine-wide one — pick it once per repo at init time.
-    pub location: String,
+    /// Optional when server default_location is set (create-time only).
+    /// Per-call value always overrides the server default.
+    #[serde(default)]
+    pub location: Option<String>,
 
     /// Project name for the sample target context (e.g., "my-app").
     #[serde(default)]
@@ -539,10 +540,10 @@ pub struct InitTool {
     name = "bullseye_import",
     description = "Extended (L2): Import targets from a markdown file into bullseye.yaml. Parses \
         the markdown format produced by other repos' /cv skills. Tolerant of minor \
-        formatting variations. Requires `path` (the markdown source) and \
-        `location` (\"in_repo\" or \"external\" — same semantics as bullseye_init). \
-        Refuses to overwrite an existing bullseye.yaml in either location unless \
-        `force: true`."
+        formatting variations. Requires `path` (the markdown source). `location` is \
+        \"in_repo\" or \"external\" (same semantics as bullseye_init) — optional when \
+        server default_location is set; per-call overrides the default. Refuses to \
+        overwrite an existing bullseye.yaml in either location unless `force: true`."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ImportTool {
@@ -554,8 +555,9 @@ pub struct ImportTool {
     pub path: Option<String>,
 
     /// Where to write the resulting bullseye.yaml: "in_repo" or "external".
-    /// Same semantics as bullseye_init's location field.
-    pub location: String,
+    /// Optional when server default_location is set; overrides that default when set.
+    #[serde(default)]
+    pub location: Option<String>,
 
     /// If true, overwrite an existing bullseye.yaml (default: false).
     #[serde(default)]

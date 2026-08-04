@@ -9,8 +9,23 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of 🎯T41 and 🎯T50–T55 (store hash, postpone, global IDs, agent DX).
+Snapshot as of 🎯T59–T61 (graph hygiene + create defaults) on the T41/T50–T57 base.
 Changes affecting the interaction surface, newest first:
+
+- **Graph-engineering hygiene and create-time location default** (🎯T56
+  disposition → 🎯T59, 🎯T60, 🎯T61).
+  - **T59:** Advisory *merge completeness* on active multi-predecessor
+    nodes: counts terminal vs expected `depends_on` and flags partial
+    fan-in in validate / graph hygiene / summary / startup context.
+  - **T60:** Advisory *fake-edge* hygiene for sequential-only
+    `depends_on` (dependent text does not consume predecessor id/name/
+    outcome). Lexical heuristic; advisory only.
+  - **T61:** Optional server `default_location` (`--default-location` /
+    `BULLSEYE_DEFAULT_LOCATION`) for *create* paths only. Discovery
+    remains filesystem-only; per-call `location` always wins.
+  - **T56:** Graph-engineering evaluation dispositioned (docs +
+    vocabulary; no orchestration runtime). Additive warnings + create
+    defaults only — no settling-clock reset.
 
 - **Store ownership, postpone, global IDs, agent DX** (🎯T41, 🎯T50–T55).
   - **T41:** Every save stamps `# content_hash: sha256:…` over the
@@ -516,28 +531,28 @@ Earlier changes still in effect from v0.17.0:
   meant for single-repo work. Set them when the target should
   participate in cross-repo WSJF ranking.
 
-Earlier changes still in effect from v0.16.0:
-- **Per-repo storage, no machine-wide config** (redesign of 🎯T12).
+Earlier changes still in effect from v0.16.0 (create defaults refined in 🎯T61):
+- **Per-repo storage for discovery** (redesign of 🎯T12).
   The v0.15.0 machine-wide `~/.config/bullseye/config.yaml` and
-  `bullseye_configure` tool are **removed**. Location is now a
-  per-repo property, encoded by where `bullseye.yaml` lives on disk:
+  `bullseye_configure` tool remain **removed**. Where an *existing*
+  ledger lives is encoded by filesystem state:
   - `in_repo` — `bullseye.yaml` inside the project, discovered by
     walking up from `cwd`.
   - `external` — `bullseye.yaml` in a shadow tree under
     `~/.local/share/bullseye/` mirroring the absolute `cwd`.
   Every tool calls `discover_anywhere(cwd)`, which checks the
   in-repo walk-up first and then the shadow walk-up. If both exist
-  (edge case), **in-repo wins**. There is no config file to sync
-  across machines, no global default, and no machine-wide state.
+  (edge case), **in-repo wins**. Discovery never consults create defaults.
 
-- **`bullseye_init` requires `location`** — `"in_repo"` or
-  `"external"`. Called without it, the tool returns the locked
-  prompt (`config::LOCATION_PROMPT`) so the agent can ask the user.
-  Refuses to create a file if one already exists in either location.
+- **Create-time `default_location` (🎯T61)** — optional server default
+  for *new* files only: `--default-location in_repo|external` or env
+  `BULLSEYE_DEFAULT_LOCATION`. Per-call `location` always overrides.
+  When neither is set, create tools return the locked
+  `config::LOCATION_PROMPT`.
 
-- **`bullseye_import` requires `location`** — same semantics as
-  `bullseye_init`. Also refuses to overwrite an existing file in
-  either location unless `force: true`.
+- **`bullseye_init` / `bullseye_import` `location`** — optional when
+  server `default_location` is set; required otherwise. Same create
+  resolution for both. Import still refuses overwrite unless `force`.
 
 - **`bullseye_put` no longer auto-creates** — returns the locked
   prompt (via `load_file`'s not-found message) when no targets file

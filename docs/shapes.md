@@ -173,6 +173,38 @@ commit" is one node's acceptance, not a chain — the steps have no
 independent meaning. Chains earn their place when intermediates
 deserve to be addressable on their own.
 
+**Fake-edge test.** Before wiring `B depends_on A`, ask: does B’s
+acceptance or context actually **consume** A’s outcome? If not, the
+edge is sequential prose only — drop it or keep A and B as one node.
+See agents-guide “Graph discipline” and
+`docs/analysis/graph-engineering-evaluation-2026-08.md` (🎯T56).
+
+**Optional contracts (convention, not schema).** Free-text lines in
+acceptance or context:
+
+- `produces: <artifact or outcome the next node needs>`
+- `consumes: <what this node needs from predecessors>`
+
+These make real edges legible without new fields or a `kind`
+discriminator. Prefer them on diamonds and multi-predecessor merges.
+
+**Merge completeness (🎯T59).** A multi-predecessor merge (diamond
+reduce, fan-in) can look “almost green” while one pred is still open.
+Bullseye does not invent a new edge type: validate/summary **advisory**
+hygiene reports expected vs terminal predecessor counts on nodes with
+2+ `depends_on` when fan-in is partial (mixed terminal/active deps).
+Vocabulary and agents-guide: *merge completeness*. Source:
+`docs/analysis/graph-engineering-evaluation-2026-08.md` §3.3.
+
+**Fake edge (🎯T60).** A `depends_on` is real only when the dependent
+**consumes** the predecessor’s outcome. validate/summary **advisory**
+hygiene (`fake_edge_warnings` inside `graph_hygiene_warnings`) flags
+edges where B’s acceptance/context does not mention A’s id, a
+significant name token, or a significant acceptance token — typed order
+only. Vocabulary: *fake edge*. Source:
+`docs/analysis/graph-engineering-evaluation-2026-08.md` §3.1. See
+agents-guide “Graph discipline” for the full heuristic.
+
 **Tool call.** Build chains incrementally with `bullseye_put`,
 threading `depends_on` as you go:
 
