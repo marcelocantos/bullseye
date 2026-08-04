@@ -672,11 +672,7 @@ fn dependent_consumer_text(t: &crate::schema::Target) -> String {
 }
 
 /// True when B's consumer text appears to consume predecessor A.
-fn edge_looks_consuming(
-    consumer_lower: &str,
-    pred_id: &str,
-    pred: &crate::schema::Target,
-) -> bool {
+fn edge_looks_consuming(consumer_lower: &str, pred_id: &str, pred: &crate::schema::Target) -> bool {
     if text_mentions_target_id(consumer_lower, pred_id) {
         return true;
     }
@@ -708,8 +704,7 @@ fn text_mentions_target_id(haystack: &str, id: &str) -> bool {
         while let Some(rel) = haystack[start..].find(needle.as_str()) {
             let abs = start + rel;
             let end = abs + needle.len();
-            let left_ok = abs == 0
-                || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
+            let left_ok = abs == 0 || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
             let right_ok = match haystack.as_bytes().get(end) {
                 None => true,
                 Some(b) if b.is_ascii_alphanumeric() => false,
@@ -735,15 +730,12 @@ fn text_mentions_target_id(haystack: &str, id: &str) -> bool {
 /// Used as a low-spam proxy for name/outcome consumption.
 fn significant_tokens(text: &str) -> Vec<String> {
     const STOP: &[&str] = &[
-        "with", "from", "that", "this", "when", "have", "does", "only",
-        "into", "over", "after", "before", "must", "will", "should",
-        "target", "tests", "test", "work", "file", "docs", "code",
-        "when", "than", "then", "them", "they", "their", "there",
-        "about", "above", "below", "under", "each", "other", "such",
-        "also", "just", "more", "most", "some", "same", "both",
-        "been", "being", "were", "what", "which", "while", "where",
-        "your", "ours", "into", "onto", "via", "using", "used",
-        "make", "made", "need", "needs", "able",
+        "with", "from", "that", "this", "when", "have", "does", "only", "into", "over", "after",
+        "before", "must", "will", "should", "target", "tests", "test", "work", "file", "docs",
+        "code", "when", "than", "then", "them", "they", "their", "there", "about", "above",
+        "below", "under", "each", "other", "such", "also", "just", "more", "most", "some", "same",
+        "both", "been", "being", "were", "what", "which", "while", "where", "your", "ours", "into",
+        "onto", "via", "using", "used", "make", "made", "need", "needs", "able",
     ];
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| w.len() >= 4)
@@ -1618,7 +1610,8 @@ mod t50_t53_tests {
         // Folded into full hygiene / validate warnings.
         let hy = graph_hygiene_warnings(&file);
         assert!(
-            hy.iter().any(|s| s.contains("merge completeness") && s.contains("T4")),
+            hy.iter()
+                .any(|s| s.contains("merge completeness") && s.contains("T4")),
             "hygiene={hy:?}"
         );
         let vw = validate_warnings(&file);
@@ -1655,8 +1648,7 @@ mod t50_t53_tests {
         done.status = Status::Achieved;
         done.achieved = Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
         file.targets.insert("T4".into(), done);
-        file.targets
-            .insert("T5".into(), tgt("single-dep", &["T4"]));
+        file.targets.insert("T5".into(), tgt("single-dep", &["T4"]));
 
         let w = merge_completeness_warnings(&file);
         assert!(w.is_empty(), "unexpected merge warnings: {w:?}");
@@ -1715,7 +1707,8 @@ mod t50_t53_tests {
 
         let hy = graph_hygiene_warnings(&file);
         assert!(
-            hy.iter().any(|s| s.contains("fake edge") && s.contains("T2")),
+            hy.iter()
+                .any(|s| s.contains("fake edge") && s.contains("T2")),
             "hygiene={hy:?}"
         );
         let vw = validate_warnings(&file);

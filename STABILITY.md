@@ -9,8 +9,23 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of 🎯T41 and 🎯T50–T55 (store hash, postpone, global IDs, agent DX).
+Snapshot as of 🎯T59–T61 (graph hygiene + create defaults) on the T41/T50–T57 base.
 Changes affecting the interaction surface, newest first:
+
+- **Graph-engineering hygiene and create-time location default** (🎯T56
+  disposition → 🎯T59, 🎯T60, 🎯T61).
+  - **T59:** Advisory *merge completeness* on active multi-predecessor
+    nodes: counts terminal vs expected `depends_on` and flags partial
+    fan-in in validate / graph hygiene / summary / startup context.
+  - **T60:** Advisory *fake-edge* hygiene for sequential-only
+    `depends_on` (dependent text does not consume predecessor id/name/
+    outcome). Lexical heuristic; advisory only.
+  - **T61:** Optional server `default_location` (`--default-location` /
+    `BULLSEYE_DEFAULT_LOCATION`) for *create* paths only. Discovery
+    remains filesystem-only; per-call `location` always wins.
+  - **T56:** Graph-engineering evaluation dispositioned (docs +
+    vocabulary; no orchestration runtime). Additive warnings + create
+    defaults only — no settling-clock reset.
 
 - **Store ownership, postpone, global IDs, agent DX** (🎯T41, 🎯T50–T55).
   - **T41:** Every save stamps `# content_hash: sha256:…` over the

@@ -227,7 +227,9 @@ fn print_help() {
     println!(
         "    --default-location L  Create default when location omitted (in_repo|external; 🎯T61)"
     );
-    println!("                           Also: env BULLSEYE_DEFAULT_LOCATION. Discovery unchanged.");
+    println!(
+        "                           Also: env BULLSEYE_DEFAULT_LOCATION. Discovery unchanged."
+    );
     println!();
     println!("Core contract: docs/api-v1-core.md");
 }
