@@ -68,7 +68,16 @@ targets file is discovered depends on the configured storage mode.
 
 ## Storage locations and first-use flow
 
-Each repo chooses **once** where its `bullseye.yaml` lives:
+**Create vs discover are separate** (🎯T61):
+
+| Path | What it does |
+|------|----------------|
+| **Discover** | Finds an *existing* `bullseye.yaml`. Never uses `default_location`. |
+| **Create** | Writes a *new* file. Uses per-call `location` if set, else server `default_location`, else prompts. |
+
+### Discovery (`discover_anywhere`)
+
+Each repo’s ledger lives in one of two places on disk:
 
 - `in_repo` — inside the project. Discovery walks up from `cwd`.
 - `external` — in a shadow tree under `~/.local/share/bullseye/`
@@ -77,32 +86,53 @@ Each repo chooses **once** where its `bullseye.yaml` lives:
   `~/.local/share/bullseye/Users/alice/work/acme/api/bullseye.yaml`.
   Path-driven — no git-remote or layout assumptions.
 
-After `bullseye_init`, every other tool calls
-`discover_anywhere(cwd)` which checks both locations and returns the
-first match. If both exist (edge case), **in-repo wins**.
+Every read/mutate tool calls `discover_anywhere(cwd)`, which:
 
-There is no machine-wide config file. The location is encoded by
-where `bullseye.yaml` lives on disk.
+1. Walks up from `cwd` for an in-repo `bullseye.yaml`.
+2. Else walks the external shadow tree under the data root.
+
+**Collision policy (v0.16):** if both exist (edge case), **in-repo wins**.
+An explicit committed file is always authoritative. Discovery does **not**
+consult `default_location`.
+
+### Create-time `default_location` (🎯T61)
+
+Server-level default for **creating** a new ledger only — not for discovery:
+
+| Source | How |
+|--------|-----|
+| CLI | `bullseye --default-location external` (MCP server start) |
+| Env | `BULLSEYE_DEFAULT_LOCATION=external` or `in_repo` |
+
+Create tools (`bullseye_init`, `bullseye_open` when missing, `bullseye_import`) resolve location as:
+
+1. Per-call `location=in_repo|external` — always overrides the server default.
+2. Else server `default_location` if set.
+3. Else the location prompt (below).
+
+Useful for MCP hosts that prefer external ledgers for third-party/read-only
+repos without forcing `location` on every create call.
 
 ### First-use flow for agents
 
-If the repo has no `bullseye.yaml` in either location, every
-target-operating tool returns an error ending with this prompt —
-pass it to the user verbatim:
+If the repo has no `bullseye.yaml` in either location **and** no server
+`default_location` is configured, every target-operating tool returns an
+error ending with this prompt — pass it to the user verbatim:
 
 > **Create bullseye.yaml for this repo where?**
 > - **in_repo** — commit `bullseye.yaml` into the repo (you own it, team uses bullseye).
 > - **external** — shadow tree under `~/.local/share/bullseye/` (read-only repo, or personal use of bullseye).
 >
 > Call `bullseye_init` with `location: in_repo` or `location: external`.
+> Or set a server default: `--default-location external|in_repo` / env `BULLSEYE_DEFAULT_LOCATION`.
 
-After the user answers, call `bullseye_init` with the chosen `location`.
-Subsequent tool calls proceed normally. Do **not** retry the original
-tool until init succeeds.
+After the user answers, call `bullseye_init` with the chosen `location`
+(or rely on `default_location` if the host already set one). Subsequent
+tool calls proceed normally. Do **not** retry the original tool until
+init succeeds.
 
-The same prompt is returned when `bullseye_init` itself is called
-without a valid `location` — so the agent can route straight to `init`
-without first triggering an error elsewhere.
+The same prompt is returned when `bullseye_init` is called without a
+valid `location` and no server default is set.
 
 ## Tools
 
@@ -116,9 +146,12 @@ Discover / init / session snapshot. Prefer over separate init + startup_context.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
-| `location` | string | optional | `in_repo` or `external` when creating a missing file |
+| `location` | string | optional | `in_repo` or `external` when creating a missing file; overrides server `default_location` |
 | `project_name` | string | optional | Sample target context on init |
 | `recent_days` | int | 14 | Recent achievements window |
+
+When the file is missing: uses `location` if set, else server
+`default_location`, else `code=not_initialized` with the location prompt.
 
 ### bullseye_query (core)
 
@@ -422,16 +455,16 @@ bullseye query --view graph --seeds T5 --expand ancestors,descendants
 
 ### bullseye_init
 
-Create a starter `bullseye.yaml` with a sample target. **Location is
-required** — `"in_repo"` (committed into the repo) or `"external"`
-(shadow tree under `~/.local/share/bullseye/`). See
+Create a starter `bullseye.yaml` with a sample target.
+`location` is `"in_repo"` or `"external"` — **optional** when the server
+has `default_location` set (🎯T61); per-call always overrides. See
 [Storage locations and first-use flow](#storage-locations-and-first-use-flow).
 Refuses to overwrite an existing file at either location.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Project root directory |
-| `location` | string | required | `"in_repo"` or `"external"` — ask the user on first use; it's per-repo, not machine-wide |
+| `location` | string | optional* | `"in_repo"` or `"external"`; required only when no server `default_location` |
 | `project_name` | string | directory name | Project name for sample target context |
 
 ### bullseye_import
@@ -444,7 +477,7 @@ parsed result before writing. Refuses to overwrite an existing
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Project root directory |
 | `path` | string | required | Explicit path to the markdown source |
-| `location` | string | required | `"in_repo"` or `"external"` (same semantics as `bullseye_init`) |
+| `location` | string | optional* | `"in_repo"` or `"external"` (same create resolution as `bullseye_init`) |
 | `force` | bool | `false` | Overwrite existing `bullseye.yaml` |
 
 ### bullseye_startup_context

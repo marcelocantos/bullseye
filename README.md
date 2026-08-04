@@ -70,7 +70,8 @@ The server communicates over stdio using the MCP protocol.
 
 ## Storage locations
 
-Each repo picks its location **once**, when you call `bullseye_init`:
+**Create vs discover** (🎯T61): discovery finds existing files only;
+create may use a server `default_location` when per-call `location` is omitted.
 
 | Location | Where `bullseye.yaml` lives | Use when |
 |----------|-----------------------------|----------|
@@ -85,12 +86,14 @@ unconventional workspaces all resolve identically.
 `discover_anywhere(cwd)`, which checks the in-repo walk-up first and
 then the shadow walk-up. Whichever file already exists wins. If both
 exist (edge case — e.g. a moved repo), **in-repo wins**: an explicit
-committed file is always authoritative.
+committed file is always authoritative. Discovery never reads
+`default_location`.
 
-**No global config file.** Each repo's location is encoded by where
-its `bullseye.yaml` lives on disk. There's nothing to sync across
-machines, no `~/.config/bullseye/` directory, and no machine-wide
-setting to get wrong.
+**Create default (optional).** Hosts that prefer external ledgers for
+third-party repos can set `BULLSEYE_DEFAULT_LOCATION=external` or start
+the server with `bullseye --default-location external`. Per-call
+`location` on init/open/import still overrides. Without a default,
+create tools prompt for `in_repo` or `external` as before.
 
 ## Concurrency protocol
 

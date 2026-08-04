@@ -283,6 +283,9 @@ pub fn discover_external(root: &Path, cwd: &Path) -> Option<PathBuf> {
 /// If both exist (edge case — e.g. someone moved a repo and forgot to
 /// clean up the shadow copy), **in-repo wins**. An explicit committed
 /// file is always the authoritative copy.
+///
+/// Does **not** consult create-time [`crate::config::default_location`]
+/// (🎯T61) — discovery is filesystem-only.
 pub fn discover_anywhere(cwd: &Path) -> Option<PathBuf> {
     if let Some(p) = discover(cwd) {
         return Some(p);

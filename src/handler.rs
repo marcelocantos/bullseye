@@ -348,10 +348,19 @@ pub fn handle_open(t: crate::tools::OpenTool) -> ToolResult {
             recent_days: t.recent_days,
         });
     }
-    if let Some(loc) = t.location.as_deref() {
+    // Create when per-call location is set, or when server default_location
+    // can supply one (🎯T61). Otherwise probe-only → not_initialized.
+    let can_create = t
+        .location
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some()
+        || config::default_location().is_some();
+    if can_create {
         handle_init(crate::tools::InitTool {
             cwd: t.cwd.clone(),
-            location: loc.to_string(),
+            location: t.location,
             project_name: t.project_name,
         })?;
         return handle_startup_context(crate::tools::StartupContextTool {
@@ -1691,10 +1700,8 @@ fn mermaid_opts_from_params(
 pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
     let dir = Path::new(&t.cwd);
 
-    // `location` is required. An empty or unknown value returns the
-    // locked prompt so the agent can ask the user.
-    let location =
-        Location::parse(&t.location).map_err(|e| tool_err(format!("{e}\n\n{LOCATION_PROMPT}",)))?;
+    // Per-call location overrides server default_location; omit both → prompt (🎯T61).
+    let location = config::resolve_create_location(t.location.as_deref()).map_err(tool_err)?;
 
     // Refuse if a targets file already exists in *either* location.
     // Two files for the same repo would make discovery ambiguous; the
@@ -1740,8 +1747,8 @@ pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
 pub fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
     let dir = Path::new(&t.cwd);
 
-    let location =
-        Location::parse(&t.location).map_err(|e| tool_err(format!("{e}\n\n{LOCATION_PROMPT}")))?;
+    // Same create-location resolution as init (🎯T61).
+    let location = config::resolve_create_location(t.location.as_deref()).map_err(tool_err)?;
 
     // Refuse to overwrite unless force is set. Look in both locations
     // — an existing file anywhere is a collision.

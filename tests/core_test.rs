@@ -2320,21 +2320,21 @@ fn init_without_location_returns_prompt() {
     let _guard = ShadowFixture::with_root(shadow.path());
 
     let work = tempfile::tempdir().unwrap();
+    // Force no server default so omitted location still prompts (🎯T61).
+    bullseye::config::set_default_location_override(Some(None));
+
     let err = handle_init(InitTool {
         cwd: work.path().to_string_lossy().into_owned(),
-        location: String::new(), // empty → unknown → prompt
+        location: Some(String::new()), // empty → treated as omitted → prompt
         project_name: None,
     })
-    .expect_err("empty location must surface as error");
+    .expect_err("empty location without default must surface as error");
     let msg = format!("{err:?}");
-    assert!(
-        msg.contains("unknown location"),
-        "parse error missing: {msg}"
-    );
     assert!(
         msg.contains("Create bullseye.yaml for this repo where?"),
         "location prompt missing: {msg}"
     );
+    bullseye::config::set_default_location_override(None);
 }
 
 #[test]
@@ -2350,7 +2350,7 @@ fn init_in_repo_creates_file_in_cwd() {
 
     handle_init(InitTool {
         cwd: cwd.clone(),
-        location: "in_repo".to_string(),
+        location: Some("in_repo".to_string()),
         project_name: Some("demo".to_string()),
     })
     .expect("init should succeed");
@@ -2384,7 +2384,7 @@ fn init_external_creates_file_in_shadow_tree() {
 
     handle_init(InitTool {
         cwd: cwd.clone(),
-        location: "external".to_string(),
+        location: Some("external".to_string()),
         project_name: Some("demo".to_string()),
     })
     .expect("external init should succeed");
@@ -2433,7 +2433,7 @@ fn init_refuses_when_file_already_exists_in_either_location() {
 
     handle_init(InitTool {
         cwd: cwd.clone(),
-        location: "in_repo".to_string(),
+        location: Some("in_repo".to_string()),
         project_name: None,
     })
     .expect("first init should succeed");
@@ -2441,7 +2441,7 @@ fn init_refuses_when_file_already_exists_in_either_location() {
     // Second init — even with a different location — is refused.
     let err = handle_init(InitTool {
         cwd,
-        location: "external".to_string(),
+        location: Some("external".to_string()),
         project_name: None,
     })
     .expect_err("second init must be refused");
@@ -2496,6 +2496,156 @@ fn in_repo_wins_when_both_locations_have_files() {
         !text.contains("SHADOW_SHOULD_LOSE"),
         "shadow file should not have been consulted: {text}"
     );
+}
+
+// --- default_location create defaults (🎯T61) ---
+
+#[test]
+fn t61_create_with_default_external_lands_in_shadow() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_init;
+    use bullseye::store;
+    use bullseye::tools::InitTool;
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+    config::set_default_location_override(Some(Some(Location::External)));
+
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().to_string_lossy().into_owned();
+
+    handle_init(InitTool {
+        cwd: cwd.clone(),
+        location: None, // honour server default
+        project_name: Some("t61".to_string()),
+    })
+    .expect("init with default external should succeed");
+
+    assert!(
+        !work.path().join("bullseye.yaml").exists(),
+        "default external must not write in-repo"
+    );
+    let expected = store::target_path_for_new(work.path(), Location::External);
+    assert!(
+        expected.is_file(),
+        "default external must land under shadow: {}",
+        expected.display()
+    );
+    // Discover finds the external-only ledger.
+    assert_eq!(
+        store::discover_anywhere(work.path()).as_deref(),
+        Some(expected.as_path())
+    );
+
+    config::set_default_location_override(None);
+}
+
+#[test]
+fn t61_explicit_in_repo_overrides_external_default() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_init;
+    use bullseye::store;
+    use bullseye::tools::InitTool;
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+    config::set_default_location_override(Some(Some(Location::External)));
+
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().to_string_lossy().into_owned();
+
+    handle_init(InitTool {
+        cwd,
+        location: Some("in_repo".to_string()),
+        project_name: None,
+    })
+    .expect("explicit in_repo must override external default");
+
+    assert!(
+        work.path().join("bullseye.yaml").is_file(),
+        "explicit in_repo must write into cwd despite external default"
+    );
+    // Shadow must stay empty for this cwd.
+    let mut shadow_file = store::shadow_path(shadow.path(), work.path());
+    shadow_file.push("bullseye.yaml");
+    assert!(
+        !shadow_file.exists(),
+        "override must not also write external"
+    );
+
+    config::set_default_location_override(None);
+}
+
+#[test]
+fn t61_discover_external_only() {
+    use bullseye::config::Location;
+    use bullseye::store;
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+
+    let work = tempfile::tempdir().unwrap();
+    let path = store::create_at(work.path(), Location::External, "ext-only").unwrap();
+    assert!(
+        !work.path().join("bullseye.yaml").exists(),
+        "setup: no in-repo file"
+    );
+    let found = store::discover_anywhere(work.path()).expect("must find external-only");
+    assert_eq!(found, path);
+}
+
+#[test]
+fn t61_discover_in_repo_only() {
+    use bullseye::config::Location;
+    use bullseye::store;
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+
+    let work = tempfile::tempdir().unwrap();
+    let path = store::create_at(work.path(), Location::InRepo, "in-only").unwrap();
+    let found = store::discover_anywhere(work.path()).expect("must find in_repo-only");
+    assert_eq!(found, path);
+    assert_eq!(found, work.path().join("bullseye.yaml"));
+}
+
+#[test]
+fn t61_open_honours_default_location_when_location_omitted() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_open;
+    use bullseye::store;
+    use bullseye::tools::OpenTool;
+
+    let shadow = tempfile::tempdir().unwrap();
+    let _guard = ShadowFixture::with_root(shadow.path());
+    config::set_default_location_override(Some(Some(Location::External)));
+
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().to_string_lossy().into_owned();
+
+    let text = text_from_call_result(
+        handle_open(OpenTool {
+            cwd,
+            location: None,
+            project_name: Some("open-default".to_string()),
+            recent_days: None,
+        })
+        .expect("open with default_location should create + return context"),
+    );
+    assert!(
+        text.contains("🎯T1") || text.contains("active"),
+        "expected session context after create: {text}"
+    );
+    assert!(
+        !work.path().join("bullseye.yaml").exists(),
+        "open default external must not write in-repo"
+    );
+    assert!(
+        store::discover_anywhere(work.path()).is_some(),
+        "open must leave a discoverable external ledger"
+    );
+
+    config::set_default_location_override(None);
 }
 
 // --- Parse cache tests (🎯T13) ---
@@ -3666,7 +3816,7 @@ fn import_rejects_envelope_markers_in_parsed_markdown() {
     let result = handle_import(ImportTool {
         cwd: cwd.clone(),
         path: Some(md_path.to_string_lossy().to_string()),
-        location: "in_repo".to_string(),
+        location: Some("in_repo".to_string()),
         force: false,
     });
     let err = result.expect_err("import must reject envelope-marker leakage");
