@@ -33,10 +33,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+use crate::bounded::{BoundedError, bounded_output};
 use crate::schema::{Status, Target, TargetsFile};
 use crate::store;
 
@@ -219,12 +221,22 @@ impl From<GhIssueJson> for Issue {
     }
 }
 
+/// Wall-clock bound for one `gh` invocation. Every call here is a
+/// network round-trip to the GitHub API, so this is the one subprocess
+/// bullseye runs that can block on something entirely outside the
+/// machine — a captive-portal DNS answer, a hung TLS handshake, an
+/// interactive auth prompt with no console to prompt on. A minute is far
+/// past any healthy API call (🎯T62).
+const GH_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Run a `gh` command, returning stdout on success or a structured
-/// error (including stderr) on failure.
+/// error (including stderr) on failure. Bounded: a `gh` that never
+/// answers becomes a reported error, not a sync that never returns.
 fn run_capture(mut cmd: Command) -> Result<Vec<u8>, String> {
-    let out = cmd
-        .output()
-        .map_err(|e| format!("failed to run gh (is the GitHub CLI installed?): {e}"))?;
+    let out = bounded_output(&mut cmd, GH_TIMEOUT).map_err(|e| match e {
+        BoundedError::Spawn(e) => format!("failed to run gh (is the GitHub CLI installed?): {e}"),
+        e => format!("gh {e}"),
+    })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(format!("gh exited {}: {}", out.status, stderr.trim()));

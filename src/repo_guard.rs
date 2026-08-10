@@ -27,7 +27,8 @@
 //! current repo is itself nested as a submodule of another.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use crate::bounded::{GIT_QUERY_TIMEOUT, git_query};
 
 /// Guard error: the repo containing `bullseye.yaml` is in a state
 /// where auto-committing would silently lose work.
@@ -183,18 +184,12 @@ pub fn check_mutation_allowed(repo_root: &Path) -> Result<(), MutationGuard> {
 /// --is-inside-work-tree` prints `true` and exits 0; any other shape
 /// (no repo, bare repo, missing git binary) returns false.
 fn is_git_repo(dir: &Path) -> bool {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8(o.stdout).unwrap_or_default();
-            s.trim() == "true"
-        }
-        _ => false,
-    }
+    git_query(
+        dir,
+        &["rev-parse", "--is-inside-work-tree"],
+        GIT_QUERY_TIMEOUT,
+    )
+    .is_some_and(|s| s.trim() == "true")
 }
 
 /// Return the absolute path of the parent project's working tree if
@@ -203,16 +198,11 @@ fn is_git_repo(dir: &Path) -> bool {
 /// which prints the parent path on success and an empty string for
 /// non-submodule repos.
 fn superproject_working_tree(dir: &Path) -> Option<PathBuf> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", "--show-superproject-working-tree"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8(out.stdout).ok()?;
+    let s = git_query(
+        dir,
+        &["rev-parse", "--show-superproject-working-tree"],
+        GIT_QUERY_TIMEOUT,
+    )?;
     let trimmed = s.trim();
     if trimmed.is_empty() {
         None
@@ -226,30 +216,13 @@ fn superproject_working_tree(dir: &Path) -> Option<PathBuf> {
 /// HEAD; any spawn failure is treated as "not detached" (we'd rather
 /// false-pass than refuse a mutation when git is broken).
 fn is_detached_head(dir: &Path) -> bool {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["symbolic-ref", "-q", "HEAD"])
-        .output();
-    match out {
-        Ok(o) => !o.status.success(),
-        Err(_) => false,
-    }
+    git_query(dir, &["symbolic-ref", "-q", "HEAD"], GIT_QUERY_TIMEOUT).is_none()
 }
 
 /// Best-effort short SHA of the current HEAD. Used purely for error
 /// messages; failures fall back to the empty string at the call site.
 fn current_head_sha(dir: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8(out.stdout).ok()?;
+    let s = git_query(dir, &["rev-parse", "--short", "HEAD"], GIT_QUERY_TIMEOUT)?;
     let trimmed = s.trim();
     if trimmed.is_empty() {
         None
@@ -271,16 +244,11 @@ fn current_head_sha(dir: &Path) -> Option<String> {
 /// - `https://github.com/owner/repo`
 /// - same patterns with other hosts (gitlab.com, bitbucket.org, …)
 fn suggested_canonical_path(dir: &Path) -> Option<PathBuf> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["config", "--get", "remote.origin.url"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let url = String::from_utf8(out.stdout).ok()?;
+    let url = git_query(
+        dir,
+        &["config", "--get", "remote.origin.url"],
+        GIT_QUERY_TIMEOUT,
+    )?;
     let url = url.trim();
     if url.is_empty() {
         return None;
@@ -331,6 +299,7 @@ fn parse_remote_url(url: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use tempfile::TempDir;
 
     /// Initialise a git repo with a stable identity so commits don't

@@ -596,9 +596,9 @@ mod tests {
             release_surface: Vec::new(),
             targets: BTreeMap::new(),
         };
-        let s1 = apply_issues(&mut file, &[issue.clone()], today);
+        let s1 = apply_issues(&mut file, std::slice::from_ref(&issue), today);
         assert_eq!(s1.created, 1);
-        let s2 = apply_issues(&mut file, &[issue.clone()], today);
+        let s2 = apply_issues(&mut file, std::slice::from_ref(&issue), today);
         assert_eq!(s2.created, 0);
         assert_eq!(s2.unchanged, 1);
         assert_eq!(file.targets.len(), 1);

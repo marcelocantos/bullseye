@@ -35,10 +35,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
 use regex::Regex;
+
+use crate::bounded::{GIT_QUERY_TIMEOUT, git_query};
 
 /// Process-global cache. Keyed by canonical repo-top path; value is
 /// the set of every target ID ever added to that repo's
@@ -87,17 +88,21 @@ pub fn historical_ids(yaml_path: &Path) -> HashSet<String> {
         return HashSet::new();
     };
 
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(&repo_top)
-        .args(["log", "-p", "--all", "--remotes", "--format=", "--"])
-        .arg(&pathspec)
-        .output();
-    let body_bytes = match out {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return HashSet::new(),
+    let Some(body) = git_query(
+        &repo_top,
+        &[
+            "log",
+            "-p",
+            "--all",
+            "--remotes",
+            "--format=",
+            "--",
+            &pathspec,
+        ],
+        GIT_QUERY_TIMEOUT,
+    ) else {
+        return HashSet::new();
     };
-    let body = String::from_utf8_lossy(&body_bytes);
 
     let mut ids: HashSet<String> = HashSet::new();
     for cap in id_re().captures_iter(&body) {
@@ -127,16 +132,7 @@ fn relative_pathspec(yaml_path: &Path, repo_top: &Path) -> Option<String> {
 }
 
 fn git_top_level(dir: &Path) -> Option<PathBuf> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8(out.stdout).ok()?;
+    let s = git_query(dir, &["rev-parse", "--show-toplevel"], GIT_QUERY_TIMEOUT)?;
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return None;

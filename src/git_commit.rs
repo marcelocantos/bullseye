@@ -26,19 +26,96 @@
 //! the commit) are logged to stderr but never propagated. Auto-commit
 //! is best-effort: a failure leaves the file dirty so the user can
 //! resolve it manually, the same outcome as before this feature.
+//!
+//! Every git invocation here is bounded (🎯T62). `git commit` runs the
+//! repository's own `pre-commit` / `commit-msg` hooks and, with
+//! `commit.gpgsign`, a `gpg` that may wait on a pinentry prompt that
+//! will never arrive under an MCP server. Unbounded, any of those hangs
+//! the calling tool forever with no response — `bullseye_convergence`
+//! auto-commits before it does anything else, so a blocking hook hung
+//! the whole convergence report. Bounded, the step gives up, kills the
+//! hook's process group, and reports [`AutoCommitOutcome::TimedOut`] for
+//! the caller to render.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+use crate::bounded::{BoundedError, bounded_output};
+
+/// Wall-clock bound for `git commit`. Generous because the commit fires
+/// the project's own hooks, which legitimately run linters or a quick
+/// test pass; anything past two minutes is stuck, not slow. Matches the
+/// invariants-hook bound in [`crate::convergence`] for the same reason.
+const GIT_COMMIT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Wall-clock bound for read-only git plumbing (`rev-parse`, `diff
+/// --cached`, `rev-list`, `show`). These never run hooks, so seconds are
+/// already pathological — but a repo on a stalled network mount or
+/// behind a wedged fsmonitor daemon can still block indefinitely.
+const GIT_PLUMBING_TIMEOUT: Duration = Duration::from_secs(30);
+
+thread_local! {
+    /// Thread-local `(commit, plumbing)` bound override, following the
+    /// same pattern as [`crate::config`]'s test overrides. Production
+    /// never sets it. Tests use it to drive the timeout path through
+    /// callers that take no bounds of their own — `convergence`
+    /// auto-commits before anything else, and exercising that end to end
+    /// against the production bound would mean a two-minute test.
+    static TIMEOUT_OVERRIDE: Cell<Option<(Duration, Duration)>> = const { Cell::new(None) };
+}
+
+/// Install a thread-local override for the `(commit, plumbing)` bounds
+/// used by [`auto_commit_yaml`]; `None` restores the defaults. Tests
+/// only — production code never calls this.
+pub fn set_timeout_override(bounds: Option<(Duration, Duration)>) {
+    TIMEOUT_OVERRIDE.with(|o| o.set(bounds));
+}
+
+/// What [`auto_commit_yaml`] did, so a caller that renders a report can
+/// tell the user why the ledger file is still dirty.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AutoCommitOutcome {
+    /// Nothing to do: not a git repo, path outside the work tree, or the
+    /// file had no uncommitted changes.
+    NoOp,
+    /// The file was committed (or folded into the previous commit).
+    Committed,
+    /// Git ran and refused (hook rejected, broken repo state, no git).
+    Failed,
+    /// A git step ran past its bound and was killed. The file is left
+    /// dirty and the caller should say so out loud.
+    TimedOut {
+        /// The git subcommand that was killed, e.g. `commit`.
+        step: &'static str,
+        /// The bound that was exceeded, in seconds.
+        secs: u64,
+    },
+}
 
 /// Best-effort auto-commit of `path` (a `bullseye.yaml`). See module
 /// docs for the full decision tree.
-pub fn auto_commit_yaml(path: &Path) {
+pub fn auto_commit_yaml(path: &Path) -> AutoCommitOutcome {
+    let (commit, plumbing) = TIMEOUT_OVERRIDE
+        .with(|o| o.get())
+        .unwrap_or((GIT_COMMIT_TIMEOUT, GIT_PLUMBING_TIMEOUT));
+    auto_commit_yaml_with_timeouts(path, commit, plumbing)
+}
+
+/// [`auto_commit_yaml`] with injectable bounds, so the timeout path can
+/// be tested in milliseconds instead of minutes (🎯T62).
+pub fn auto_commit_yaml_with_timeouts(
+    path: &Path,
+    commit_timeout: Duration,
+    plumbing_timeout: Duration,
+) -> AutoCommitOutcome {
     let Some(parent) = path.parent() else {
-        return;
+        return AutoCommitOutcome::NoOp;
     };
 
-    let Some(repo_top) = git_top_level(parent) else {
-        return;
+    let Some(repo_top) = git_top_level(parent, plumbing_timeout) else {
+        return AutoCommitOutcome::NoOp;
     };
 
     // `git rev-parse --show-toplevel` returns the **canonical** path
@@ -49,54 +126,76 @@ pub fn auto_commit_yaml(path: &Path) {
     // canonical repo top succeeds.
     let canonical_path = match path.canonicalize() {
         Ok(p) => p,
-        Err(_) => return,
+        Err(_) => return AutoCommitOutcome::NoOp,
     };
     let pathspec = match canonical_path.strip_prefix(&repo_top) {
         Ok(p) => p.to_path_buf(),
-        Err(_) => return,
+        Err(_) => return AutoCommitOutcome::NoOp,
     };
     let Some(pathspec_str) = pathspec.to_str() else {
-        return;
+        return AutoCommitOutcome::NoOp;
     };
 
-    if !run_git(&repo_top, &["add", "--", pathspec_str]) {
-        return;
+    match run_git(&repo_top, &["add", "--", pathspec_str], plumbing_timeout) {
+        GitStep::Ok => {}
+        GitStep::TimedOut { secs } => {
+            return timed_out(path, "add", secs);
+        }
+        GitStep::Failed => return AutoCommitOutcome::Failed,
     }
 
-    if !has_staged_changes(&repo_top, pathspec_str) {
-        return;
+    if !has_staged_changes(&repo_top, pathspec_str, plumbing_timeout) {
+        return AutoCommitOutcome::NoOp;
     }
 
-    let amend = last_commit_is_unpushed_and_only(&repo_top, pathspec_str);
-    let ok = if amend {
-        run_git(
-            &repo_top,
-            &["commit", "--amend", "--no-edit", "--", pathspec_str],
-        )
+    let amend = last_commit_is_unpushed_and_only(&repo_top, pathspec_str, plumbing_timeout);
+    let args: &[&str] = if amend {
+        &["commit", "--amend", "--no-edit", "--"]
     } else {
-        run_git(
-            &repo_top,
-            &["commit", "-m", "Update bullseye.yaml", "--", pathspec_str],
-        )
+        &["commit", "-m", "Update bullseye.yaml", "--"]
     };
+    let mut argv = args.to_vec();
+    argv.push(pathspec_str);
 
-    if !ok {
-        eprintln!(
-            "bullseye: auto-commit of {} failed (left dirty for manual resolution)",
-            path.display()
-        );
+    match run_git(&repo_top, &argv, commit_timeout) {
+        GitStep::Ok => AutoCommitOutcome::Committed,
+        GitStep::TimedOut { secs } => timed_out(path, "commit", secs),
+        GitStep::Failed => {
+            eprintln!(
+                "bullseye: auto-commit of {} failed (left dirty for manual resolution)",
+                path.display()
+            );
+            AutoCommitOutcome::Failed
+        }
     }
 }
 
+/// Log a killed git step and package it for the caller to render.
+fn timed_out(path: &Path, step: &'static str, secs: u64) -> AutoCommitOutcome {
+    eprintln!(
+        "bullseye: auto-commit of {}: `git {step}` timed out after {secs}s and was killed \
+         (left dirty for manual resolution)",
+        path.display()
+    );
+    AutoCommitOutcome::TimedOut { step, secs }
+}
+
+/// Outcome of one bounded git invocation.
+enum GitStep {
+    Ok,
+    Failed,
+    TimedOut { secs: u64 },
+}
+
 /// Resolve the top-level directory of the git repo containing `dir`,
-/// or `None` if `dir` isn't inside a working tree.
-fn git_top_level(dir: &Path) -> Option<PathBuf> {
-    let out = Command::new("git")
-        .arg("-C")
+/// or `None` if `dir` isn't inside a working tree (or git didn't answer
+/// within `timeout`).
+fn git_top_level(dir: &Path, timeout: Duration) -> Option<PathBuf> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(dir)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
+        .args(["rev-parse", "--show-toplevel"]);
+    let out = bounded_output(&mut cmd, timeout).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -111,13 +210,12 @@ fn git_top_level(dir: &Path) -> Option<PathBuf> {
 /// True iff the index has differences from `HEAD` for `pathspec`. A
 /// fresh repo with no `HEAD` reports the just-added file as a change,
 /// which is what we want — auto-commit creates the initial commit.
-fn has_staged_changes(repo_top: &Path, pathspec: &str) -> bool {
-    let out = Command::new("git")
-        .arg("-C")
+fn has_staged_changes(repo_top: &Path, pathspec: &str, timeout: Duration) -> bool {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(repo_top)
-        .args(["diff", "--cached", "--name-only", "--", pathspec])
-        .output();
-    match out {
+        .args(["diff", "--cached", "--name-only", "--", pathspec]);
+    match bounded_output(&mut cmd, timeout) {
         Ok(o) if o.status.success() => !o.stdout.trim_ascii().is_empty(),
         _ => false,
     }
@@ -132,15 +230,14 @@ fn has_staged_changes(repo_top: &Path, pathspec: &str) -> bool {
 ///   since there's nothing to push to),
 /// - no `HEAD` (empty repo — there's no last commit to amend),
 /// - any git command failure.
-fn last_commit_is_unpushed_and_only(repo_top: &Path, pathspec: &str) -> bool {
+fn last_commit_is_unpushed_and_only(repo_top: &Path, pathspec: &str, timeout: Duration) -> bool {
     // List the most recent unpushed commit on HEAD. Empty stdout →
     // HEAD is reachable from at least one remote ref → pushed.
-    let out = match Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(repo_top)
-        .args(["rev-list", "-1", "HEAD", "--not", "--remotes"])
-        .output()
-    {
+        .args(["rev-list", "-1", "HEAD", "--not", "--remotes"]);
+    let out = match bounded_output(&mut cmd, timeout) {
         Ok(o) if o.status.success() => o,
         _ => return false,
     };
@@ -152,12 +249,11 @@ fn last_commit_is_unpushed_and_only(repo_top: &Path, pathspec: &str) -> bool {
     // works for both root and non-root commits: for a root commit it
     // lists the entire tree (no parent to diff against), which is the
     // right interpretation of "what's in this commit" for our test.
-    let out = match Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(repo_top)
-        .args(["show", "--pretty=format:", "--name-only", "HEAD"])
-        .output()
-    {
+        .args(["show", "--pretty=format:", "--name-only", "HEAD"]);
+    let out = match bounded_output(&mut cmd, timeout) {
         Ok(o) if o.status.success() => o,
         _ => return false,
     };
@@ -166,16 +262,15 @@ fn last_commit_is_unpushed_and_only(repo_top: &Path, pathspec: &str) -> bool {
     files.len() == 1 && files[0] == pathspec
 }
 
-/// Run `git -C <repo_top> <args>` swallowing stdout/stderr; return
-/// `true` if the process exited with status 0.
-fn run_git(repo_top: &Path, args: &[&str]) -> bool {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_top)
-        .args(args)
-        .output();
-    match out {
-        Ok(o) if o.status.success() => true,
+/// Run `git -C <repo_top> <args>` swallowing stdout/stderr, bounded at
+/// `timeout`. Distinguishes a killed step from a plain failure so the
+/// caller can report "still running when we gave up" rather than the
+/// misleading "git refused".
+fn run_git(repo_top: &Path, args: &[&str], timeout: Duration) -> GitStep {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_top).args(args);
+    match bounded_output(&mut cmd, timeout) {
+        Ok(o) if o.status.success() => GitStep::Ok,
         Ok(o) => {
             eprintln!(
                 "bullseye git_commit: `git {}` failed in {}: {}",
@@ -183,11 +278,12 @@ fn run_git(repo_top: &Path, args: &[&str]) -> bool {
                 repo_top.display(),
                 String::from_utf8_lossy(&o.stderr).trim(),
             );
-            false
+            GitStep::Failed
         }
+        Err(BoundedError::TimedOut { secs }) => GitStep::TimedOut { secs },
         Err(e) => {
-            eprintln!("bullseye git_commit: failed to spawn git: {e}");
-            false
+            eprintln!("bullseye git_commit: `git {}`: {e}", args.join(" "));
+            GitStep::Failed
         }
     }
 }
@@ -399,6 +495,73 @@ mod tests {
             staged_str.lines().any(|l| l == "README.md"),
             "README.md must still be staged after auto-commit; got: {staged_str:?}",
         );
+    }
+
+    /// Install a `pre-commit` hook that blocks forever, so `git commit`
+    /// hangs the way it does in a repo whose hook waits on a lock, a
+    /// network mount, or a signing prompt that never arrives.
+    #[cfg(unix)]
+    fn install_blocking_pre_commit_hook(repo: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let hooks = repo.join(".git/blocking-hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        fs::write(&hook, "#!/bin/sh\nexec sleep 3600\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        run_git_verbose(repo, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn blocking_pre_commit_hook_times_out_instead_of_hanging() {
+        // Regression test for 🎯T62. `bullseye_convergence` auto-commits
+        // before it does anything else, so an unbounded `git commit` here
+        // meant a blocking project hook hung the whole tool with no
+        // response at all — the worst failure mode for an MCP server.
+        // The commit must be abandoned promptly and reported.
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        let yaml = tmp.path().join("bullseye.yaml");
+        write(&yaml, "schema_version: 3\ntargets: {}\n");
+        run_git_verbose(tmp.path(), &["add", "bullseye.yaml"]);
+        run_git_verbose(tmp.path(), &["commit", "-m", "init"]);
+
+        install_blocking_pre_commit_hook(tmp.path());
+        write(&yaml, "schema_version: 3\ntargets: {t: {}}\n");
+
+        let start = std::time::Instant::now();
+        let outcome = auto_commit_yaml_with_timeouts(
+            &yaml,
+            Duration::from_millis(500),
+            Duration::from_secs(30),
+        );
+        let elapsed = start.elapsed();
+
+        assert_eq!(
+            outcome,
+            AutoCommitOutcome::TimedOut {
+                step: "commit",
+                secs: 0,
+            },
+            "a blocked commit must be reported as timed out, not as a plain failure",
+        );
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "must return shortly after the 500ms bound, not wait out the hook's 3600s sleep; \
+             took {elapsed:?}",
+        );
+        // The hook's `sleep` must not survive as an orphan holding the
+        // repo — killing the whole process group is the point.
+        assert!(
+            !commit_is_in_progress(tmp.path()),
+            "the killed commit must not leave the repo mid-commit",
+        );
+    }
+
+    /// True while git considers a commit to be underway (its lock file
+    /// is still present).
+    fn commit_is_in_progress(repo: &Path) -> bool {
+        repo.join(".git/index.lock").exists()
     }
 
     #[test]

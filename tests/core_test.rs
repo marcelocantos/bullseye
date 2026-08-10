@@ -1130,6 +1130,127 @@ fn convergence_end_to_end_skip_invariants_flag_bypasses_hook() {
     );
 }
 
+/// Set up `tmp` as a git repo whose `pre-commit` hook blocks forever,
+/// with `bullseye.yaml` dirty — the shape that hung convergence in
+/// 🎯T62. Returns nothing; the repo is left mid-mutation on purpose.
+#[cfg(unix)]
+fn write_project_with_blocking_pre_commit_hook(tmp: &std::path::Path, makefile: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(tmp)
+            .args(args)
+            .output()
+            .expect("git invocation failed");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    write_project(tmp, makefile, SIMPLE_TARGETS_YAML);
+    git(&["init", "-q", "-b", "master"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "init"]);
+
+    let hooks = tmp.join(".git/blocking-hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexec sleep 3600\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+
+    // Dirty the ledger so auto-commit has something to commit.
+    use std::io::Write;
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(tmp.join("bullseye.yaml"))
+            .unwrap(),
+        "# touched"
+    )
+    .unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn convergence_returns_despite_blocking_pre_commit_hook() {
+    // Regression test for 🎯T62, reproducing the reported symptom: a
+    // repo whose hooks block made bullseye_convergence never answer at
+    // all — no result, no error — because step 0 auto-committed the
+    // ledger through an unbounded `git commit`. The MCP caller's budget
+    // is 120s, so "returns eventually" is not enough: it must return
+    // well inside that, and say why the tree is still dirty.
+    let tmp = tempfile::tempdir().unwrap();
+    write_project_with_blocking_pre_commit_hook(tmp.path(), "bullseye:\n\t@echo 'ok'\n");
+
+    let path = tmp.path().join("bullseye.yaml");
+    let file = store::load(&path).unwrap();
+
+    // Convergence takes no bounds of its own, so shorten the ones its
+    // auto-commit step uses rather than waiting out the production
+    // two-minute bound. What is under test is the shape of the response,
+    // not the size of the constant.
+    bullseye::git_commit::set_timeout_override(Some((
+        std::time::Duration::from_millis(500),
+        std::time::Duration::from_secs(30),
+    )));
+    let start = std::time::Instant::now();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+    let elapsed = start.elapsed();
+    bullseye::git_commit::set_timeout_override(None);
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "convergence must not wait out a blocking hook; took {elapsed:?}"
+    );
+    assert!(
+        out.contains("## Auto-commit") && out.contains("timed out"),
+        "a killed auto-commit must be reported, not silently swallowed; got:\n{out}"
+    );
+    // Degraded, not aborted: the caller still gets its recommendation.
+    assert!(
+        out.contains("## Next action"),
+        "convergence must still produce a next action; got:\n{out}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn convergence_skip_invariants_runs_no_project_hooks() {
+    // 🎯T62 acceptance: with skip_invariants=true, convergence runs none
+    // of the project's own code — not the `bullseye` rule, and not the
+    // `pre-commit` hook that `git commit` would fire. `skip_invariants`
+    // is what a caller reaches for when the project's checks are the
+    // suspect, so a back-door invocation of them defeats the flag; that
+    // is why the original hang survived a skip_invariants retry.
+    let tmp = tempfile::tempdir().unwrap();
+    write_project_with_blocking_pre_commit_hook(tmp.path(), "bullseye:\n\t@echo 'ok'; false\n");
+
+    let path = tmp.path().join("bullseye.yaml");
+    let file = store::load(&path).unwrap();
+
+    let start = std::time::Instant::now();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, true);
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "skip_invariants=true must not block on any project subprocess; took {elapsed:?}"
+    );
+    assert!(out.contains("(skipped"), "got:\n{out}");
+    assert!(
+        out.contains("## Next action"),
+        "convergence must still produce a next action; got:\n{out}"
+    );
+}
+
 #[test]
 fn convergence_missing_makefile_degrades_gracefully() {
     // A repo with bullseye.yaml but no Makefile. Convergence must
