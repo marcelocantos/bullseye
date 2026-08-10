@@ -863,6 +863,18 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
     let mut sorted: Vec<_> = targets;
     sorted.sort_by(|a, b| a.0.cmp(b.0));
 
+    // 🎯T64: list answers regardless of validation state, but an
+    // invalid target is called out inline so a reader who never runs
+    // `view=validate` still sees it.
+    let mut issues_by_target: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for issue in graph::validate_issues(&file) {
+        issues_by_target
+            .entry(issue.target)
+            .or_default()
+            .push(issue.message);
+    }
+
     let mut out = format!("# Targets ({})\nFile: {}\n\n", t.filter, path.display());
     for (id, target) in &sorted {
         out.push_str(&format!(
@@ -872,6 +884,9 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
             v = target.value,
             c = target.cost,
         ));
+        for message in issues_by_target.get(*id).into_iter().flatten() {
+            out.push_str(&format!("  INVALID: {message}\n"));
+        }
         if let Some(reason) = &target.set_aside_reason {
             out.push_str(&format!("  reason: {reason}\n"));
         }
@@ -897,7 +912,18 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
         .ok_or_else(|| tool_err(format!("target {} not found", t.id)))?;
 
     let yaml = serde_yaml_ng::to_string(target).map_err(|e| tool_err(e.to_string()))?;
-    text_result(format!("🎯{} {}\n\n{yaml}", t.id, target.name))
+    // 🎯T64: a single-target read always answers. Errors on *this*
+    // target are appended as a note; errors elsewhere are irrelevant here.
+    let mut out = format!("🎯{} {}\n\n{yaml}", t.id, target.name);
+    let own_issues: Vec<String> = graph::validate_issues(&file)
+        .into_iter()
+        .filter(|i| i.target == t.id)
+        .map(|i| i.message)
+        .collect();
+    if !own_issues.is_empty() {
+        out.push_str(&format!("\nINVALID:\n- {}\n", own_issues.join("\n- ")));
+    }
+    text_result(out)
 }
 
 /// Auto-assign the next top-level `T<N>` ID (ignoring sub-targets
@@ -1142,6 +1168,12 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
             }
             if let Some(status) = new_status {
                 target.status = status;
+                // 🎯T64: a hand-patched status is a status transition
+                // like any other, so it clears the fields the
+                // destination forbids. Done before the achieved-date
+                // default below so the date is set on the new status's
+                // terms, not carried over from the old one.
+                target.clear_illegal_status_scoped_fields();
                 if status == Status::Achieved && target.achieved.is_none() {
                     target.achieved = Some(Local::now().date_naive());
                 }
@@ -1251,6 +1283,11 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             return Ok(Outcome::AlreadyAchieved);
         }
         target.status = Status::Achieved;
+        // Clear what the previous status owned before writing the
+        // achieved-only fields (🎯T64) — e.g. a `set_aside_reason` from
+        // an earlier disposition, which used to survive into the
+        // achievement and make the target permanently invalid.
+        target.clear_illegal_status_scoped_fields();
         let today = Local::now().date_naive();
         target.achieved = Some(today);
         target.attestation = Some(attestation.clone());
@@ -1439,6 +1476,9 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
         }
         let prior = target.status;
         target.status = Status::SetAside;
+        // 🎯T64: drop achieved-only / active-only residue before
+        // recording the new disposition.
+        target.clear_illegal_status_scoped_fields();
         target.set_aside_reason = Some(reason.clone());
         Ok(Outcome::SetAside {
             name: target.name.clone(),
@@ -1603,15 +1643,15 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
 fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
     let (path, file) = load_file(&t.cwd)?;
 
-    let errors = graph::validate_blocking(&file);
-    if !errors.is_empty() {
-        return text_result(format!("# Validation errors\n\n{}", errors.join("\n")));
-    }
-
-    let targets = graph::frontier(&file);
-    let ranked = graph::rank_frontier(&file, &targets);
+    // 🎯T64: a validation error on one target names that target and
+    // drops it from the ready set — it does not replace the answer.
+    // Returning only the errors here is what made a one-field mistake
+    // in the jevons ledger brick every read the PO had.
+    let tolerant = graph::frontier_tolerant(&file);
+    let ranked = graph::rank_frontier(&file, &tolerant.targets);
 
     let mut out = format!("# Frontier\nFile: {}\n\n", path.display());
+    out.push_str(&graph::degraded_read_banner(&tolerant));
     out.push_str(graph::REPO_SCOPE_BANNER);
     if ranked.is_empty() {
         out.push_str("(no targets ready for work)\n");

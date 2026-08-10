@@ -161,7 +161,6 @@ pub fn apply_issues(
                 // set_aside; still refresh name/context/tags from Master.
                 if existing.status == Status::Converging {
                     fresh.status = Status::Converging;
-                    fresh.achieved = None;
                 } else if existing.status == Status::SetAside {
                     fresh.status = Status::SetAside;
                     fresh.set_aside_reason = existing.set_aside_reason.clone();
@@ -171,8 +170,11 @@ pub fn apply_issues(
                 {
                     // Remote reopen → identified.
                     fresh.status = Status::Identified;
-                    fresh.achieved = None;
                 }
+                // 🎯T64: the mirror reconciles status, so it goes
+                // through the same hygiene as every other transition —
+                // no hand-clearing of the achieved date per branch.
+                fresh.clear_illegal_status_scoped_fields();
                 // discovered stays earliest
                 fresh.discovered = existing.discovered;
                 if existing.name == fresh.name

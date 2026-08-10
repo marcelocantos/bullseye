@@ -927,15 +927,19 @@ fn render_next_action(
     // the full rule. `momentum` is intentionally not consumed here —
     // it's a portfolio-scope input, not a repo-level signal.
     let _ = momentum;
-    let errors = graph::validate_blocking(file);
-    if !errors.is_empty() {
-        out.push_str(
-            "**Blocked**: targets file has validation errors (see above). Fix the graph \
-             before proceeding.\n",
-        );
-        return;
+    // 🎯T64: validation errors degrade the recommendation instead of
+    // withholding it. The invalid targets are skipped and named; if
+    // everything healthy is still blocked, that is reported below on
+    // its own terms.
+    let tolerant = graph::frontier_tolerant(file);
+    if !tolerant.is_clean() {
+        out.push_str(&format!(
+            "**Note**: {} target(s) failed validation and were skipped (see above). \
+             The recommendation below covers the rest of the graph.\n\n",
+            tolerant.issues.len(),
+        ));
     }
-    let front = graph::frontier(file);
+    let front = tolerant.targets;
     if front.is_empty() {
         out.push_str(
             "**Blocked**: no unblocked frontier targets. All active targets are blocked by \

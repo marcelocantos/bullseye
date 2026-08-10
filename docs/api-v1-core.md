@@ -51,6 +51,45 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 | `graph` | Mermaid dependency graph (default: whole **active** graph; optional `scope` / `nodes` / `seeds` / `expand` — 🎯T57) |
 | `validate` | Schema / graph errors only |
 
+#### Reads degrade; only `validate` hard-fails (🎯T64)
+
+Every blocking validation error bullseye produces is attributed to a
+single target, so an invalid target is a hole in the graph, not a wall
+in front of it. Reads behave accordingly:
+
+| `view` | On a validation error somewhere in the file |
+|--------|----------------------------------------------|
+| `frontier` | Answers. Invalid targets are dropped from the ready set; the errors and the excluded IDs are reported in a `## Validation errors (degraded read)` banner above the answer. |
+| `context`, `summary` | Answer, same banner, frontier computed over the healthy graph. |
+| `list` | Answers in full; each offending target is annotated inline with `INVALID: <message>`. |
+| `target` | Answers in full; errors on *that* target are appended as an `INVALID:` note, errors elsewhere are irrelevant to it. |
+| `validate` | **Hard-fails by design** — reporting these errors *is* its contract, so it reports them and nothing else. Degrading it would leave the ledger with no surface that tells the truth about its own health. |
+
+`bullseye_convergence` and `bullseye_portfolio` degrade like `frontier`.
+
+This is the fix for the 2026-08-10 jevons incident: one stale
+`set_aside_reason` on one achieved target made *every* call against that
+ledger — frontier included — return only the error, and no supported op
+could repair it.
+
+Two further guards close that incident:
+
+- **Transition hygiene.** `schema::STATUS_SCOPED_FIELDS` is the single
+  owner of "which fields are legal for status X". Every op that changes
+  a status calls `Target::clear_illegal_status_scoped_fields`, so
+  leaving a status drops what that status owned — `set_aside_reason`,
+  `attestation`, the `achieved` date, `owned_by`, and the postpone
+  pair — and a newly-added status-scoped field is covered by both
+  validation and transition hygiene from one table row.
+- **Load-time self-heal.** A file that *already* carries illegal residue
+  is normalised in `store::load`, alongside the legacy
+  `gates → depends_on` migration and for the same reason: a ledger only
+  a hand edit can repair is a ledger the tools have failed. The repair
+  persists on the next save; `bullseye_commit op=rehash` is the explicit
+  load-and-save round trip that does nothing else. Dropped values are
+  not relocated — they describe a disposition that no longer holds, and
+  the previous content stays in the git history of `bullseye.yaml`.
+
 #### `view=graph` parameters (🎯T57)
 
 | Param | Default | Meaning |

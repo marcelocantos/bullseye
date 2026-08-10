@@ -1891,8 +1891,12 @@ fn summary_shows_grouped_children() {
     assert!(out.contains("🎯T1.1"));
 }
 
+/// 🎯T64: a validation error reports the offending target and keeps
+/// answering. Before T64 this suppressed the frontier and blocked
+/// sections entirely, which is how one stale field in the jevons ledger
+/// left its PO with no readable frontier at all.
 #[test]
-fn summary_with_validation_errors_skips_frontier() {
+fn summary_with_validation_errors_still_renders_frontier() {
     let mut file = load_fixture();
     // Create a dangling depends_on reference.
     file.targets
@@ -1902,11 +1906,15 @@ fn summary_with_validation_errors_skips_frontier() {
         .push("T99".to_string());
 
     let out = graph::summary(&file, "test", None, false);
-    assert!(out.contains("## Validation errors"));
-    assert!(out.contains("T99"));
-    // Should NOT have frontier or blocked sections.
-    assert!(!out.contains("## Frontier"));
-    assert!(!out.contains("## Blocked"));
+    assert!(
+        out.contains("## Validation errors (degraded read)"),
+        "{out}"
+    );
+    assert!(out.contains("T99"), "{out}");
+    // The rest of the graph still answers.
+    assert!(out.contains("## Frontier"), "{out}");
+    // T2 is unaffected by T1's dangling edge and remains readable.
+    assert!(out.contains("🎯T2"), "{out}");
 }
 
 #[test]
@@ -6547,4 +6555,442 @@ fn t46_informational_policy_suppresses_release_in_next_action_notes() {
         hash: "dead".into(),
         subject: "fix: x".into(),
     };
+}
+
+// --- 🎯T64: transition hygiene and read-path tolerance ------------------
+//
+// Two defects, both from the jevons incident of 2026-08-10: a status
+// transition left behind a field the destination status forbids, and the
+// read path answered a validation error *instead of* the graph, so one
+// bad field made an entire ledger unreadable.
+
+/// A `CommitTool` with every optional field cleared, so each test sets
+/// only what it exercises.
+fn t64_commit(cwd: &str, op: &str) -> bullseye::tools::CommitTool {
+    bullseye::tools::CommitTool {
+        cwd: cwd.to_string(),
+        op: op.to_string(),
+        id: None,
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        attestation: None,
+        reason: None,
+        postponed_until: None,
+        postpone_predicate: None,
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    }
+}
+
+/// Create a temp repo with a starter `bullseye.yaml` (target `T1`) and
+/// an isolated external shadow root. Returns the tempdirs (which must
+/// outlive the test body), the file path, and the cwd string.
+fn t64_repo(label: &str) -> (tempfile::TempDir, tempfile::TempDir, PathBuf, String) {
+    use bullseye::config::{self, Location};
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, label).unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow.path().to_path_buf()));
+    (tmp, shadow, path, cwd)
+}
+
+/// The observed jevons case, end to end: a target set aside with a
+/// reason, reopened, and achieved carries no `set_aside_reason` and
+/// validates green — no hand-editing of the YAML.
+#[test]
+fn t64_set_aside_reopen_achieve_leaves_no_residue() {
+    use bullseye::handler::handle_commit;
+
+    let (_tmp, _shadow, path, cwd) = t64_repo("t64-jevons");
+
+    // 1. Set aside with a reason (the field that later became illegal).
+    let mut defer = t64_commit(&cwd, "defer");
+    defer.id = Some("T1".into());
+    defer.reason = Some("duplicate of T288".into());
+    handle_commit(defer).expect("defer should succeed");
+    assert_eq!(
+        store::load(&path).unwrap().targets["T1"]
+            .set_aside_reason
+            .as_deref(),
+        Some("duplicate of T288"),
+    );
+
+    // 2. Reopen it (set-aside targets reopen by patching status).
+    let mut reopen = t64_commit(&cwd, "track");
+    reopen.id = Some("T1".into());
+    reopen.status = Some("converging".into());
+    handle_commit(reopen).expect("reopen should succeed");
+    let file = store::load(&path).unwrap();
+    assert!(
+        file.targets["T1"].set_aside_reason.is_none(),
+        "leaving set_aside must drop its reason",
+    );
+
+    // 3. Achieve it.
+    let mut achieve = t64_commit(&cwd, "achieve");
+    achieve.id = Some("T1".into());
+    achieve.attestation = Some("verified by cargo test (🎯T64 regression)".into());
+    handle_commit(achieve).expect("achieve should succeed");
+
+    let file = store::load(&path).unwrap();
+    let t1 = &file.targets["T1"];
+    assert_eq!(t1.status, Status::Achieved);
+    assert!(t1.set_aside_reason.is_none(), "{t1:?}");
+    assert!(t1.attestation.is_some(), "{t1:?}");
+    assert!(
+        graph::validate_blocking(&file).is_empty(),
+        "ledger must validate green: {:?}",
+        graph::validate_blocking(&file),
+    );
+
+    bullseye::config::set_external_root_override(None);
+}
+
+/// Achieving a set-aside target directly (without the reopen step) is
+/// the shortest path to the same residue, and is equally clean.
+#[test]
+fn t64_achieve_straight_from_set_aside_clears_the_reason() {
+    use bullseye::handler::handle_commit;
+
+    let (_tmp, _shadow, path, cwd) = t64_repo("t64-direct");
+
+    let mut defer = t64_commit(&cwd, "defer");
+    defer.id = Some("T1".into());
+    defer.reason = Some("parked pending design".into());
+    handle_commit(defer).expect("defer should succeed");
+
+    let mut achieve = t64_commit(&cwd, "achieve");
+    achieve.id = Some("T1".into());
+    achieve.attestation = Some("delivered after all — see SHA deadbeef".into());
+    handle_commit(achieve).expect("achieve should succeed");
+
+    let file = store::load(&path).unwrap();
+    assert!(file.targets["T1"].set_aside_reason.is_none());
+    assert!(graph::validate_blocking(&file).is_empty());
+
+    bullseye::config::set_external_root_override(None);
+}
+
+/// A walk over every status transition the tools offer, asserting the
+/// ledger validates green after each step. Covers all four
+/// status-scoped field groups: postpone fields (active-only), achieved
+/// date and attestation (achieved-only), and set_aside_reason
+/// (set-aside-only).
+#[test]
+fn t64_status_walk_validates_green_after_every_transition() {
+    use bullseye::handler::handle_commit;
+
+    let (_tmp, _shadow, path, cwd) = t64_repo("t64-walk");
+
+    let mut steps: Vec<(&str, bullseye::tools::CommitTool)> = Vec::new();
+
+    let mut postpone = t64_commit(&cwd, "postpone");
+    postpone.id = Some("T1".into());
+    postpone.postponed_until = Some("2099-01-01".into());
+    postpone.postpone_predicate = Some("upstream ships v2".into());
+    steps.push(("postpone", postpone));
+
+    let mut converging = t64_commit(&cwd, "track");
+    converging.id = Some("T1".into());
+    converging.status = Some("converging".into());
+    steps.push(("converging", converging));
+
+    // Achieve while still postponed — the postpone fields are
+    // active-only and must not survive into the achievement.
+    let mut achieve = t64_commit(&cwd, "achieve");
+    achieve.id = Some("T1".into());
+    achieve.attestation = Some("first achievement, 🎯T64 walk".into());
+    steps.push(("achieve", achieve));
+
+    let mut reopen = t64_commit(&cwd, "reopen");
+    reopen.id = Some("T1".into());
+    reopen.reason = Some("regression found downstream".into());
+    steps.push(("reopen", reopen));
+
+    let mut defer = t64_commit(&cwd, "defer");
+    defer.id = Some("T1".into());
+    defer.reason = Some("superseded by 🎯T2".into());
+    steps.push(("defer", defer));
+
+    let mut unpark = t64_commit(&cwd, "track");
+    unpark.id = Some("T1".into());
+    unpark.status = Some("identified".into());
+    steps.push(("unpark", unpark));
+
+    let mut reachieve = t64_commit(&cwd, "achieve");
+    reachieve.id = Some("T1".into());
+    reachieve.attestation = Some("second achievement, 🎯T64 walk".into());
+    steps.push(("re-achieve", reachieve));
+
+    for (label, op) in steps {
+        handle_commit(op).unwrap_or_else(|e| panic!("step `{label}` failed: {e:?}"));
+        let file = store::load(&path).unwrap();
+        let errors = graph::validate_blocking(&file);
+        assert!(
+            errors.is_empty(),
+            "after step `{label}` the ledger must validate green, got {errors:?} for {:?}",
+            file.targets["T1"],
+        );
+    }
+
+    let t1 = &store::load(&path).unwrap().targets["T1"];
+    assert_eq!(t1.status, Status::Achieved);
+    assert!(t1.set_aside_reason.is_none(), "{t1:?}");
+    assert!(t1.postponed_until.is_none(), "{t1:?}");
+    assert!(t1.postpone_predicate.is_none(), "{t1:?}");
+
+    bullseye::config::set_external_root_override(None);
+}
+
+/// The invariant generalised: for *every* status, a target carrying
+/// *every* status-scoped field keeps exactly the fields that status
+/// allows and validates green after the clear. This is the test that a
+/// newly-added status-scoped field cannot slip past — it reads the same
+/// `STATUS_SCOPED_FIELDS` table the production code does.
+#[test]
+fn t64_every_status_scoped_field_clears_when_its_status_is_left() {
+    use bullseye::schema::{OwnedBy, STATUS_SCOPED_FIELDS};
+
+    assert!(
+        !STATUS_SCOPED_FIELDS.is_empty(),
+        "the status-scoped field table must not be empty",
+    );
+
+    for status in [
+        Status::Identified,
+        Status::Converging,
+        Status::Achieved,
+        Status::SetAside,
+    ] {
+        let mut file = load_fixture();
+        let t = file.targets.get_mut("T1").unwrap();
+
+        // Every status-scoped field populated at once, then the status
+        // applied on top — the shape a forgetful transition produces.
+        t.set_aside_reason = Some("stale reason".into());
+        t.attestation = Some("stale attestation".into());
+        t.achieved = Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 10).unwrap());
+        t.owned_by = Some(OwnedBy {
+            owner: "someone".into(),
+            reason: "driving it".into(),
+        });
+        t.postponed_until = Some(chrono::NaiveDate::from_ymd_opt(2099, 1, 1).unwrap());
+        t.postpone_predicate = Some("stale predicate".into());
+        t.status = status;
+
+        // Before the clear, the illegal fields are exactly the ones the
+        // table says are not legal on this status.
+        let flagged: Vec<&str> = t
+            .illegal_status_scoped_fields()
+            .iter()
+            .map(|f| f.name)
+            .collect();
+        let expected: Vec<&str> = STATUS_SCOPED_FIELDS
+            .iter()
+            .filter(|f| !f.is_legal_on(status))
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(flagged, expected, "status {status:?}");
+
+        let cleared = t.clear_illegal_status_scoped_fields();
+        assert_eq!(cleared, expected, "status {status:?}");
+        assert!(
+            t.illegal_status_scoped_fields().is_empty(),
+            "clear must be idempotent-complete for {status:?}",
+        );
+
+        // set_aside additionally *requires* its reason, so the only
+        // status where a fully-populated target can still be invalid is
+        // handled by keeping the reason there.
+        let errors = graph::validate_blocking(&file);
+        assert!(
+            errors.is_empty(),
+            "status {status:?} must validate green after the clear, got {errors:?}",
+        );
+    }
+}
+
+const T64_BRICKED_YAML: &str = r#"
+schema_version: 5
+targets:
+  T1:
+    name: Healthy target
+    status: identified
+    value: 0
+    cost: 0
+    acceptance:
+      - It works
+    discovered: 2026-08-01
+  T2:
+    name: Target with illegal residue
+    status: achieved
+    value: 0
+    cost: 0
+    acceptance:
+      - It worked
+    set_aside_reason: duplicate of T288
+    attestation: shipped in 1.2.3
+    discovered: 2026-08-01
+    achieved: 2026-08-09
+"#;
+
+/// A file that already carries illegal status-scoped residue heals at
+/// load (like `migrate_gates_to_depends_on`), so a ledger bricked by an
+/// older binary or a hand edit reads correctly with no hand repair —
+/// and `op=rehash` persists the repair to disk.
+#[test]
+fn t64_bricked_ledger_self_heals_on_load_and_rehash_persists_it() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_commit;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    std::fs::write(&path, T64_BRICKED_YAML).unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow.path().to_path_buf()));
+    let _ = Location::InRepo;
+
+    // Load heals the residue; the ledger validates green immediately.
+    let file = store::load(&path).unwrap();
+    assert!(file.targets["T2"].set_aside_reason.is_none());
+    assert_eq!(
+        file.targets["T2"].attestation.as_deref(),
+        Some("shipped in 1.2.3"),
+        "attestation is legal on an achieved target and must survive",
+    );
+    let errors = graph::validate_blocking(&file);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    // The supported repair op is a plain load-and-save round trip.
+    let mut rehash = t64_commit(&cwd, "rehash");
+    rehash.reason = Some("🎯T64 self-heal test".into());
+    handle_commit(rehash).expect("rehash should succeed");
+
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !raw.contains("duplicate of T288"),
+        "rehash must persist the heal:\n{raw}",
+    );
+    assert!(raw.contains("shipped in 1.2.3"), "{raw}");
+
+    config::set_external_root_override(None);
+}
+
+const T64_ONE_INVALID_YAML: &str = r#"
+schema_version: 5
+targets:
+  T1:
+    name: Healthy and ready
+    status: converging
+    value: 0
+    cost: 0
+    acceptance:
+      - It works
+    discovered: 2026-08-01
+  T2:
+    name: Dangling dependency
+    status: converging
+    value: 0
+    cost: 0
+    acceptance:
+      - It works too
+    depends_on:
+      - T99
+    discovered: 2026-08-01
+"#;
+
+/// One invalid target must not brick unrelated reads: frontier, list,
+/// and target still answer, naming the offender rather than returning
+/// only the error. `validate` is the one view that still reports errors
+/// and nothing else — that is its contract.
+#[test]
+fn t64_one_invalid_target_does_not_brick_other_reads() {
+    use bullseye::config;
+    use bullseye::handler::handle_query;
+    use bullseye::tools::QueryTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    std::fs::write(&path, T64_ONE_INVALID_YAML).unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow.path().to_path_buf()));
+
+    let query = |view: &str, id: Option<&str>| {
+        text_from_call_result(
+            handle_query(QueryTool {
+                cwd: cwd.clone(),
+                view: Some(view.to_string()),
+                id: id.map(str::to_string),
+                filter: None,
+                momentum: None,
+                frontier_details: None,
+                recent_days: None,
+                scope: None,
+                nodes: None,
+                seeds: None,
+                expand: None,
+            })
+            .unwrap_or_else(|e| panic!("view={view} must still answer, got {e:?}")),
+        )
+    };
+
+    // Frontier: healthy T1 is reported; the invalid T2 is named and
+    // excluded; the answer is not replaced by the error.
+    let front = query("frontier", None);
+    assert!(front.contains("🎯T1"), "{front}");
+    assert!(
+        front.contains("Validation errors (degraded read)"),
+        "{front}"
+    );
+    assert!(front.contains("T99"), "{front}");
+    assert!(front.contains("1 target(s) ready for work"), "{front}");
+
+    // List: every target is listed, with the offender annotated.
+    let list = query("list", None);
+    assert!(list.contains("🎯T1"), "{list}");
+    assert!(list.contains("🎯T2"), "{list}");
+    assert!(list.contains("INVALID:"), "{list}");
+
+    // Target: both the healthy and the invalid target read back.
+    let healthy = query("target", Some("T1"));
+    assert!(healthy.contains("Healthy and ready"), "{healthy}");
+    assert!(!healthy.contains("INVALID:"), "{healthy}");
+    let invalid = query("target", Some("T2"));
+    assert!(invalid.contains("Dangling dependency"), "{invalid}");
+    assert!(invalid.contains("INVALID:"), "{invalid}");
+
+    // Context and summary degrade the same way.
+    let context = query("context", None);
+    assert!(context.contains("🎯T1"), "{context}");
+    assert!(
+        context.contains("Validation errors (degraded read)"),
+        "{context}"
+    );
+
+    // Validate is the surface whose job is the error report — it stays
+    // a hard, error-only report.
+    let validate = query("validate", None);
+    assert!(validate.contains("## Errors"), "{validate}");
+    assert!(validate.contains("T99"), "{validate}");
+
+    config::set_external_root_override(None);
 }

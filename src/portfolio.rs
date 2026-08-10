@@ -378,12 +378,9 @@ fn summarize_repo_raw(
         }
     }
 
-    let errors = graph::validate_blocking(&file);
-    let frontier_targets = if errors.is_empty() {
-        graph::frontier(&file)
-    } else {
-        Vec::new()
-    };
+    // 🎯T64: one invalid target in one repo must not blank that repo's
+    // contribution to the portfolio frontier.
+    let frontier_targets = graph::frontier_tolerant(&file).targets;
 
     // Build frontier entries with momentum applied but enabler_boost
     // and wsjf deferred to pass 2.

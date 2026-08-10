@@ -743,6 +743,9 @@ fn apply_target_ops(file: &mut TargetsFile, ops: &[TargetOp]) -> usize {
             TargetOp::SetStatus { id, status } => {
                 if let Some(t) = file.targets.get_mut(id) {
                     t.status = *status;
+                    // 🎯T64: mirroring a remote close/reopen is a status
+                    // transition, so it clears status-scoped residue too.
+                    t.clear_illegal_status_scoped_fields();
                     n += 1;
                 }
             }
