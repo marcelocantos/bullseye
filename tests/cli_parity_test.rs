@@ -93,12 +93,30 @@ fn every_mcp_tool_has_a_cli_route() {
 /// shipped binary and require it to accept each routed subcommand.
 #[test]
 fn every_routed_subcommand_is_accepted_by_the_binary() {
-    // The probe must be able to fail, or it proves nothing.
+    // The probe must be able to fail, or it proves nothing. A mistyped
+    // subcommand and a mistyped flag are separate diagnoses that send the
+    // reader looking in different places (🎯T67), so each must name its own
+    // kind and not the other's.
     let (code, out) = run(&["not-a-real-subcommand", "--help"]);
     assert_ne!(code, 0, "unknown subcommand must exit non-zero: {out}");
     assert!(
-        out.contains("unknown flag"),
-        "unknown subcommand must be reported as unknown: {out}"
+        out.contains("unknown subcommand: not-a-real-subcommand"),
+        "a mistyped subcommand must be reported as an unknown subcommand: {out}"
+    );
+    assert!(
+        !out.contains("unknown flag"),
+        "a mistyped subcommand must not be blamed on a flag: {out}"
+    );
+
+    let (code, out) = run(&["--not-a-real-flag"]);
+    assert_ne!(code, 0, "unknown flag must exit non-zero: {out}");
+    assert!(
+        out.contains("unknown flag: --not-a-real-flag"),
+        "a mistyped flag must still be reported as an unknown flag: {out}"
+    );
+    assert!(
+        !out.contains("unknown subcommand"),
+        "a mistyped flag must not be blamed on a subcommand: {out}"
     );
 
     for sub in subcommands() {
@@ -109,8 +127,8 @@ fn every_routed_subcommand_is_accepted_by_the_binary() {
              subcommand src/main.rs does not dispatch. Output:\n{out}"
         );
         assert!(
-            !out.contains("unknown flag"),
-            "`bullseye {sub}` fell through to the unknown-flag arm:\n{out}"
+            !out.contains("unknown flag") && !out.contains("unknown subcommand"),
+            "`bullseye {sub}` fell through to an unrecognised-argument arm:\n{out}"
         );
     }
 }

@@ -107,8 +107,17 @@ async fn main() -> SdkResult<()> {
                     process::exit(1);
                 }
             }
-            other => {
+            // A leading `-` is the only thing that distinguishes a mistyped
+            // flag from a mistyped subcommand, and the two send the reader
+            // looking in different places (🎯T67).
+            other if other.starts_with('-') => {
                 eprintln!("unknown flag: {other}");
+                eprintln!();
+                print_help();
+                process::exit(1);
+            }
+            other => {
+                eprintln!("unknown subcommand: {other}");
                 eprintln!();
                 print_help();
                 process::exit(1);
