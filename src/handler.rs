@@ -1913,7 +1913,7 @@ fn issuepipe_env_status_from(url: &str, token: &str, opt_in: &str, interval: &st
     out
 }
 
-fn handle_resolve(t: crate::tools::ResolveTool) -> ToolResult {
+pub fn handle_resolve(t: crate::tools::ResolveTool) -> ToolResult {
     use crate::resolve;
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/marcelo".to_string());
     let default_root = std::path::PathBuf::from(format!("{home}/work"));
@@ -1934,7 +1934,7 @@ fn handle_resolve(t: crate::tools::ResolveTool) -> ToolResult {
     }
 }
 
-fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
+pub fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
     // Default root is the user's workspace (`~/work`). Callers
     // wanting to scan external-mode repos pass the external shadow
     // root explicitly (e.g. `~/.local/share/bullseye`).

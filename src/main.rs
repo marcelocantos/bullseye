@@ -4,9 +4,13 @@
 use std::process;
 
 use bullseye::handler::{
-    TargetHandler, handle_commit, handle_open, handle_plan_checks, handle_query,
+    TargetHandler, handle_commit, handle_convergence, handle_import, handle_open,
+    handle_plan_checks, handle_portfolio, handle_query, handle_resolve,
 };
-use bullseye::tools::{CommitTool, OpenTool, PlanChecksTool, QueryTool};
+use bullseye::tools::{
+    CommitTool, ConvergenceTool, ImportTool, MomentumEntry, OpenTool, PlanChecksTool,
+    PortfolioTool, QueryTool, ResolveTool,
+};
 use rust_mcp_sdk::mcp_server::{McpServerOptions, server_runtime};
 use rust_mcp_sdk::schema::{
     CallToolResult, ContentBlock, Implementation, InitializeResult, ProtocolVersion,
@@ -46,6 +50,10 @@ async fn main() -> SdkResult<()> {
             "query" => cli_exit(cli_query(&rest[1..])),
             "commit" => cli_exit(cli_commit(&rest[1..])),
             "plan-checks" => cli_exit(cli_plan_checks(&rest[1..])),
+            "convergence" => cli_exit(cli_convergence(&rest[1..])),
+            "portfolio" => cli_exit(cli_portfolio(&rest[1..])),
+            "import" => cli_exit(cli_import(&rest[1..])),
+            "resolve" => cli_exit(cli_resolve(&rest[1..])),
             "sync-priorities" => {
                 #[cfg(feature = "sqlite")]
                 match bullseye::priorities::run_sync(&rest[1..]) {
@@ -211,6 +219,22 @@ fn print_help() {
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
     println!("    bullseye commit --op OP [flags]   # see bullseye commit --help");
     println!("    bullseye plan-checks --id ID [--cwd DIR]");
+    println!(
+        "    bullseye convergence [--cwd DIR] [--skip-invariants] [--momentum ID=MULT,...]\n\
+         \x20                              Extended: invariants + frontier + recommendation"
+    );
+    println!(
+        "    bullseye portfolio [--root DIR] [--max-depth N] [--momentum ID=MULT,...]\n\
+         \x20                              Extended: cross-repo WSJF ranking"
+    );
+    println!(
+        "    bullseye import --path FILE.md [--cwd DIR] [--location L] [--force]\n\
+         \x20                              Extended: markdown targets → bullseye.yaml"
+    );
+    println!(
+        "    bullseye resolve --reference REF [--workspace-root DIR]\n\
+         \x20                              Extended: repo reference → absolute path"
+    );
     println!("    bullseye sync-priorities ...   Extended: portfolio frontier → SQLite");
     println!("    bullseye github sync ...       Extended: GitHub issues ⇄ targets");
     println!(
@@ -441,5 +465,106 @@ fn cli_plan_checks(args: &[String]) -> Result<String, String> {
     tool_result_text(handle_plan_checks(PlanChecksTool {
         cwd: default_cwd(args),
         id,
+    }))
+}
+
+/// `--momentum T1=1.5,T2=0.5` → the wire shape the tools take.
+fn momentum_entries(args: &[String]) -> Result<Option<Vec<MomentumEntry>>, String> {
+    let Some(raw) = flag_value(args, "--momentum") else {
+        return Ok(None);
+    };
+    let mut out = Vec::new();
+    for part in raw.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (id, mult) = part
+            .split_once('=')
+            .ok_or_else(|| format!("--momentum: expected ID=MULTIPLIER, got {part:?}"))?;
+        let multiplier: f64 = mult
+            .trim()
+            .parse()
+            .map_err(|_| format!("--momentum: {mult:?} is not a number"))?;
+        out.push(MomentumEntry {
+            id: id.trim().to_string(),
+            multiplier,
+        });
+    }
+    Ok(if out.is_empty() { None } else { Some(out) })
+}
+
+/// A `--cwd` that does not exist is an operator error, not an empty
+/// ledger — the shared handlers report the latter as an ordinary result,
+/// so scripts driving these subcommands need the distinction up front.
+fn require_dir(cwd: &str) -> Result<(), String> {
+    if std::path::Path::new(cwd).is_dir() {
+        return Ok(());
+    }
+    Err(format!("--cwd {cwd}: not a directory"))
+}
+
+fn cli_convergence(args: &[String]) -> Result<String, String> {
+    if has_flag(args, "--help") {
+        return Ok("bullseye convergence [--cwd DIR] [--skip-invariants] \
+             [--momentum ID=MULT,...]\n\
+             Runs the project's `make bullseye` invariants (unless --skip-invariants),\n\
+             scans for unreleased fixes, and prints the target summary plus a\n\
+             next-action recommendation. Exits non-zero on error.\n"
+            .to_string());
+    }
+    let cwd = default_cwd(args);
+    require_dir(&cwd)?;
+    tool_result_text(handle_convergence(ConvergenceTool {
+        cwd,
+        momentum: momentum_entries(args)?,
+        skip_invariants: Some(has_flag(args, "--skip-invariants")),
+    }))
+}
+
+fn cli_portfolio(args: &[String]) -> Result<String, String> {
+    if has_flag(args, "--help") {
+        return Ok(
+            "bullseye portfolio [--root DIR] [--max-depth N] [--momentum ID=MULT,...]\n\
+             Scans the workspace root (default ~/work) for repos with targets and\n\
+             ranks them by aggregate WSJF score.\n"
+                .to_string(),
+        );
+    }
+    tool_result_text(handle_portfolio(PortfolioTool {
+        root: flag_value(args, "--root"),
+        max_depth: flag_value(args, "--max-depth").and_then(|s| s.parse().ok()),
+        momentum: momentum_entries(args)?,
+    }))
+}
+
+fn cli_import(args: &[String]) -> Result<String, String> {
+    if has_flag(args, "--help") {
+        return Ok(
+            "bullseye import --path FILE.md [--cwd DIR] [--location in_repo|external] [--force]\n\
+             Imports targets from a /cv-style markdown file into bullseye.yaml.\n\
+             Refuses to overwrite an existing bullseye.yaml without --force.\n"
+                .to_string(),
+        );
+    }
+    let cwd = default_cwd(args);
+    require_dir(&cwd)?;
+    tool_result_text(handle_import(ImportTool {
+        cwd,
+        path: flag_value(args, "--path"),
+        location: flag_value(args, "--location"),
+        force: has_flag(args, "--force"),
+    }))
+}
+
+fn cli_resolve(args: &[String]) -> Result<String, String> {
+    if has_flag(args, "--help") {
+        return Ok("bullseye resolve --reference REF [--workspace-root DIR]\n\
+             Resolves a leaf name, org/repo fragment, or absolute path to a repo root.\n\
+             Ambiguous or unmatched references exit non-zero.\n"
+            .to_string());
+    }
+    let reference = flag_value(args, "--reference")
+        .or_else(|| args.first().filter(|a| !a.starts_with('-')).cloned())
+        .ok_or_else(|| "resolve requires --reference REF".to_string())?;
+    tool_result_text(handle_resolve(ResolveTool {
+        reference,
+        workspace_root: flag_value(args, "--workspace-root"),
     }))
 }
