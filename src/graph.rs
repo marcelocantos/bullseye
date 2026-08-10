@@ -720,7 +720,16 @@ fn text_mentions_target_id(haystack: &str, id: &str) -> bool {
             if left_ok && right_ok {
                 return true;
             }
-            start = abs + 1;
+            // Step past the first char of the rejected hit. Advancing a
+            // single byte would land inside a multi-byte char (the `🎯`
+            // needle prefix) and panic on the next `haystack[start..]`.
+            // No char left means an empty needle matched at end-of-string:
+            // nothing further can match, so stop rather than step past the
+            // end.
+            let Some(hit_char) = haystack[abs..].chars().next() else {
+                break;
+            };
+            start = abs + hit_char.len_utf8();
         }
     }
     false
@@ -1793,6 +1802,29 @@ mod t50_t53_tests {
         assert!(!text_mentions_target_id("after t1.2 lands", "T1"));
         assert!(text_mentions_target_id("after t1 lands", "T1"));
         assert!(text_mentions_target_id("uses 🎯t1.2 output", "T1.2"));
+    }
+
+    #[test]
+    fn fake_edge_id_scan_survives_multibyte_utf8() {
+        // A rejected `🎯t1` hit must not step into the middle of the 4-byte
+        // emoji on the next iteration (the orthograph panic, 2026-08-08).
+        assert!(!text_mentions_target_id("uses 🎯t1.2 output", "T1"));
+        assert!(!text_mentions_target_id("blocked on 🎯t10", "T1"));
+        assert!(!text_mentions_target_id(
+            "🎯t1.2 and 🎯t7.2 and 🎯t8.1",
+            "T1"
+        ));
+        // A later genuine mention is still found after a rejected hit.
+        assert!(text_mentions_target_id("🎯t1.2 then 🎯t1 lands", "T1"));
+        assert!(text_mentions_target_id("🎯t1.2 then t1 lands", "T1"));
+        // Rejected hit ending the string, and non-emoji multi-byte text.
+        assert!(!text_mentions_target_id("blocked on 🎯t1.2", "T1"));
+        assert!(text_mentions_target_id("naïve — 🎯t1.2 → 🎯t1", "T1"));
+        // Degenerate empty id (malformed ledger with an empty target key):
+        // the empty needle is rejected at every position including
+        // end-of-string, which must terminate rather than step past the end.
+        assert!(!text_mentions_target_id("abc", ""));
+        assert!(!text_mentions_target_id("abc🎯x9", ""));
     }
 
     #[test]
