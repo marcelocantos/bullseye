@@ -25,17 +25,49 @@ jobs:
         run: cargo clippy -- -D warnings
 
       # 🎯T68's reachability probe asks whether the *installed* bullseye
-      # can repair a ledger with status-scoped residue. A GitHub runner
-      # has no installed release to ask, so the probe is opted out here
-      # — loudly, via the banner it prints, never silently.
+      # can repair a ledger with status-scoped residue. This job builds
+      # from source and has no installed release to ask, so the probe is
+      # opted out here — loudly, via the banner it prints, never
+      # silently.
       #
-      # This is declared residue, not coverage: CI does NOT enforce
-      # reachability. The enforcement point is `cargo test` on the
-      # machines that actually run the fleet, where a toolchain missing
-      # the fix turns the suite red. A CI job that installs the latest
-      # published release and probes *that* is the stronger gate; it is
-      # filed as 🎯T70 rather than bolted on here.
+      # COVERED ELSEWHERE (🎯T70): the `reachability` job below installs
+      # the newest *published* release out of tree and runs that same
+      # probe against it. That is the stronger question — it asks what
+      # agents can actually reach, not what this checkout can build — so
+      # skipping here costs no coverage.
       - name: Test
         run: cargo test
         env:
           BULLSEYE_REACHABILITY_CHECK: skip
+
+  # Does the newest PUBLISHED release carry the repair paths master's
+  # source does? `check` above cannot answer that: it builds the binary
+  # it then tests, so source-present/binary-absent passes it green. That
+  # is the 🎯T64 incident — a fix on master that no installed toolchain
+  # in the fleet could reach for five days.
+  #
+  # This job goes RED whenever master carries a repair path the newest
+  # release does not. That red is a true positive and the remedy is to
+  # cut a release, not to relax the gate.
+  reachability:
+    name: Reachability of published release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: reachability
+
+      # Installs out of tree and probes behaviourally. Deliberately does
+      # NOT compare versions: the fixed and broken builds of the 🎯T64
+      # incident both reported 0.44.0, so a version gate would have been
+      # green throughout. See the script header.
+      - name: Probe the newest published release
+        run: scripts/probe-published-release.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
