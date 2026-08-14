@@ -24,5 +24,18 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+      # 🎯T68's reachability probe asks whether the *installed* bullseye
+      # can repair a ledger with status-scoped residue. A GitHub runner
+      # has no installed release to ask, so the probe is opted out here
+      # — loudly, via the banner it prints, never silently.
+      #
+      # This is declared residue, not coverage: CI does NOT enforce
+      # reachability. The enforcement point is `cargo test` on the
+      # machines that actually run the fleet, where a toolchain missing
+      # the fix turns the suite red. A CI job that installs the latest
+      # published release and probes *that* is the stronger gate; it is
+      # filed as 🎯T70 rather than bolted on here.
       - name: Test
         run: cargo test
+        env:
+          BULLSEYE_REACHABILITY_CHECK: skip
