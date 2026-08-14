@@ -33,7 +33,7 @@ async fn main() -> SdkResult<()> {
     if !rest.is_empty() {
         match rest[0].as_str() {
             "--version" => {
-                println!("bullseye {}", env!("CARGO_PKG_VERSION"));
+                println!("bullseye {}", bullseye::version::VERSION);
                 process::exit(0);
             }
             "--help" => {
@@ -218,7 +218,7 @@ fn apply_server_flags(flags: &[String]) {
 fn print_help() {
     println!(
         "bullseye {} — Intent Ledger MCP Server",
-        env!("CARGO_PKG_VERSION")
+        bullseye::version::VERSION
     );
     println!();
     println!("USAGE:");

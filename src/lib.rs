@@ -22,3 +22,4 @@ pub mod resolve;
 pub mod schema;
 pub mod store;
 pub mod tools;
+pub mod version;

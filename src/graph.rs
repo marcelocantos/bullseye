@@ -1104,7 +1104,7 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
 
     out.push_str(&format!(
         "# Startup context\nFile: {file_path}\nBinary: bullseye {}\nSchema: file={} binary_supports={}\nActive: {active_count} target(s), Frontier: {} ready for work\n\n",
-        env!("CARGO_PKG_VERSION"),
+        crate::version::VERSION,
         file.schema_version
             .map(|v| v.to_string())
             .unwrap_or_else(|| "unset".into()),
