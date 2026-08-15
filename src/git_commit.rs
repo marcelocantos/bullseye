@@ -14,13 +14,38 @@
 //!
 //! - If the file's parent directory isn't inside a git repo, no-op.
 //! - If `bullseye.yaml` has no uncommitted changes, no-op.
-//! - If the most recent commit on `HEAD` is unpushed and its set of
-//!   changed files is exactly `{bullseye.yaml}`, fold the new state
-//!   into it via `git commit --amend --no-edit -- bullseye.yaml`
-//!   (the existing message is preserved).
+//! - If `HEAD` is a ledger commit **this process** created (its SHA is
+//!   the one recorded in [`own_commits`] for this repo and pathspec),
+//!   and that commit is still unpushed and still touches exactly
+//!   `{bullseye.yaml}`, fold the new state into it via
+//!   `git commit --amend --no-edit -- bullseye.yaml` (the existing
+//!   message is preserved).
 //! - Otherwise, create a new commit `Update bullseye.yaml` with just
 //!   the dirty `bullseye.yaml` — any other staged changes are left
 //!   alone.
+//!
+//! The ownership condition is 🎯T72. Until it existed, amend
+//! eligibility was decided from the changed-file set alone — "unpushed
+//! AND `HEAD` touches only `bullseye.yaml`" — which is true of *any*
+//! agent's ledger commit, not just this process's. With several agents
+//! writing one repo, bullseye rewrote commits other processes had made
+//! seconds earlier: on 2026-08-15 four amends in under three minutes
+//! orphaned two SHAs that workers had already cited as evidence in
+//! finish reports. Ledger *content* was never at risk (`store` holds
+//! flock + CAS); what was destroyed was the ability to re-check a claim
+//! from its cited SHA once `git gc` pruned the orphan. So the amend
+//! target is now identified by a SHA this process observed itself
+//! create, not inferred from what a commit happens to contain. The
+//! file-set and unpushed checks are kept as secondary guards for the
+//! case where someone else moved the commit after we made it.
+//!
+//! The record lives in process memory and is deliberately not
+//! persisted: "same process" is exactly the boundary that makes folding
+//! safe, and a marker on disk would be shared with the very siblings we
+//! must not fold into. The cost is that consecutive *CLI* invocations
+//! each get their own commit, since each is its own process. Within one
+//! MCP server session — the case 🎯T22 was built for, and the one that
+//! produces long runs of mutations — folding is unchanged.
 //!
 //! Failures (broken repo state, missing git binary, hooks rejecting
 //! the commit) are logged to stderr but never propagated. Auto-commit
@@ -38,8 +63,10 @@
 //! the caller to render.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::bounded::{BoundedError, bounded_output};
@@ -71,6 +98,68 @@ thread_local! {
 /// only — production code never calls this.
 pub fn set_timeout_override(bounds: Option<(Duration, Duration)>) {
     TIMEOUT_OVERRIDE.with(|o| o.set(bounds));
+}
+
+/// Ledger commits **this process** created, keyed by `(repo top-level,
+/// ledger pathspec)` and holding the SHA of the commit as it stood when
+/// we last wrote it.
+///
+/// This is the observable state that decides amend eligibility (🎯T72).
+/// It is written only from a `git rev-parse HEAD` read taken
+/// immediately after one of our own commits succeeds, so an entry means
+/// "this process put that SHA at `HEAD`" — never "that SHA looks like
+/// something we would have written". The pathspec is part of the key
+/// because one process can hold ledgers for several repos (portfolio
+/// mode) and, in principle, more than one ledger file per repo.
+///
+/// Process-global rather than thread-local: an MCP server answers tool
+/// calls on whichever runtime thread is free, and all of them are the
+/// same agent's session.
+fn own_commits() -> &'static Mutex<HashMap<(PathBuf, String), String>> {
+    static OWN: OnceLock<Mutex<HashMap<(PathBuf, String), String>>> = OnceLock::new();
+    OWN.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The SHA this process last placed at `HEAD` for `pathspec` in
+/// `repo_top`, if any.
+fn own_commit(repo_top: &Path, pathspec: &str) -> Option<String> {
+    let map = own_commits().lock().unwrap_or_else(|e| e.into_inner());
+    map.get(&(repo_top.to_path_buf(), pathspec.to_string()))
+        .cloned()
+}
+
+/// Record `sha` as this process's ledger commit, or — with `None` —
+/// forget any previous record. Forgetting is the safe direction: it can
+/// only cost an extra commit, never someone else's SHA.
+fn set_own_commit(repo_top: &Path, pathspec: &str, sha: Option<String>) {
+    let mut map = own_commits().lock().unwrap_or_else(|e| e.into_inner());
+    let key = (repo_top.to_path_buf(), pathspec.to_string());
+    match sha {
+        Some(sha) => {
+            map.insert(key, sha);
+        }
+        None => {
+            map.remove(&key);
+        }
+    }
+}
+
+/// Resolve `HEAD` to a full SHA, or `None` in an empty repo (or if git
+/// didn't answer within `timeout`).
+fn head_sha(repo_top: &Path, timeout: Duration) -> Option<String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_top).args(["rev-parse", "HEAD"]);
+    let out = bounded_output(&mut cmd, timeout).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?;
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// What [`auto_commit_yaml`] did, so a caller that renders a report can
@@ -148,7 +237,19 @@ pub fn auto_commit_yaml_with_timeouts(
         return AutoCommitOutcome::NoOp;
     }
 
-    let amend = last_commit_is_unpushed_and_only(&repo_top, pathspec_str, plumbing_timeout);
+    // Amend only a commit we watched ourselves create (🎯T72). A
+    // sibling agent's ledger commit looks identical by content, so the
+    // file-set and unpushed checks below cannot be the ones that decide
+    // this — they are only there to catch our own commit having been
+    // pushed or extended since we made it.
+    let head = head_sha(&repo_top, plumbing_timeout);
+    let is_own_head = match (&head, own_commit(&repo_top, pathspec_str)) {
+        (Some(head), Some(own)) => *head == own,
+        _ => false,
+    };
+    let amend =
+        is_own_head && last_commit_is_unpushed_and_only(&repo_top, pathspec_str, plumbing_timeout);
+
     let args: &[&str] = if amend {
         &["commit", "--amend", "--no-edit", "--"]
     } else {
@@ -158,9 +259,23 @@ pub fn auto_commit_yaml_with_timeouts(
     argv.push(pathspec_str);
 
     match run_git(&repo_top, &argv, commit_timeout) {
-        GitStep::Ok => AutoCommitOutcome::Committed,
-        GitStep::TimedOut { secs } => timed_out(path, "commit", secs),
+        GitStep::Ok => {
+            // Re-read rather than assume: an amend rewrites the SHA, and
+            // a hook may have amended further. If the read fails we
+            // forget, so the next mutation starts a fresh commit.
+            set_own_commit(
+                &repo_top,
+                pathspec_str,
+                head_sha(&repo_top, plumbing_timeout),
+            );
+            AutoCommitOutcome::Committed
+        }
+        GitStep::TimedOut { secs } => {
+            set_own_commit(&repo_top, pathspec_str, None);
+            timed_out(path, "commit", secs)
+        }
         GitStep::Failed => {
+            set_own_commit(&repo_top, pathspec_str, None);
             eprintln!(
                 "bullseye: auto-commit of {} failed (left dirty for manual resolution)",
                 path.display()
@@ -224,6 +339,13 @@ fn has_staged_changes(repo_top: &Path, pathspec: &str, timeout: Duration) -> boo
 /// True iff `HEAD` is not reachable from any remote-tracking ref AND
 /// the set of files touched by `HEAD` (vs its parent, or vs the empty
 /// tree for a root commit) is exactly `[pathspec]`.
+///
+/// Secondary guard only. This was the whole amend rule until 🎯T72, and
+/// on its own it says nothing about *who* made the commit — every
+/// agent's ledger commit satisfies it. The caller must first establish
+/// that `HEAD` is a SHA this process recorded creating; this function
+/// then catches the case where our own commit has since been pushed or
+/// had other files folded into it.
 ///
 /// Returns false on:
 /// - no remote configured (treats no-remote as "unpushed" — correct,
@@ -357,6 +479,28 @@ mod tests {
             .collect()
     }
 
+    fn head_rev(repo: &Path) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// The reachability question a reviewer asks of a cited SHA: is it
+    /// still an ancestor of `HEAD`? An amended-away commit answers no.
+    fn is_ancestor(repo: &Path, sha: &str) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["merge-base", "--is-ancestor", sha, "HEAD"])
+            .status()
+            .unwrap()
+            .success()
+    }
+
     fn commit_count(repo: &Path) -> usize {
         let out = Command::new("git")
             .arg("-C")
@@ -414,28 +558,95 @@ mod tests {
     }
 
     #[test]
-    fn amends_when_last_commit_is_unpushed_yaml_only() {
-        // Repo where HEAD is a yaml-only commit with no remote (so it
-        // counts as unpushed). A second mutation should amend rather
-        // than create a new commit.
+    fn amends_when_head_is_this_process_own_unpushed_yaml_commit() {
+        // The amend case, established the only way it can be after
+        // 🎯T72: this process made the commit at HEAD itself. A second
+        // mutation folds into it rather than creating a new commit.
         let tmp = TempDir::new().unwrap();
         git_init(tmp.path());
         let yaml = tmp.path().join("bullseye.yaml");
         write(&yaml, "schema_version: 3\ntargets: {}\n");
-        run_git_verbose(tmp.path(), &["add", "bullseye.yaml"]);
-        run_git_verbose(tmp.path(), &["commit", "-m", "feat: add targets"]);
+        auto_commit_yaml(&yaml);
         let before = commit_count(tmp.path());
+        let first = head_rev(tmp.path());
 
         // Mutate again.
         write(
             &yaml,
-            "schema_version: 3\ntargets:\n  T1: {name: x, kind: work, status: identified, value: 0, cost: 0, acceptance: [a], context: '', discovered: 2026-04-28}\n",
+            "schema_version: 3\ntargets:\n  T1: {name: x, status: identified, value: 0, cost: 0, acceptance: [a], context: '', discovered: 2026-04-28}\n",
         );
         auto_commit_yaml(&yaml);
 
         assert_eq!(commit_count(tmp.path()), before, "amend, not new commit");
-        // Original message preserved by --amend --no-edit.
-        assert_eq!(head_message(tmp.path()), "feat: add targets");
+        assert_ne!(head_rev(tmp.path()), first, "amend rewrites the SHA");
+        // Message preserved by --amend --no-edit.
+        assert_eq!(head_message(tmp.path()), "Update bullseye.yaml");
+    }
+
+    #[test]
+    fn folds_consecutive_mutations_in_one_session_into_one_commit() {
+        // 🎯T22's benefit, kept: N mutations in one process/session
+        // produce one ledger commit, not N. This is the property the
+        // 🎯T72 fix must not trade away in exchange for SHA stability.
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        let other = tmp.path().join("README.md");
+        write(&other, "# project\n");
+        run_git_verbose(tmp.path(), &["add", "README.md"]);
+        run_git_verbose(tmp.path(), &["commit", "-m", "init"]);
+        let before = commit_count(tmp.path());
+
+        let yaml = tmp.path().join("bullseye.yaml");
+        for n in 0..5 {
+            write(&yaml, &format!("schema_version: 3\ntargets: {{}}\n# {n}\n"));
+            assert_eq!(auto_commit_yaml(&yaml), AutoCommitOutcome::Committed);
+        }
+
+        assert_eq!(
+            commit_count(tmp.path()),
+            before + 1,
+            "five mutations in one session must fold into one ledger commit"
+        );
+        assert_eq!(head_files(tmp.path()), vec!["bullseye.yaml"]);
+    }
+
+    #[test]
+    fn does_not_amend_a_ledger_commit_this_process_did_not_create() {
+        // The 🎯T72 defect in unit form. A sibling agent's ledger commit
+        // satisfies every condition the old rule tested — unpushed, and
+        // touching exactly bullseye.yaml — so the old rule amended it,
+        // destroying a SHA that agent may already have cited. Ownership
+        // is what separates the two, and nothing about the commit's
+        // contents can supply it.
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        let yaml = tmp.path().join("bullseye.yaml");
+
+        // Our own ledger commit, so this process holds an ownership
+        // record and the amend path is live.
+        write(&yaml, "schema_version: 3\ntargets: {}\n");
+        auto_commit_yaml(&yaml);
+
+        // A different writer lands its own yaml-only unpushed commit.
+        write(&yaml, "schema_version: 3\ntargets: {sibling: {}}\n");
+        run_git_verbose(tmp.path(), &["add", "bullseye.yaml"]);
+        run_git_verbose(tmp.path(), &["commit", "-m", "sibling ledger write"]);
+        let sibling = head_rev(tmp.path());
+        let before = commit_count(tmp.path());
+
+        // Our next mutation must not rewrite it.
+        write(&yaml, "schema_version: 3\ntargets: {ours: {}}\n");
+        auto_commit_yaml(&yaml);
+
+        assert_eq!(
+            commit_count(tmp.path()),
+            before + 1,
+            "a commit this process did not create must not be amended"
+        );
+        assert!(
+            is_ancestor(tmp.path(), &sibling),
+            "the sibling's SHA {sibling} must still be reachable from HEAD"
+        );
     }
 
     #[test]
@@ -479,8 +690,9 @@ mod tests {
         write(&yaml, "schema_version: 3\ntargets: {y: {}}\n");
         auto_commit_yaml(&yaml);
 
-        // Latest commit (an amend, since previous was yaml-only +
-        // unpushed) contains only bullseye.yaml.
+        // Latest commit contains only bullseye.yaml. (A fresh commit,
+        // not an amend: since 🎯T72 a hand-made HEAD is not ours to
+        // fold into.)
         assert_eq!(head_files(tmp.path()), vec!["bullseye.yaml"]);
 
         // README.md is still staged but uncommitted.

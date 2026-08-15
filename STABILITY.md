@@ -312,22 +312,23 @@ Earlier v0.26.0 changes still in effect:
 
 Earlier v0.25.0 changes still in effect:
 
-- **Bullseye self-commits a dirty `bullseye.yaml`** (🎯T22). Every
-  mutating tool call (`bullseye_put`, `bullseye_retire`,
-  `bullseye_set_aside`, `bullseye_rework`, `bullseye_init`,
-  `bullseye_import`) and the start of `bullseye_convergence` now
-  fold a dirty `bullseye.yaml` into git automatically. Decision
-  rule: if the most recent commit on `HEAD` is unpushed and its set
-  of changed files is exactly `{bullseye.yaml}`, fold the new
-  state via `git commit --amend --no-edit` (existing message
-  preserved); otherwise create a fresh `Update bullseye.yaml`
-  commit containing only `bullseye.yaml` (other staged changes
-  are left in the index untouched). Best-effort: outside a git
-  repo (shadow-tree storage, tempdir tests) and on git failures
-  the auto-commit is a silent no-op and the file stays dirty.
-  No new public Rust API; the new `git_commit` module is internal.
-  Eliminates the prior `/cv` skill workaround for the dirty-tree
-  invariants block. See 🎯T22.
+- **Bullseye self-commits a dirty `bullseye.yaml`** (🎯T22, amend
+  rule narrowed by 🎯T72). Every mutating tool call (`bullseye_put`,
+  `bullseye_retire`, `bullseye_set_aside`, `bullseye_rework`,
+  `bullseye_init`, `bullseye_import`) and the start of
+  `bullseye_convergence` fold a dirty `bullseye.yaml` into git
+  automatically. Decision rule **as it now stands**: if `HEAD` is a
+  commit *this process* created (bullseye records the SHA it put at
+  `HEAD` after each of its own ledger commits) and that commit is
+  still unpushed and still touches exactly `{bullseye.yaml}`, fold
+  the new state via `git commit --amend --no-edit` (existing message
+  preserved); otherwise create a fresh `Update bullseye.yaml` commit
+  containing only `bullseye.yaml` (other staged changes are left in
+  the index untouched). Best-effort: outside a git repo (shadow-tree
+  storage, tempdir tests) and on git failures the auto-commit is a
+  silent no-op and the file stays dirty. No new public Rust API; the
+  `git_commit` module is internal. Eliminates the prior `/cv` skill
+  workaround for the dirty-tree invariants block. See 🎯T22, 🎯T72.
 
 Earlier v0.24.0 changes still in effect:
 
