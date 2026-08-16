@@ -37,9 +37,15 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # Same skip as ci.yml `check`: this runner has no installed
+      # release, and 🎯T68's probe fails closed without one. The
+      # published-release `reachability` job in ci.yml is the delivery
+      # oracle; this step is a source-suite gate before we package.
       - name: Run tests
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo test
+        env:
+          BULLSEYE_REACHABILITY_CHECK: skip
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
