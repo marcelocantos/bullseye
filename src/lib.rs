@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod api;
+pub mod bounded;
+pub mod cli;
 pub mod config;
 pub mod convergence;
 pub mod git_commit;
@@ -20,3 +22,4 @@ pub mod resolve;
 pub mod schema;
 pub mod store;
 pub mod tools;
+pub mod version;

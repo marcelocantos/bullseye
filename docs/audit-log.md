@@ -177,3 +177,68 @@ maintenance activities. Append-only -- newest entries at the bottom.
 ## 2026-07-06 -- /release v0.37.0
 
 - **Outcome**: Released v0.37.0 (darwin-arm64, linux-amd64, linux-arm64). Two linked safety changes close the direct-`bullseye.yaml` editing incident. **🎯T39: Bullseye owns target ID allocation and hierarchy conventions.** `bullseye_put` gains `child_of` so agents can ask for the next child under a parent without choosing the final dotted number; explicit IDs are reserved for intentional placement or patches, and explicit dotted IDs ending in `.0` are rejected both at mutation time and by validation. **🎯T40: Bullseye rejects unsafe control characters before writing YAML.** Mutating handlers now reject non-whitespace C0 controls in caller-controlled strings before entering the locked mutation, naming the field and code point (for example U+0001) while leaving the file unchanged; newline, carriage return, and tab remain allowed. README and the agent guide document the new `bullseye_put` contract, and `CLAUDE.md` now imports the shared `AGENTS.md` instructions to prevent cross-agent drift. Settling clock resets at v0.37.0 — this release adds a `bullseye_put` input and narrows accepted IDs/free text.
+
+## 2026-08-15 -- 🎯T72: ledger commit SHA stability
+
+- **Outcome**: The 🎯T22 auto-commit amend rule is narrowed so a commit
+  SHA bullseye has already shown a caller stays reachable. **Decision
+  rule as it now stands** (superseding the rule recorded in the v0.25.0
+  entry above): if `HEAD` is a commit *this process* created — bullseye
+  records, per `(repo top-level, ledger pathspec)`, the SHA it read back
+  from `git rev-parse HEAD` immediately after each of its own successful
+  ledger commits — and that commit is still unpushed and still touches
+  exactly `{bullseye.yaml}`, fold the new state via `git commit --amend
+  --no-edit -- bullseye.yaml` (existing message preserved); otherwise
+  create a fresh `Update bullseye.yaml` commit containing only
+  `bullseye.yaml` (other staged changes left in the index untouched).
+  Best-effort semantics are unchanged: outside a git repo, and on git
+  failure or timeout, the auto-commit is a silent no-op and the file
+  stays dirty. On any failed or timed-out commit the ownership record is
+  forgotten, so the next mutation starts a fresh commit rather than
+  amending something it can no longer vouch for.
+
+- **Defect being closed**: the old rule decided amend eligibility from
+  the changed-file set alone — "unpushed AND `HEAD` touches only
+  `bullseye.yaml`" — which is true of *every* agent's ledger commit, not
+  just this process's. Observed live by bullseye-po on 2026-08-15, twice
+  within one hour: the reflog shows `fcab2fa -> 928e25c -> 12a0e26 ->
+  c4e853d`, four amends in under three minutes, orphaning two SHAs that
+  bs-t69 and bs-t70 had already cited as evidence in finish reports.
+  Both agents had obtained their evidence correctly; it was dead on
+  arrival by the time it was read. Ledger *content* was never at risk
+  (`store` holds flock + CAS) — this is purely about SHA stability, and
+  it matters because a cited SHA is how a reviewer re-checks a claim
+  they did not watch happen. Once `git gc` prunes the orphans the
+  failure goes silent: the SHA simply stops resolving.
+
+- **Why ownership is tracked in process memory**: "same process" is
+  exactly the boundary that makes folding safe, and a marker on disk
+  would be shared with the very sibling processes we must not fold into.
+  The cost is that consecutive *CLI* invocations each get their own
+  commit, since each is its own process. Within one MCP server session —
+  the case 🎯T22 was built for, and the one that produces long runs of
+  mutations — folding is unchanged. The record is process-global rather
+  than thread-local because an MCP server answers tool calls on
+  whichever runtime thread is free, and all of them are one agent's
+  session.
+
+- **Tests**: new integration oracle `tests/ledger_sha_stability_test.rs`
+  drives the real binary so the process boundary under test is a real
+  one — `a_sha_from_one_process_survives_another_process_mutation` and
+  `every_sha_shown_to_any_process_stays_reachable`, both asserting
+  reachability with `git merge-base --is-ancestor` from a second process
+  rather than inspecting the changed-file set. New unit tests in
+  `src/git_commit.rs`:
+  `does_not_amend_a_ledger_commit_this_process_did_not_create` (the
+  defect in unit form) and
+  `folds_consecutive_mutations_in_one_session_into_one_commit` (🎯T22's
+  benefit preserved: five mutations in one session, one commit). The
+  pre-existing amend test is renamed
+  `amends_when_head_is_this_process_own_unpushed_yaml_commit` and now
+  establishes ownership by making the first commit through bullseye
+  itself; the mixed-index test's expectation flips from amend to fresh
+  commit, since a hand-made `HEAD` is no longer ours to fold into.
+
+- **Docs**: the decision rule is restated in STABILITY.md, in the
+  `src/git_commit.rs` module docs, and here, so the written rule and the
+  code agree.

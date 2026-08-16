@@ -14,7 +14,9 @@ use tempfile::NamedTempFile;
 use crate::config::{Location, external_root};
 use sha2::{Digest, Sha256};
 
-use crate::schema::{CURRENT_SCHEMA_VERSION, TargetsFile, migrate_gates_to_depends_on};
+use crate::schema::{
+    CURRENT_SCHEMA_VERSION, TargetsFile, heal_status_scoped_residue, migrate_gates_to_depends_on,
+};
 
 /// Maximum time we'll wait for another bullseye process to release the
 /// lockfile before giving up with a structured timeout error. Five
@@ -382,6 +384,12 @@ fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
         file.schema_version = Some(CURRENT_SCHEMA_VERSION);
     }
     migrate_gates_to_depends_on(&mut file);
+    // 🎯T64: a file that already carries status-scoped residue (from an
+    // older binary or a hand edit) heals here rather than staying
+    // permanently invalid. Same contract as the gates migration above:
+    // every in-memory `TargetsFile` the rest of the codebase sees is
+    // already normalised, and the next save persists the repair.
+    heal_status_scoped_residue(&mut file);
     Ok(file)
 }
 

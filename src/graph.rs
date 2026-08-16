@@ -720,7 +720,16 @@ fn text_mentions_target_id(haystack: &str, id: &str) -> bool {
             if left_ok && right_ok {
                 return true;
             }
-            start = abs + 1;
+            // Step past the first char of the rejected hit. Advancing a
+            // single byte would land inside a multi-byte char (the `🎯`
+            // needle prefix) and panic on the next `haystack[start..]`.
+            // No char left means an empty needle matched at end-of-string:
+            // nothing further can match, so stop rather than step past the
+            // end.
+            let Some(hit_char) = haystack[abs..].chars().next() else {
+                break;
+            };
+            start = abs + hit_char.len_utf8();
         }
     }
     false
@@ -744,25 +753,77 @@ fn significant_tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Structural errors that block downstream graph operations. Frontier,
-/// convergence, portfolio, and startup-context all gate on this — if
-/// it returns non-empty, the graph is broken in ways that would make
-/// the next-action recommendation meaningless. Stylistic warnings are
-/// reported separately by [`validate_warnings`].
+/// A blocking validation error, attributed to the target that carries
+/// it (🎯T64).
+///
+/// Every blocking error bullseye produces is target-scoped — there is
+/// no whole-file error class — which is what makes degraded reads
+/// possible: the offending targets can be named and excluded while the
+/// rest of the graph answers normally. See [`frontier_tolerant`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationIssue {
+    /// ID of the target the error belongs to.
+    pub target: String,
+    /// The error text, without the `"{id}: "` prefix that [`Display`]
+    /// adds.
+    ///
+    /// [`Display`]: std::fmt::Display
+    pub message: String,
+}
+
+impl ValidationIssue {
+    fn new(target: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ValidationIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.target, self.message)
+    }
+}
+
+/// Structural errors that block downstream graph operations, as flat
+/// strings. Thin wrapper over [`validate_issues`] for callers that only
+/// want text; anything that needs to know *which* target is at fault
+/// (degraded reads) should call [`validate_issues`] directly.
+///
+/// Stylistic warnings are reported separately by [`validate_warnings`].
 pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
+    validate_issues(file)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Structural errors that block downstream graph operations, each
+/// attributed to its target.
+///
+/// A non-empty result means part of the graph is broken. It does **not**
+/// mean the whole file is unreadable: `view=frontier` / `list` / `target`
+/// degrade around the named targets rather than refusing to answer
+/// (🎯T64). `view=validate` is the one surface whose job *is* to report
+/// these, so it reports them and nothing else.
+pub fn validate_issues(file: &TargetsFile) -> Vec<ValidationIssue> {
     let mut errors = Vec::new();
     let mut seen_ids: HashSet<&str> = HashSet::new();
 
     for (id, t) in &file.targets {
+        let mut push = |message: String| errors.push(ValidationIssue::new(id, message));
+
         // Duplicate check.
         if !seen_ids.insert(id.as_str()) {
-            errors.push(format!("{id}: duplicate target ID"));
+            push("duplicate target ID".to_string());
         }
         if id_ends_in_zero_dotted_segment(id) {
-            errors.push(format!(
-                "{id}: dotted target IDs whose final segment is zero are disallowed \
+            push(
+                "dotted target IDs whose final segment is zero are disallowed \
                  because humans conflate T4 and T4.0"
-            ));
+                    .to_string(),
+            );
         }
 
         // Value/cost: 0.0 means "not set at repo scope" (portfolio-scope
@@ -770,21 +831,21 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
         // which are always a mistake, and non-zero sub-1 values that
         // would produce meaningless WSJF ratios.
         if t.value < 0.0 {
-            errors.push(format!("{id}: value must be non-negative, got {}", t.value));
+            push(format!("value must be non-negative, got {}", t.value));
         }
         if t.cost < 0.0 {
-            errors.push(format!("{id}: cost must be non-negative, got {}", t.cost));
+            push(format!("cost must be non-negative, got {}", t.cost));
         }
 
         // Acceptance must be non-empty.
         if t.acceptance.is_empty() {
-            errors.push(format!("{id}: acceptance criteria must not be empty"));
+            push("acceptance criteria must not be empty".to_string());
         }
 
         // Depends-on references must exist.
         for dep in &t.depends_on {
             if !file.targets.contains_key(dep) {
-                errors.push(format!("{id}: depends_on target {dep} does not exist"));
+                push(format!("depends_on target {dep} does not exist"));
             }
         }
 
@@ -797,86 +858,75 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
         // structurally meaningless.
         for edge in t.cross_depends.iter().chain(t.cross_enables.iter()) {
             if edge.repo.trim().is_empty() {
-                errors.push(format!("{id}: cross-repo edge has empty repo"));
+                push("cross-repo edge has empty repo".to_string());
             }
             if edge.target.as_deref().unwrap_or("").is_empty()
                 && edge.capability.as_deref().unwrap_or("").is_empty()
             {
-                errors.push(format!(
-                    "{id}: cross-repo edge to {} must set `target` or `capability`",
+                push(format!(
+                    "cross-repo edge to {} must set `target` or `capability`",
                     edge.repo,
                 ));
             }
+        }
+
+        // Status-scoped fields (🎯T64). One loop over
+        // `schema::STATUS_SCOPED_FIELDS` covers every field whose
+        // presence depends on status — set_aside_reason, attestation,
+        // achieved, owned_by, and the postpone pair. The same table
+        // drives `Target::clear_illegal_status_scoped_fields`, so what
+        // validation rejects here is exactly what a status transition
+        // clears; neither side can grow a field the other forgets.
+        for field in t.illegal_status_scoped_fields() {
+            push(format!(
+                "{} is only valid on {} (status is {:?})",
+                field.name, field.legal_where, t.status,
+            ));
         }
 
         // Set-aside disposition requires a non-empty rationale (🎯T18).
         // The rationale is the load-bearing artefact: it carries the
         // parked / deferred / wont_fix nuance that the schema deliberately
         // doesn't taxonomise. Empty or whitespace-only reasons are
-        // rejected. Conversely, set_aside_reason on a non-set-aside
-        // status is meaningless — flag it rather than silently
-        // preserving a stale reason from a prior disposition.
-        match t.status {
-            Status::SetAside => {
-                if t.set_aside_reason
-                    .as_deref()
-                    .is_none_or(|r| r.trim().is_empty())
-                {
-                    errors.push(format!(
-                        "{id}: status set_aside requires a non-empty set_aside_reason",
-                    ));
-                }
-            }
-            _ => {
-                if t.set_aside_reason.is_some() {
-                    errors.push(format!(
-                        "{id}: set_aside_reason is only valid on status set_aside (status is {:?})",
-                        t.status,
-                    ));
-                }
-            }
+        // rejected. (The converse — a reason on a non-set-aside status —
+        // is covered by the status-scoped loop above.)
+        if t.status == Status::SetAside
+            && t.set_aside_reason
+                .as_deref()
+                .is_none_or(|r| r.trim().is_empty())
+        {
+            push("status set_aside requires a non-empty set_aside_reason".to_string());
         }
 
         // Achieve attestation (🎯T58): soft words-in-a-box on retirement.
         // Required by the achieve API path; legacy achieved targets may
         // lack the field. Empty / whitespace-only values are invalid when
-        // present. Attestation on a non-achieved status is stale noise.
-        if let Some(a) = &t.attestation {
-            if a.trim().is_empty() {
-                errors.push(format!("{id}: attestation must be non-empty when present",));
-            } else if t.status != Status::Achieved {
-                errors.push(format!(
-                    "{id}: attestation is only valid on status achieved (status is {:?})",
-                    t.status,
-                ));
-            }
+        // present.
+        if t.attestation
+            .as_deref()
+            .is_some_and(|a| a.trim().is_empty())
+        {
+            push("attestation must be non-empty when present".to_string());
         }
 
         // Ownership exclusion (🎯T43): both owner and reason must be
-        // non-empty when the field is present. Terminal targets should
-        // not carry ownership — clear it first.
+        // non-empty when the field is present.
         if let Some(ob) = &t.owned_by {
             if ob.owner.trim().is_empty() {
-                errors.push(format!("{id}: owned_by.owner must be non-empty"));
+                push("owned_by.owner must be non-empty".to_string());
             }
             if ob.reason.trim().is_empty() {
-                errors.push(format!("{id}: owned_by.reason must be non-empty"));
-            }
-            if t.status.is_terminal() {
-                errors.push(format!(
-                    "{id}: owned_by is only valid on active targets (status is {:?})",
-                    t.status,
-                ));
+                push("owned_by.reason must be non-empty".to_string());
             }
         }
 
         // Strategy validation: command and trigger must be non-empty.
         if let Some(ref strategy) = t.strategy {
             if strategy.command.trim().is_empty() {
-                errors.push(format!("{id}: strategy.command must not be empty"));
+                push("strategy.command must not be empty".to_string());
             }
             if strategy.trigger.trim().is_empty() {
-                errors.push(format!("{id}: strategy.trigger must not be empty"));
+                push("strategy.trigger must not be empty".to_string());
             }
         }
     }
@@ -890,13 +940,13 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
         targets: &'a std::collections::BTreeMap<String, crate::schema::Target>,
         permanent: &mut HashSet<&'a str>,
         temporary: &mut HashSet<&'a str>,
-        errors: &mut Vec<String>,
+        errors: &mut Vec<ValidationIssue>,
     ) {
         if permanent.contains(id) {
             return;
         }
         if !temporary.insert(id) {
-            errors.push(format!("{id}: cycle in depends_on graph"));
+            errors.push(ValidationIssue::new(id, "cycle in depends_on graph"));
             return;
         }
         if let Some(t) = targets.get(id) {
@@ -921,6 +971,109 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
     errors
 }
 
+/// A frontier computed over the healthy part of a graph that may carry
+/// blocking validation errors (🎯T64).
+#[derive(Debug, Clone)]
+pub struct TolerantFrontier {
+    /// Ready targets, with any invalid target removed.
+    pub targets: Vec<FrontierTarget>,
+    /// Every blocking validation error found, in report order.
+    pub issues: Vec<ValidationIssue>,
+    /// IDs that would have been in the frontier but were dropped
+    /// because they carry a validation error. A subset of the IDs named
+    /// in `issues`.
+    pub excluded: Vec<String>,
+}
+
+impl TolerantFrontier {
+    /// Whether the graph validated cleanly (nothing was degraded).
+    pub fn is_clean(&self) -> bool {
+        self.issues.is_empty()
+    }
+}
+
+/// Compute the frontier without letting one bad target hide the rest
+/// (🎯T64).
+///
+/// The read path used to gate on `validate_blocking(file).is_empty()`
+/// and return the errors *instead of* an answer. One stale field on one
+/// target therefore made an entire ledger unreadable — frontier
+/// included — with no supported op able to repair it (the jevons
+/// incident, 2026-08-10).
+///
+/// The gate was always stronger than necessary: [`frontier`] is defined
+/// over each target's own status and dependency edges, so an invalid
+/// *other* target cannot corrupt it. A target with a dangling
+/// `depends_on` stays blocked, a cyclic one never becomes ready, and a
+/// target with illegal status-scoped residue is simply excluded here.
+/// So we compute the frontier regardless and report the errors
+/// alongside it.
+///
+/// Which surfaces degrade and which hard-fail:
+/// - **degrade** — `view=frontier`, `view=context`, `view=summary`,
+///   portfolio, convergence: answer over the healthy subgraph, with the
+///   errors shown in a banner.
+/// - **answer regardless** — `view=list`, `view=target`: per-target
+///   reads never consulted validation and still don't; `list` annotates
+///   the offending targets so the reader sees them.
+/// - **hard-fail** — `view=validate`: reporting these errors *is* its
+///   contract. It must never be degraded, or the ledger loses the one
+///   surface that tells the truth about its own health.
+pub fn frontier_tolerant(file: &TargetsFile) -> TolerantFrontier {
+    let issues = validate_issues(file);
+    let invalid: HashSet<&str> = issues.iter().map(|i| i.target.as_str()).collect();
+
+    let mut excluded = Vec::new();
+    let targets = frontier(file)
+        .into_iter()
+        .filter(|ft| {
+            if invalid.contains(ft.id.as_str()) {
+                excluded.push(ft.id.clone());
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    TolerantFrontier {
+        targets,
+        issues,
+        excluded,
+    }
+}
+
+/// Markdown banner naming the targets a degraded read skipped (🎯T64).
+///
+/// Empty string when there is nothing to report, so callers can push it
+/// unconditionally.
+pub fn degraded_read_banner(tf: &TolerantFrontier) -> String {
+    if tf.is_clean() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## Validation errors (degraded read)\n\nThese targets are invalid and were skipped; \
+         the rest of the graph is reported normally. Run `bullseye_query view=validate` for the \
+         full report, and `bullseye_commit op=rehash` to rewrite the file if the errors are \
+         stale status-scoped fields.\n\n",
+    );
+    for issue in &tf.issues {
+        out.push_str(&format!("- {issue}\n"));
+    }
+    if !tf.excluded.is_empty() {
+        out.push_str(&format!(
+            "\nExcluded from the frontier: {}\n",
+            tf.excluded
+                .iter()
+                .map(|id| format!("🎯{id}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    out.push('\n');
+    out
+}
+
 fn id_ends_in_zero_dotted_segment(id: &str) -> bool {
     id.strip_prefix('T')
         .and_then(|rest| rest.rsplit('.').next().filter(|_| rest.contains('.')))
@@ -934,12 +1087,10 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
     let active = file.active();
     let active_count = active.len();
 
-    let errors = validate_blocking(file);
-    let front = if errors.is_empty() {
-        frontier(file)
-    } else {
-        Vec::new()
-    };
+    // 🎯T64: degrade rather than blank the frontier when some target is
+    // invalid — the healthy graph is still the agent's work queue.
+    let tolerant = frontier_tolerant(file);
+    let front = &tolerant.targets;
 
     // Recently achieved targets.
     let mut recent_achieved: Vec<(&str, &crate::schema::Target)> = file
@@ -953,7 +1104,7 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
 
     out.push_str(&format!(
         "# Startup context\nFile: {file_path}\nBinary: bullseye {}\nSchema: file={} binary_supports={}\nActive: {active_count} target(s), Frontier: {} ready for work\n\n",
-        env!("CARGO_PKG_VERSION"),
+        crate::version::VERSION,
         file.schema_version
             .map(|v| v.to_string())
             .unwrap_or_else(|| "unset".into()),
@@ -970,9 +1121,11 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
         out.push('\n');
     }
 
+    out.push_str(&degraded_read_banner(&tolerant));
+
     if !front.is_empty() {
         out.push_str("## Frontier (unblocked, ready for work)\n\n");
-        for ft in &front {
+        for ft in front {
             out.push_str(&format!("🎯{} {}\n", ft.id, ft.name));
             if !ft.tags.is_empty() {
                 out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
@@ -993,11 +1146,6 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
             }
         }
         out.push('\n');
-    }
-
-    if !errors.is_empty() {
-        out.push_str("## Warnings\n\n");
-        out.push_str(&format!("Validation errors: {}\n\n", errors.join("; ")));
     }
 
     out
@@ -1111,7 +1259,7 @@ pub fn summary(
     let _ = momentum;
     let mut out = String::new();
 
-    let errors = validate_blocking(file);
+    let tolerant = frontier_tolerant(file);
     let all_targets = &file.targets;
     let active = file.active();
     let achieved = file.achieved();
@@ -1235,68 +1383,63 @@ pub fn summary(
     // for the full rule and rationale. Value/cost/momentum
     // intentionally not consumed here — those are portfolio-scope
     // signals.
-    if errors.is_empty() {
-        let front = frontier(file);
-        let ranked = rank_frontier(file, &front);
+    // 🎯T64: invalid targets are named and skipped, not used as a
+    // reason to withhold the frontier.
+    out.push_str(&degraded_read_banner(&tolerant));
 
-        out.push_str("## Frontier (unblocked, ready for work)\n\n");
-        out.push_str(REPO_SCOPE_BANNER);
-        if ranked.is_empty() {
-            out.push_str("(no targets ready for work)\n");
-        } else {
-            for rf in &ranked {
-                let ft = rf.target;
-                out.push_str(&format!(
-                    "🎯{id} {name}  [{status:?}] — fanout={fan}\n",
-                    id = ft.id,
-                    name = ft.name,
-                    status = ft.status,
-                    fan = rf.fanout,
-                ));
-                if frontier_details {
-                    render_frontier_detail(&mut out, &ft.id, all_targets);
-                }
-            }
-        }
-        out.push('\n');
+    let ranked = rank_frontier(file, &tolerant.targets);
 
-        // --- 3. Blocked targets ---
-        let front_ids: HashSet<&str> = ranked.iter().map(|r| r.target.id.as_str()).collect();
-        let blocked: Vec<(&str, &crate::schema::Target)> = active
-            .iter()
-            .filter(|(id, _)| !front_ids.contains(**id))
-            .map(|(&id, t)| (id, *t))
-            .collect();
-
-        if !blocked.is_empty() {
-            out.push_str("## Blocked targets\n\n");
-            for (id, target) in &blocked {
-                let unmet: Vec<String> = target
-                    .depends_on
-                    .iter()
-                    .filter(|dep| {
-                        all_targets
-                            .get(dep.as_str())
-                            .is_none_or(|d| !d.status.is_terminal())
-                    })
-                    .map(|dep| format!("🎯{dep}"))
-                    .collect();
-                if unmet.is_empty() {
-                    out.push_str(&format!("🎯{id} {}\n", target.name));
-                } else {
-                    out.push_str(&format!(
-                        "🎯{id} {}  blocked by: {}\n",
-                        target.name,
-                        unmet.join(", "),
-                    ));
-                }
-            }
-            out.push('\n');
-        }
+    out.push_str("## Frontier (unblocked, ready for work)\n\n");
+    out.push_str(REPO_SCOPE_BANNER);
+    if ranked.is_empty() {
+        out.push_str("(no targets ready for work)\n");
     } else {
-        out.push_str("## Validation errors\n\n");
-        for e in &errors {
-            out.push_str(&format!("- {e}\n"));
+        for rf in &ranked {
+            let ft = rf.target;
+            out.push_str(&format!(
+                "🎯{id} {name}  [{status:?}] — fanout={fan}\n",
+                id = ft.id,
+                name = ft.name,
+                status = ft.status,
+                fan = rf.fanout,
+            ));
+            if frontier_details {
+                render_frontier_detail(&mut out, &ft.id, all_targets);
+            }
+        }
+    }
+    out.push('\n');
+
+    // --- 3. Blocked targets ---
+    let front_ids: HashSet<&str> = ranked.iter().map(|r| r.target.id.as_str()).collect();
+    let blocked: Vec<(&str, &crate::schema::Target)> = active
+        .iter()
+        .filter(|(id, _)| !front_ids.contains(**id))
+        .map(|(&id, t)| (id, *t))
+        .collect();
+
+    if !blocked.is_empty() {
+        out.push_str("## Blocked targets\n\n");
+        for (id, target) in &blocked {
+            let unmet: Vec<String> = target
+                .depends_on
+                .iter()
+                .filter(|dep| {
+                    all_targets
+                        .get(dep.as_str())
+                        .is_none_or(|d| !d.status.is_terminal())
+                })
+                .map(|dep| format!("🎯{dep}"))
+                .collect();
+            if unmet.is_empty() {
+                out.push_str(&format!("🎯{id} {}\n", target.name));
+            } else {
+                out.push_str(&format!(
+                    "🎯{id} {}  blocked by: {}\n",
+                    target.name,
+                    unmet.join(", "),
+                ));
+            }
         }
         out.push('\n');
     }
@@ -1793,6 +1936,29 @@ mod t50_t53_tests {
         assert!(!text_mentions_target_id("after t1.2 lands", "T1"));
         assert!(text_mentions_target_id("after t1 lands", "T1"));
         assert!(text_mentions_target_id("uses 🎯t1.2 output", "T1.2"));
+    }
+
+    #[test]
+    fn fake_edge_id_scan_survives_multibyte_utf8() {
+        // A rejected `🎯t1` hit must not step into the middle of the 4-byte
+        // emoji on the next iteration (the orthograph panic, 2026-08-08).
+        assert!(!text_mentions_target_id("uses 🎯t1.2 output", "T1"));
+        assert!(!text_mentions_target_id("blocked on 🎯t10", "T1"));
+        assert!(!text_mentions_target_id(
+            "🎯t1.2 and 🎯t7.2 and 🎯t8.1",
+            "T1"
+        ));
+        // A later genuine mention is still found after a rejected hit.
+        assert!(text_mentions_target_id("🎯t1.2 then 🎯t1 lands", "T1"));
+        assert!(text_mentions_target_id("🎯t1.2 then t1 lands", "T1"));
+        // Rejected hit ending the string, and non-emoji multi-byte text.
+        assert!(!text_mentions_target_id("blocked on 🎯t1.2", "T1"));
+        assert!(text_mentions_target_id("naïve — 🎯t1.2 → 🎯t1", "T1"));
+        // Degenerate empty id (malformed ledger with an empty target key):
+        // the empty needle is rejected at every position including
+        // end-of-string, which must terminate rather than step past the end.
+        assert!(!text_mentions_target_id("abc", ""));
+        assert!(!text_mentions_target_id("abc🎯x9", ""));
     }
 
     #[test]

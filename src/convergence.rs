@@ -31,9 +31,10 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
+use crate::bounded::{BoundedError, GIT_QUERY_TIMEOUT, bounded_output, git_query};
 use crate::git_commit;
 use crate::graph;
 use crate::schema::TargetsFile;
@@ -74,7 +75,33 @@ pub fn convergence(
     // on a freshly-mutated yaml. Best-effort: a no-git or hook-rejected
     // case leaves the file dirty and the invariants block fires as
     // before.
-    git_commit::auto_commit_yaml(file_path);
+    //
+    // Skipped entirely when the caller skipped invariants (🎯T62). The
+    // only reason to commit here is to keep the dirty-tree check happy,
+    // so with that check not running there is nothing to keep happy —
+    // and `git commit` fires the repository's `pre-commit` hook, which
+    // is arbitrary project code. `skip_invariants=true` is what a caller
+    // reaches for precisely when the project's own checks are the
+    // suspect, so it must not run any of them by the back door: that is
+    // how the originally-reported hang survived a skip_invariants retry.
+    //
+    // A *killed* step is different from a rejected one and gets its own
+    // line in the report: when a hook blocks — waiting on a lock, a
+    // pinentry prompt, a network mount — the invariants section below
+    // reports a dirty tree with no visible cause. Naming the killed step
+    // turns a baffling failure into an actionable one.
+    if !skip_invariants
+        && let git_commit::AutoCommitOutcome::TimedOut { step, secs } =
+            git_commit::auto_commit_yaml(file_path)
+    {
+        out.push_str(&format!(
+            "## Auto-commit\n\n⚠ `git {step}` of `{}` timed out after {secs}s and was killed — \
+             the file is still dirty, so the invariants check below may report a dirty tree. \
+             Run `git {step}` by hand to see what blocked (a `pre-commit` hook, a held \
+             `index.lock`, or a signing prompt are the usual causes).\n\n",
+            file_path.display(),
+        ));
+    }
 
     // --- 1. Invariants (project-supplied hook) ---
     //
@@ -298,27 +325,6 @@ fn run_invariants_command(argv: &[String], repo_root: &Path, out: &mut String) -
     run_invariants_command_with_timeout(argv, repo_root, out, INVARIANTS_HOOK_TIMEOUT)
 }
 
-/// SIGKILL the process group led by `pid`. The hook is spawned with
-/// `process_group(0)`, so `pid` is also the group id and `kill -KILL
-/// -<pid>` reaps the whole tree (e.g. a `go test` child stuck on a DB
-/// connection, not just the `make` parent). Shelling out to `kill` keeps
-/// this dependency-free — bullseye already shells to git/gh. Best-effort
-/// and Unix-only; elsewhere the timeout still returns and the orphan is
-/// left to the OS.
-fn kill_process_group(pid: u32) {
-    #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .arg("-KILL")
-            .arg(format!("-{pid}"))
-            .status();
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-    }
-}
-
 /// Run the invariants hook, bounding it at `timeout`. On expiry the
 /// hook's whole process group is killed and a
 /// [`InvariantsResult::TimedOut`] is returned instead of blocking
@@ -330,63 +336,12 @@ fn run_invariants_command_with_timeout(
     out: &mut String,
     timeout: Duration,
 ) -> InvariantsResult {
-    use std::sync::mpsc;
-
     let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..])
-        .current_dir(repo_root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // Own process group so the whole tree can be signalled on timeout —
-    // killing `make` alone would orphan the child that's actually stuck.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
+    cmd.args(&argv[1..]).current_dir(repo_root);
 
-    let child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            out.push_str(&format!(
-                "## Invariants\n\n⚠ failed to run `{}`: {e}\n\n",
-                argv.join(" "),
-            ));
-            return InvariantsResult::SpawnFailed {
-                error: e.to_string(),
-            };
-        }
-    };
-
-    // With process_group(0) the child leads a new group whose pgid equals
-    // its pid; capture it before the Child moves into the waiter thread.
-    let pid = child.id();
-
-    // wait_with_output drains both pipes and waits for exit; run it on a
-    // thread so the main thread can enforce the timeout via recv_timeout.
-    let (tx, rx) = mpsc::channel();
-    let waiter = std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-
-    let output = match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
-            out.push_str(&format!(
-                "## Invariants\n\n⚠ failed to run `{}`: {e}\n\n",
-                argv.join(" "),
-            ));
-            return InvariantsResult::SpawnFailed {
-                error: e.to_string(),
-            };
-        }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            kill_process_group(pid);
-            // On Unix the kill lets the waiter's wait_with_output return
-            // promptly; detach rather than join so a non-Unix best-effort
-            // kill can't reintroduce a hang.
-            drop(waiter);
-            let secs = timeout.as_secs();
+    let output = match bounded_output(&mut cmd, timeout) {
+        Ok(output) => output,
+        Err(BoundedError::TimedOut { secs }) => {
             out.push_str(&format!(
                 "## Invariants\n\n⚠ invariants hook `{}` timed out after {secs}s and was \
                  killed — invariants are **unknown** for this run.\n\n\
@@ -395,10 +350,13 @@ fn run_invariants_command_with_timeout(
             ));
             return InvariantsResult::TimedOut { secs };
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            out.push_str("## Invariants\n\n⚠ invariants hook runner exited unexpectedly.\n\n");
+        Err(e) => {
+            out.push_str(&format!(
+                "## Invariants\n\n⚠ failed to run `{}`: {e}\n\n",
+                argv.join(" "),
+            ));
             return InvariantsResult::SpawnFailed {
-                error: "invariants waiter thread disconnected".to_string(),
+                error: e.to_string(),
             };
         }
     };
@@ -502,32 +460,25 @@ pub fn detect_unreleased_fixes(repo_root: &Path) -> Vec<UnreleasedFix> {
     // Latest tag. If there are no tags yet, everything is technically
     // "unreleased", but we don't want to flag a pre-release project
     // as having unreleased fixes — there's nothing to ship against.
-    let tag_out = Command::new("git")
-        .args(["describe", "--tags", "--abbrev=0"])
-        .current_dir(repo_root)
-        .output();
-    let Ok(tag_out) = tag_out else {
+    let Some(tag_out) = git_query(
+        repo_root,
+        &["describe", "--tags", "--abbrev=0"],
+        GIT_QUERY_TIMEOUT,
+    ) else {
         return Vec::new();
     };
-    if !tag_out.status.success() {
-        return Vec::new();
-    }
-    let tag = String::from_utf8_lossy(&tag_out.stdout).trim().to_string();
+    let tag = tag_out.trim().to_string();
     if tag.is_empty() {
         return Vec::new();
     }
 
-    let log_out = Command::new("git")
-        .args(["log", "--oneline", "--no-merges", &format!("{tag}..HEAD")])
-        .current_dir(repo_root)
-        .output();
-    let Ok(log_out) = log_out else {
+    let Some(log) = git_query(
+        repo_root,
+        &["log", "--oneline", "--no-merges", &format!("{tag}..HEAD")],
+        GIT_QUERY_TIMEOUT,
+    ) else {
         return Vec::new();
     };
-    if !log_out.status.success() {
-        return Vec::new();
-    }
-    let log = String::from_utf8_lossy(&log_out.stdout);
     log.lines()
         .filter_map(parse_oneline)
         .filter(|f| is_fix_commit(&f.subject))
@@ -543,13 +494,12 @@ pub fn detect_unreleased_fixes(repo_root: &Path) -> Vec<UnreleasedFix> {
 /// convergence remains useful in partially configured repos.
 pub fn detect_release_freeze(repo_root: &Path) -> Option<String> {
     let mut roots = vec![repo_root.to_path_buf()];
-    if let Ok(output) = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(repo_root)
-        .output()
-        && output.status.success()
-    {
-        let git_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let Some(output) = git_query(
+        repo_root,
+        &["rev-parse", "--show-toplevel"],
+        GIT_QUERY_TIMEOUT,
+    ) {
+        let git_root = output.trim().to_string();
         if !git_root.is_empty() {
             let git_root = Path::new(&git_root).to_path_buf();
             if !roots.iter().any(|r| r == &git_root) {
@@ -651,19 +601,16 @@ pub fn partition_by_release_surface(
 
 /// True when any path in the commit matches a release-surface prefix.
 pub fn commit_touches_surface(repo_root: &Path, hash: &str, prefixes: &[String]) -> bool {
-    let out = Command::new("git")
-        .args(["show", "--name-only", "--pretty=format:", hash])
-        .current_dir(repo_root)
-        .output();
-    let Ok(out) = out else {
+    let text = match git_query(
+        repo_root,
+        &["show", "--name-only", "--pretty=format:", hash],
+        GIT_QUERY_TIMEOUT,
+    ) {
+        Some(text) => text,
         // Fail open: if we can't inspect the commit, treat as surface-touching
         // so we don't silently drop a real fix recommendation.
-        return true;
+        None => return true,
     };
-    if !out.status.success() {
-        return true;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
     for line in text.lines() {
         let path = line.trim().trim_start_matches("./");
         if path.is_empty() {
@@ -739,13 +686,12 @@ pub fn detect_release_policy(repo_root: &Path) -> ReleasePolicy {
 /// under repo_root or git top-level.
 pub fn detect_profile_name(repo_root: &Path) -> Option<String> {
     let mut roots = vec![repo_root.to_path_buf()];
-    if let Ok(output) = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(repo_root)
-        .output()
-        && output.status.success()
-    {
-        let git_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let Some(output) = git_query(
+        repo_root,
+        &["rev-parse", "--show-toplevel"],
+        GIT_QUERY_TIMEOUT,
+    ) {
+        let git_root = output.trim().to_string();
         if !git_root.is_empty() {
             let git_root = Path::new(&git_root).to_path_buf();
             if !roots.iter().any(|r| r == &git_root) {
@@ -927,15 +873,19 @@ fn render_next_action(
     // the full rule. `momentum` is intentionally not consumed here —
     // it's a portfolio-scope input, not a repo-level signal.
     let _ = momentum;
-    let errors = graph::validate_blocking(file);
-    if !errors.is_empty() {
-        out.push_str(
-            "**Blocked**: targets file has validation errors (see above). Fix the graph \
-             before proceeding.\n",
-        );
-        return;
+    // 🎯T64: validation errors degrade the recommendation instead of
+    // withholding it. The invalid targets are skipped and named; if
+    // everything healthy is still blocked, that is reported below on
+    // its own terms.
+    let tolerant = graph::frontier_tolerant(file);
+    if !tolerant.is_clean() {
+        out.push_str(&format!(
+            "**Note**: {} target(s) failed validation and were skipped (see above). \
+             The recommendation below covers the rest of the graph.\n\n",
+            tolerant.issues.len(),
+        ));
     }
-    let front = graph::frontier(file);
+    let front = tolerant.targets;
     if front.is_empty() {
         out.push_str(
             "**Blocked**: no unblocked frontier targets. All active targets are blocked by \

@@ -409,6 +409,97 @@ fn default_origin() -> String {
     "manual".to_string()
 }
 
+/// One field whose presence is legal only under particular statuses
+/// (🎯T64).
+///
+/// This table is the **single owner** of the "which fields are legal
+/// for status X" question. Both halves of the invariant read from it:
+/// [`Target::illegal_status_scoped_fields`] (what validation rejects)
+/// and [`Target::clear_illegal_status_scoped_fields`] (what a status
+/// transition must drop). Adding a new status-scoped field means adding
+/// one row here — validation and transition hygiene then cover it
+/// automatically, so a future field cannot be forgotten on one side.
+///
+/// Motivating incident (2026-08-10, jevons ledger): `set_aside_reason`
+/// survived a set_aside → reopen → achieve walk because `revert` cleared
+/// `attestation` and `achieved` by hand and nobody remembered the third
+/// field. Validation then rejected the target permanently.
+pub struct StatusScopedField {
+    /// Field name as it appears in YAML and in validation messages.
+    pub name: &'static str,
+    /// Human phrase naming where the field is legal, e.g. `"status
+    /// achieved"`. Rendered as "{name} is only valid on {legal_where}".
+    pub legal_where: &'static str,
+    legal_on: fn(Status) -> bool,
+    present: fn(&Target) -> bool,
+    clear: fn(&mut Target),
+}
+
+impl StatusScopedField {
+    /// Whether this field may be set on a target with `status`.
+    pub fn is_legal_on(&self, status: Status) -> bool {
+        (self.legal_on)(status)
+    }
+
+    /// Whether `target` currently carries a value for this field.
+    pub fn is_present(&self, target: &Target) -> bool {
+        (self.present)(target)
+    }
+
+    /// Drop this field's value from `target`.
+    pub fn clear(&self, target: &mut Target) {
+        (self.clear)(target)
+    }
+}
+
+/// Every status-scoped field pair the schema enforces (🎯T64).
+///
+/// Order matters only for the order validation errors are reported in.
+pub const STATUS_SCOPED_FIELDS: &[StatusScopedField] = &[
+    StatusScopedField {
+        name: "set_aside_reason",
+        legal_where: "status set_aside",
+        legal_on: |s| s == Status::SetAside,
+        present: |t| t.set_aside_reason.is_some(),
+        clear: |t| t.set_aside_reason = None,
+    },
+    StatusScopedField {
+        name: "attestation",
+        legal_where: "status achieved",
+        legal_on: |s| s == Status::Achieved,
+        present: |t| t.attestation.is_some(),
+        clear: |t| t.attestation = None,
+    },
+    StatusScopedField {
+        name: "achieved",
+        legal_where: "status achieved",
+        legal_on: |s| s == Status::Achieved,
+        present: |t| t.achieved.is_some(),
+        clear: |t| t.achieved = None,
+    },
+    StatusScopedField {
+        name: "owned_by",
+        legal_where: "active targets",
+        legal_on: |s| !s.is_terminal(),
+        present: |t| t.owned_by.is_some(),
+        clear: |t| t.owned_by = None,
+    },
+    StatusScopedField {
+        name: "postponed_until",
+        legal_where: "active targets",
+        legal_on: |s| !s.is_terminal(),
+        present: |t| t.postponed_until.is_some(),
+        clear: |t| t.postponed_until = None,
+    },
+    StatusScopedField {
+        name: "postpone_predicate",
+        legal_where: "active targets",
+        legal_on: |s| !s.is_terminal(),
+        present: |t| t.postpone_predicate.is_some(),
+        clear: |t| t.postpone_predicate = None,
+    },
+];
+
 impl Target {
     /// Whether this target is active — neither achieved nor set
     /// aside. Active targets are the ones the frontier can surface
@@ -416,6 +507,65 @@ impl Target {
     pub fn is_active(&self) -> bool {
         !self.status.is_terminal()
     }
+
+    /// Fields this target carries that its current status forbids
+    /// (🎯T64). Empty for a well-formed target.
+    pub fn illegal_status_scoped_fields(&self) -> Vec<&'static StatusScopedField> {
+        STATUS_SCOPED_FIELDS
+            .iter()
+            .filter(|f| f.is_present(self) && !f.is_legal_on(self.status))
+            .collect()
+    }
+
+    /// Drop every field the current status forbids, returning the
+    /// names cleared (🎯T64).
+    ///
+    /// Call this **after** setting `status`, from every op that moves a
+    /// target between statuses. It is the one place transition hygiene
+    /// lives: an op that sets a status and calls this cannot leave
+    /// residue behind, whatever fields the schema grows later.
+    ///
+    /// The dropped values are not relocated. A `set_aside_reason` on an
+    /// achieved target, or an `attestation` on a reverted one, describes
+    /// a disposition that no longer holds; the audit trail lives in the
+    /// target's `context` (which `achieve` / `revert` / `defer` append
+    /// to) and in the git history of `bullseye.yaml`.
+    pub fn clear_illegal_status_scoped_fields(&mut self) -> Vec<&'static str> {
+        let mut cleared = Vec::new();
+        for field in STATUS_SCOPED_FIELDS {
+            if field.is_present(self) && !field.is_legal_on(self.status) {
+                field.clear(self);
+                cleared.push(field.name);
+            }
+        }
+        cleared
+    }
+}
+
+/// Self-heal status-scoped residue already on disk (🎯T64).
+///
+/// Called from [`crate::store::load`] alongside
+/// [`migrate_gates_to_depends_on`], and for the same reason: a file
+/// written by an older binary (or by a hand edit) can carry state the
+/// current schema rejects, and a ledger that only a hand edit can repair
+/// is a ledger the tools have failed. Healing at load means a bricked
+/// file reads correctly immediately and is repaired on disk by the next
+/// save — including `bullseye_commit op=rehash`, which exists to do
+/// exactly that load-and-save round trip without any other change.
+///
+/// Returns one note per cleared field, for callers that want to report
+/// the repair.
+pub fn heal_status_scoped_residue(file: &mut TargetsFile) -> Vec<String> {
+    let mut notes = Vec::new();
+    for (id, target) in file.targets.iter_mut() {
+        let status = target.status;
+        for name in target.clear_illegal_status_scoped_fields() {
+            notes.push(format!(
+                "{id}: cleared {name} — not legal on status {status:?} (🎯T64 self-heal)"
+            ));
+        }
+    }
+    notes
 }
 
 /// A single executable check attached to a target.

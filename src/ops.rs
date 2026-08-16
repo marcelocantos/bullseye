@@ -60,10 +60,14 @@ pub fn revert(
     }
 
     target.status = Status::Converging;
-    target.achieved = None;
-    // Achieved-only field (🎯T58); clear so a later re-achieve must
-    // supply a fresh attestation rather than reusing a stale one.
-    target.attestation = None;
+    // Drop every field the new status forbids (🎯T64) — the achieved
+    // date and the achieved-only attestation (🎯T58, so a later
+    // re-achieve must supply a fresh one), plus anything else the
+    // schema scopes to a status this target has just left. Hand-listing
+    // the fields here is what let `set_aside_reason` survive a
+    // set_aside → reopen → achieve walk and permanently invalidate the
+    // target; `schema::STATUS_SCOPED_FIELDS` now owns the list.
+    target.clear_illegal_status_scoped_fields();
 
     let trimmed = reason.trim();
     if !trimmed.is_empty() {
@@ -473,6 +477,7 @@ pub fn subdivide(
             }
             if parent.status == Status::Identified {
                 parent.status = Status::Converging;
+                parent.clear_illegal_status_scoped_fields();
                 parent_status_changed = true;
             }
         }
@@ -529,6 +534,7 @@ pub fn subdivide(
                 .get_mut(parent_id)
                 .expect("parent existence checked above");
             parent.status = Status::Achieved;
+            parent.clear_illegal_status_scoped_fields();
             parent.achieved = Some(today);
             parent_status_changed = parent_prior_status != Status::Achieved;
             if let Some(reason) = trimmed_reason {
