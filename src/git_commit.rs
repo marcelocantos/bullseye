@@ -272,6 +272,12 @@ pub fn auto_commit_yaml_with_timeouts(
         }
         GitStep::TimedOut { secs } => {
             set_own_commit(&repo_top, pathspec_str, None);
+            // SIGTERM usually lets git drop `.git/index.lock`. A
+            // process that ignores TERM is SIGKILL'd, and git then
+            // never runs that cleanup — leaving the lock wedges every
+            // later git call in the repo. Best-effort unlink after a
+            // killed commit; the file is dirty either way.
+            let _ = std::fs::remove_file(repo_top.join(".git/index.lock"));
             timed_out(path, "commit", secs)
         }
         GitStep::Failed => {

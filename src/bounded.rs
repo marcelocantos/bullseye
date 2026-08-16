@@ -133,6 +133,11 @@ pub fn bounded_output(cmd: &mut Command, timeout: Duration) -> Result<Output, Bo
             signal_process_group(pid, "TERM");
             if rx.recv_timeout(TERMINATION_GRACE).is_err() {
                 signal_process_group(pid, "KILL");
+                // Let the waiter observe the death so callers that
+                // inspect leftover files (git's index.lock) see a
+                // settled tree rather than a process that has not
+                // yet been reaped.
+                let _ = rx.recv_timeout(Duration::from_millis(200));
             }
             // On Unix the signal lets the waiter's wait_with_output return
             // promptly; detach rather than join so a non-Unix best-effort
