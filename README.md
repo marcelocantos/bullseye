@@ -13,11 +13,28 @@ Discovery checks both locations and uses whichever already exists. See
 
 ## Installation
 
+Installation is a **multi-step process** — it is not complete until
+the binary is installed, the MCP client is registered, the session
+is restarted, and a tool call succeeds. Stopping after `brew
+install` leaves a binary on disk that no agent can talk to.
+
 Recommended (Homebrew, macOS / Linux):
 
 ```bash
 brew install marcelocantos/tap/bullseye
 ```
+
+Then register the stdio MCP server (pick the client you use):
+
+```bash
+claude mcp add --scope user bullseye -- bullseye
+# or
+grok mcp add --scope user bullseye -- bullseye
+```
+
+Restart the agent session, then verify with `bullseye --version`
+and a `bullseye_open` call. There is no HTTP port and no
+`brew services` definition — do not probe with `curl`.
 
 Or from source:
 
@@ -35,11 +52,14 @@ If you'd rather have your coding agent set this up, paste the
 following prompt into the agent:
 
 ```
-Install bullseye from https://github.com/marcelocantos/bullseye:
+Install bullseye from https://github.com/marcelocantos/bullseye.
+Installation is not complete until every step succeeds:
 1. brew install marcelocantos/tap/bullseye
-2. claude mcp add --scope user bullseye -- bullseye
+2. Register the stdio MCP server (not HTTP, no port):
+   - Claude: claude mcp add --scope user bullseye -- bullseye
+   - Grok:   grok mcp add --scope user bullseye -- bullseye
 3. Restart this session (the MCP registration only takes effect on the next session start).
-4. Verify by calling bullseye_startup_context with cwd set to my current project.
+4. Verify: bullseye --version, then call bullseye_open with cwd set to my current project.
 
 Then read https://raw.githubusercontent.com/marcelocantos/bullseye/master/docs/agents-guide.md
 for the full agent guide.
@@ -64,6 +84,7 @@ Or via the CLI:
 
 ```bash
 claude mcp add --scope user bullseye -- bullseye
+grok mcp add --scope user bullseye -- bullseye
 ```
 
 The server communicates over stdio using the MCP protocol.
@@ -165,7 +186,7 @@ names remain as shims. Full contract: [docs/api-v1-core.md](docs/api-v1-core.md)
 |------|-------------|
 | `bullseye_open` | Discover / init / session snapshot |
 | `bullseye_query` | Reads — `view`: context (default), frontier, target, list, summary, graph, validate |
-| `bullseye_commit` | Writes — `op`: track, block, split, achieve, defer, reopen. Mutation results include `ids`, `changed`, refreshed `frontier`. |
+| `bullseye_commit` | Writes — `op`: track, block, split, achieve, defer, reopen, assign, unassign, postpone, wake, rehash. Mutation results include `ids`, `changed`, refreshed `frontier`. |
 | `bullseye_plan_checks` | Plan-only mapping of a target's `checks` to sawmill invocations (does not run them) |
 
 CLI twins: `bullseye open|query|commit|plan-checks`.
@@ -207,6 +228,10 @@ Extended (cron / fleet):
 |------------|---------|
 | `bullseye sync-priorities` | Scan the workspace, compute the portfolio frontier, and upsert each frontier target into a SQLite `targets_priorities` table. Designed for periodic invocation from cron or a daemon hook. See [mcp-triad.md §7](docs/mcp-triad.md) for the Protocol-app sync chain. |
 | `bullseye github sync` | Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the `gh` CLI (so authentication is your existing `gh` session — no token stored). Mirrored issues become `GH<n>` targets, keyed by the issue number; closing/reopening a mirrored target closes/reopens its issue. |
+| `bullseye convergence` | Invariants hook + unreleased fixes + frontier recommendation (`--cwd`, `--skip-invariants`, `--momentum`). |
+| `bullseye portfolio` | Cross-repo portfolio summary. |
+| `bullseye import` | Import targets from markdown. |
+| `bullseye resolve` | Resolve a partial repo reference to an absolute path. |
 
 Example crontab entry (every 30 minutes):
 
@@ -255,7 +280,7 @@ cargo clippy         # Lint
 cargo fmt --check    # Check formatting
 ```
 
-See [CLAUDE.md](CLAUDE.md) for architecture details.
+See [AGENTS.md](AGENTS.md) for architecture details.
 
 ## License
 

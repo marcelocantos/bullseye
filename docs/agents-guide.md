@@ -26,10 +26,16 @@ but no MCP client can talk to it.
    ```bash
    brew install marcelocantos/tap/bullseye
    ```
-2. **Register the MCP server with your agent.**
+2. **Register the MCP server with your agent.** Bullseye is
+   **stdio-only** — there is no HTTP port and no `brew services`
+   definition. Do not use `--transport http` or `localhost:<port>`.
    For Claude Code:
    ```bash
    claude mcp add --scope user bullseye -- bullseye
+   ```
+   For Grok:
+   ```bash
+   grok mcp add --scope user bullseye -- bullseye
    ```
    For other MCP clients, add this block to the client's config
    (usually `.mcp.json` at project scope or the equivalent user-scope
@@ -47,12 +53,14 @@ but no MCP client can talk to it.
 3. **Restart the agent session.** MCP server registration only takes
    effect on the next session start. Tools added in this step are not
    visible to the running session.
-4. **Verify end-to-end.** In a fresh session, call
-   `bullseye_startup_context` with `cwd` set to any project — it
-   should return either a context summary, an init prompt for repos
-   with no `bullseye.yaml`, or a graceful "no targets file found"
-   notice. Any of those confirms the server is responding through
-   the MCP transport.
+4. **Verify end-to-end.** First run `bullseye --version` — a v0.45.0+
+   binary prints `bullseye 0.45.0 (<12-hex>)` (crate version plus
+   build provenance). Then in a fresh session call `bullseye_open`
+   with `cwd` set to any project — it should return either a context
+   summary, an init prompt for repos with no `bullseye.yaml`, or a
+   graceful "no targets file found" notice. Any of those confirms the
+   server is responding through the MCP transport. Do **not** use
+   `curl` to probe the process: there is no HTTP endpoint.
 
 Repository: <https://github.com/marcelocantos/bullseye>
 
@@ -969,6 +977,53 @@ bullseye_verify(cwd, id) → structured plan mapping the target's
 bullseye_startup_context(cwd) → project context at session start
 bullseye_portfolio()          → cross-repo portfolio summary
 ```
+
+## Gotchas
+
+These are live caveats for the **current** binary. If you are seeing
+the old failure, the installed binary is older than this guide —
+`brew upgrade marcelocantos/tap/bullseye` and restart the session.
+
+- **`char boundary; it is inside '🎯'` (🎯T63).** A v0.44.0-or-older
+  binary panics in `text_mentions_target_id` on multi-byte UTF-8
+  (typically a `🎯` in consumer text). The panic kills the MCP
+  request, which looks like a hang. It is not a hang and not a new
+  ledger bug — upgrade. v0.45.0+ advances by UTF-8 character length
+  and does not panic.
+- **A never-returning `bullseye_convergence` (🎯T62).** Every
+  subprocess bullseye launches is wall-clock bounded. A timeout is
+  reported as an error (or invariants-unknown), not silence. If a
+  call never returns, you are on an old binary or the stall is on
+  the client side.
+- **`set_aside_reason` on an achieved target (🎯T64).** Status
+  transitions used to leave fields the schema then rejected, bricking
+  every read of the ledger. v0.45.0+ self-heals illegal residue on
+  load; `op=rehash` persists the repair. Reads degrade (banner +
+  `INVALID` annotations); only `view=validate` hard-fails. See
+  [api-v1-core.md](api-v1-core.md).
+- **A cited commit SHA vanished (🎯T72).** Auto-commit amends only a
+  ledger commit *this process* created. Another agent's SHA stays
+  reachable. Residual: consecutive CLI invocations each get a fresh
+  commit, because ownership is process-scoped.
+- **`--version` is not just the crate version (🎯T69).** Workspace
+  and Homebrew builds of v0.45.0+ print
+  `bullseye 0.45.0 (<12-hex>[-dirty])`. Bare `bullseye 0.44.0` is the
+  pre-provenance Homebrew binary. Use this to tell a fixed tree from
+  a same-number release.
+- **The installed binary can lag source (🎯T68).** `cargo test`
+  builds the binary it tests. A fix on master is not on the agent
+  path until a release is published and `brew upgrade` installs it.
+  `BULLSEYE_REACHABILITY_CHECK=skip` opts the local probe out;
+  CI's published-release job is the delivery oracle.
+- **Do not predict the next target ID.** On create, the allocated ID
+  is knowable only from the mutation envelope's `ids:` field. Scanning
+  the file for `max(T*)` is a TOCTOU race under concurrency.
+- **Achieved targets are immutable.** Content patches are rejected;
+  reopen (`op=reopen` / `bullseye_revert`) then edit. Do not hand-edit
+  `achieved:` dates.
+- **Cross-clone `T{n}` collisions are accepted.** Auto IDs are short
+  sequential over live keys ∪ git history of *this* clone. Resolve
+  collisions by hand when they matter.
 
 ## Agent integration
 

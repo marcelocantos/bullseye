@@ -1,0 +1,39 @@
+Third-party notices
+===================
+
+This file attributes bundled and vendored third-party code shipped with
+bullseye. The project itself is Apache-2.0 (see LICENSE).
+
+Vendored crates
+---------------
+
+The trees under vendor/ are copies of crates.io packages with a
+minimal local patch (tokio feature trim; see vendor/README.md).
+Each tree retains its upstream LICENSE.
+
+### rust-mcp-sdk 0.9.0 (MIT)
+
+Copyright (c) 2025 Rust MCP Stack (rust-mcp-sdk)
+
+Full licence text: vendor/rust-mcp-sdk/LICENSE
+
+### rust-mcp-transport 0.9.0 (MIT)
+
+Copyright (c) 2025 Rust MCP Stack (rust-mcp-transport)
+
+Full licence text: vendor/rust-mcp-transport/LICENSE
+
+Build-time embed
+----------------
+
+### SQLite (public domain / blessing)
+
+The default `sqlite` Cargo feature builds rusqlite with the
+`bundled` feature, which compiles the SQLite amalgamation into the
+binary. SQLite is in the public domain (https://sqlite.org/copyright.html).
+The amalgamation is not vendored in this tree; it arrives via crates.io
+at build time.
+
+Crate dependencies pulled from crates.io at build time carry their
+own licences in Cargo.lock / crates.io metadata and are not copied
+into this repository.

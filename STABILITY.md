@@ -9,8 +9,39 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of 🎯T59–T61 (graph hygiene + create defaults) on the T41/T50–T57 base.
+Snapshot as of 🎯T62–T72 (hang bounds, UTF-8, ledger heal, CLI parity,
+provenance, SHA-stable amends) on the T41/T50–T61 base.
 Changes affecting the interaction surface, newest first:
+
+- **Hang bounds, UTF-8 panic, ledger heal, CLI parity, provenance**
+  (🎯T62–T72). Reliability and delivery surface that ships in v0.45.0.
+  - **T62:** Every production subprocess is wall-clock bounded
+    (`src/bounded.rs`). A hung hook or git step is killed and
+    reported; `bullseye_convergence` no longer hangs the MCP budget.
+    Residual: bounds are per-step constants, not one apportioned
+    deadline.
+  - **T63:** `text_mentions_target_id` advances by UTF-8 character
+    length. A `🎯` in consumer text no longer panics (the panic
+    killed the MCP request and looked like a hang on v0.44.0).
+  - **T64:** Status-scoped fields have a single owner
+    (`STATUS_SCOPED_FIELDS`). Transitions clear illegal residue;
+    `store::load` self-heals; `op=rehash` persists. Reads degrade
+    (banner + `INVALID`); only `validate` hard-fails.
+  - **T65 / T67:** Every MCP tool has a CLI route (`CLI_ROUTES` +
+    `tests/cli_parity_test.rs`). A mistyped subcommand is reported
+    as an unknown *subcommand*, not an unknown flag.
+  - **T68 / T70:** Installed-toolchain and published-release
+    reachability probes (`tests/reachability_test.rs`,
+    `scripts/probe-published-release.sh`). Behavioural, not a
+    version comparison. CI `check` opts the local probe out;
+    the `reachability` job is the delivery oracle.
+  - **T69:** `--version` / help / startup `Binary:` print
+    `CRATE_VERSION (PROVENANCE)` from `build.rs` (12-hex SHA,
+    `-dirty` / `-dirty?` / `unknown`). No omit-on-release path.
+  - **T72:** Auto-commit amends only a ledger commit *this process*
+    created. SHAs shown to another process stay reachable.
+  Additive reliability + CLI wording + version-string shape.
+  Settling clock resets at v0.45.0.
 
 - **Graph-engineering hygiene and create-time location default** (🎯T56
   disposition → 🎯T59, 🎯T60, 🎯T61).
@@ -825,7 +856,10 @@ Planned additions:
   `bullseye_put`'s parameter set. Schema bump + two tools removed +
   one tool added — hard reset of the settling clock to the next
   release tag.
-- **Test coverage for CLI flags**: No tests for --version/--help/--help-agent.
+- **Test coverage for CLI flags**: `--version` and `--help` carry
+  provenance (🎯T69, `tests/version_provenance_test.rs`). `--help-agent`
+  still has no dedicated test (it prints `--help` then the embedded
+  agents-guide).
 
 ## Out of scope for 1.0
 
