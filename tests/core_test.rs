@@ -1024,6 +1024,14 @@ targets:
     discovered: 2026-04-01
 "#;
 
+/// `make bullseye` that is green except for a dirty-tree check that
+/// ignores `bullseye.yaml` at any in-repo path (🎯T73). `$$` is
+/// Makefile escaping so the shell sees `$(git …)` and `'bullseye\.yaml$'`.
+const YAML_IGNORING_MAKEFILE: &str = r#"bullseye:
+	@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \
+	 (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
+"#;
+
 #[test]
 fn convergence_end_to_end_green_invariants_picks_top_frontier() {
     // Full integration: real temp project, real Makefile that exits 0,
@@ -1132,7 +1140,9 @@ fn convergence_end_to_end_skip_invariants_flag_bypasses_hook() {
 
 /// Set up `tmp` as a git repo whose `pre-commit` hook blocks forever,
 /// with `bullseye.yaml` dirty — the shape that hung convergence in
-/// 🎯T62. Returns nothing; the repo is left mid-mutation on purpose.
+/// 🎯T62 when step 0 auto-committed. 🎯T73 removed that step; the
+/// helper still dirties the ledger so tests can prove yaml dirt does
+/// not invoke `git commit`.
 #[cfg(unix)]
 fn write_project_with_blocking_pre_commit_hook(tmp: &std::path::Path, makefile: &str) {
     use std::os::unix::fs::PermissionsExt;
@@ -1166,7 +1176,7 @@ fn write_project_with_blocking_pre_commit_hook(tmp: &std::path::Path, makefile: 
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
 
-    // Dirty the ledger so auto-commit has something to commit.
+    // Dirty the ledger so yaml dirt is present (🎯T73: must not block).
     use std::io::Write;
     writeln!(
         std::fs::OpenOptions::new()
@@ -1181,43 +1191,39 @@ fn write_project_with_blocking_pre_commit_hook(tmp: &std::path::Path, makefile: 
 #[test]
 #[cfg(unix)]
 fn convergence_returns_despite_blocking_pre_commit_hook() {
-    // Regression test for 🎯T62, reproducing the reported symptom: a
-    // repo whose hooks block made bullseye_convergence never answer at
-    // all — no result, no error — because step 0 auto-committed the
-    // ledger through an unbounded `git commit`. The MCP caller's budget
-    // is 120s, so "returns eventually" is not enough: it must return
-    // well inside that, and say why the tree is still dirty.
+    // 🎯T73 inverted 🎯T62's auto-commit hang: bullseye no longer runs
+    // `git commit` before invariants, so a blocking pre-commit hook is
+    // never invoked. Dirty yaml + a hook that ignores the ledger →
+    // invariants pass, no `## Auto-commit` section.
     let tmp = tempfile::tempdir().unwrap();
-    write_project_with_blocking_pre_commit_hook(tmp.path(), "bullseye:\n\t@echo 'ok'\n");
+    write_project_with_blocking_pre_commit_hook(tmp.path(), YAML_IGNORING_MAKEFILE);
 
     let path = tmp.path().join("bullseye.yaml");
     let file = store::load(&path).unwrap();
 
-    // Convergence takes no bounds of its own, so shorten the ones its
-    // auto-commit step uses rather than waiting out the production
-    // two-minute bound. What is under test is the shape of the response,
-    // not the size of the constant.
-    bullseye::git_commit::set_timeout_override(Some((
-        std::time::Duration::from_millis(500),
-        std::time::Duration::from_secs(30),
-    )));
     let start = std::time::Instant::now();
     let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
     let elapsed = start.elapsed();
-    bullseye::git_commit::set_timeout_override(None);
 
     assert!(
         elapsed < std::time::Duration::from_secs(30),
-        "convergence must not wait out a blocking hook; took {elapsed:?}"
+        "convergence must not wait on a pre-commit hook it no longer runs; took {elapsed:?}"
     );
     assert!(
-        out.contains("## Auto-commit") && out.contains("timed out"),
-        "a killed auto-commit must be reported, not silently swallowed; got:\n{out}"
+        !out.contains("## Auto-commit"),
+        "auto-commit rail is gone; got:\n{out}"
     );
-    // Degraded, not aborted: the caller still gets its recommendation.
+    assert!(
+        out.contains("Status: ✅ all green"),
+        "yaml dirt must not fail standing invariants; got:\n{out}"
+    );
     assert!(
         out.contains("## Next action"),
         "convergence must still produce a next action; got:\n{out}"
+    );
+    assert!(
+        !out.contains("**Blocked**"),
+        "yaml dirt must not block next action; got:\n{out}"
     );
 }
 
@@ -1248,6 +1254,238 @@ fn convergence_skip_invariants_runs_no_project_hooks() {
     assert!(
         out.contains("## Next action"),
         "convergence must still produce a next action; got:\n{out}"
+    );
+}
+
+/// Initialise a git repo at `dir` with a non-ledger commit so HEAD is
+/// not a yaml-only commit (🎯T73 fixtures).
+fn t73_git_repo_with_readme(dir: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git invocation failed");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "master"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    let empty = dir.join(".git/empty-hooks");
+    std::fs::create_dir_all(&empty).unwrap();
+    git(&["config", "core.hooksPath", empty.to_str().unwrap()]);
+    std::fs::write(dir.join("README.md"), "# project\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-q", "-m", "init"]);
+}
+
+fn t73_commit_count(dir: &std::path::Path) -> usize {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap_or(0)
+}
+
+fn t73_git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn mutation_does_not_create_yaml_only_git_commit() {
+    // 🎯T73: a real handler mutation in a git repo with a prior
+    // non-ledger commit must not add a yaml-only commit. Ledger
+    // content on disk still reflects the mutation.
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_commit;
+    use bullseye::tools::CommitTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    t73_git_repo_with_readme(tmp.path());
+    let path = store::create_at(tmp.path(), Location::InRepo, "t73").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            bullseye::config::set_external_root_override(None);
+        }
+    }
+    let _cleanup = Cleanup;
+
+    let before = t73_commit_count(tmp.path());
+    let head_before = t73_git(tmp.path(), &["rev-parse", "HEAD"]);
+
+    let result = handle_commit(CommitTool {
+        cwd,
+        op: "track".into(),
+        id: None,
+        child_of: None,
+        name: Some("T73 mutation target".into()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["a".into()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        attestation: None,
+        reason: None,
+        postponed_until: None,
+        postpone_predicate: None,
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    })
+    .expect("track must succeed");
+    let text = text_from_call_result(result);
+    assert!(
+        text.contains("ok: true") && text.contains("Created"),
+        "mutation must be acknowledged; got:\n{text}"
+    );
+
+    assert_eq!(
+        t73_commit_count(tmp.path()),
+        before,
+        "handler mutation must not add a git commit"
+    );
+    assert_eq!(t73_git(tmp.path(), &["rev-parse", "HEAD"]), head_before);
+    let log = t73_git(tmp.path(), &["log", "-1", "--name-only"]);
+    assert!(
+        !log.contains("Update bullseye.yaml"),
+        "HEAD must not be a bullseye-produced yaml-only commit; got:\n{log}"
+    );
+    let head_files: Vec<&str> = log.lines().skip(1).filter(|l| !l.is_empty()).collect();
+    assert_ne!(
+        head_files,
+        vec!["bullseye.yaml"],
+        "HEAD must not touch only bullseye.yaml; files={head_files:?}"
+    );
+
+    let ledger = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        ledger.contains("T73 mutation target"),
+        "ledger on disk must reflect the mutation; got:\n{ledger}"
+    );
+}
+
+#[test]
+fn convergence_dirty_yaml_passes_when_hook_ignores_ledger() {
+    // 🎯T73: dirty in-repo bullseye.yaml + otherwise-green make bullseye
+    // that ignores the ledger → standing invariants pass. Residue: a
+    // dirty non-ledger file still fails if the hook says so.
+    let tmp = tempfile::tempdir().unwrap();
+    write_project(tmp.path(), YAML_IGNORING_MAKEFILE, SIMPLE_TARGETS_YAML);
+    t73_git_repo_with_readme(tmp.path());
+    t73_git(tmp.path(), &["add", "-A"]);
+    t73_git(tmp.path(), &["commit", "-q", "-m", "add ledger"]);
+
+    // Dirty the ledger only.
+    use std::io::Write;
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(tmp.path().join("bullseye.yaml"))
+            .unwrap(),
+        "# touched"
+    )
+    .unwrap();
+
+    let path = tmp.path().join("bullseye.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+    assert!(
+        out.contains("Status: ✅ all green"),
+        "yaml dirt must not fail standing invariants; got:\n{out}"
+    );
+    assert!(!out.contains("**Blocked**"), "got:\n{out}");
+    assert!(!out.contains("## Auto-commit"), "got:\n{out}");
+
+    // Residue: other dirty files still fail.
+    std::fs::write(tmp.path().join("NOTES.txt"), "scratch\n").unwrap();
+    let out_dirty = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+    assert!(
+        out_dirty.contains("Status: ❌ failed") || out_dirty.contains("✗ dirty tree"),
+        "non-ledger dirt must still fail the hook; got:\n{out_dirty}"
+    );
+    let next = out_dirty
+        .split("## Next action")
+        .nth(1)
+        .expect("next action");
+    assert!(
+        next.contains("**Blocked**"),
+        "other dirt must block; got:\n{next}"
+    );
+}
+
+#[test]
+fn convergence_nested_dirty_yaml_passes_when_hook_ignores_ledger() {
+    // Nested in-repo path (e.g. hms2/bullseye.yaml) counts as yaml dirt.
+    let tmp = tempfile::tempdir().unwrap();
+    t73_git_repo_with_readme(tmp.path());
+    let nested = tmp.path().join("hms2");
+    std::fs::create_dir_all(&nested).unwrap();
+    write_project(&nested, YAML_IGNORING_MAKEFILE, SIMPLE_TARGETS_YAML);
+    t73_git(tmp.path(), &["add", "-A"]);
+    t73_git(tmp.path(), &["commit", "-q", "-m", "add nested ledger"]);
+
+    use std::io::Write;
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(nested.join("bullseye.yaml"))
+            .unwrap(),
+        "# nested touch"
+    )
+    .unwrap();
+
+    let path = nested.join("bullseye.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, &nested, None, false);
+    assert!(
+        out.contains("Status: ✅ all green"),
+        "nested yaml dirt must not fail standing invariants; got:\n{out}"
+    );
+    assert!(!out.contains("**Blocked**"), "got:\n{out}");
+}
+
+#[test]
+fn repo_makefile_ignores_bullseye_yaml() {
+    let makefile = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Makefile"));
+    assert!(
+        makefile.contains("grep -vE 'bullseye\\.yaml$$'"),
+        "this repo's make bullseye must ignore bullseye.yaml; got:\n{makefile}"
     );
 }
 
@@ -1291,6 +1529,13 @@ fn convergence_missing_makefile_degrades_gracefully() {
     assert!(invariants_text.contains("Makefile"));
     assert!(invariants_text.contains("bullseye:"));
     assert!(invariants_text.contains("unknown"));
+    // 🎯T73: the emitted skeleton's dirty-tree check ignores the ledger.
+    assert!(
+        invariants_text.contains("grep -vE")
+            && (invariants_text.contains("bullseye.yaml")
+                || invariants_text.contains("bullseye\\.yaml")),
+        "missing-hook skeleton must ignore bullseye.yaml; got:\n{invariants_text}"
+    );
 
     // Target snapshot still renders — the frontier has details.
     assert!(out.contains("🎯T1 Primary deliverable"));
@@ -4249,8 +4494,8 @@ fn validate_strategy_valid_passes() {
 /// Run `git -C <dir> <args>` and panic on failure with captured stderr.
 /// Used by the 🎯T24 integration tests to set up parent + submodule
 /// repos and to flip HEAD into a detached state. Identity / hooks
-/// config matches the helpers in `git_commit::tests::git_init` so
-/// commits work in CI without a global gitconfig.
+/// config is set locally so commits work in CI without a global
+/// gitconfig.
 fn t24_run_git(dir: &std::path::Path, args: &[&str]) {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -4326,8 +4571,8 @@ targets:
 
 /// Mutating `bullseye_put` from inside a submodule replica must be
 /// refused with a clear error naming the superproject path. The
-/// submodule worktree must remain at its original commit count — no
-/// auto-commit must land on a dangling local branch.
+/// submodule worktree must remain at its original commit count — the
+/// write is refused before any mutation.
 #[test]
 fn t24_mutation_refused_in_submodule_replica() {
     use bullseye::config;
@@ -4422,8 +4667,8 @@ fn t24_mutation_refused_in_submodule_replica() {
         "error should name the submodule cwd {submodule:?}; got: {msg}",
     );
 
-    // Commit count in the submodule worktree is unchanged — no
-    // auto-commit landed on a dangling branch.
+    // Commit count in the submodule worktree is unchanged — the
+    // mutation was refused before any write.
     assert_eq!(
         t24_commit_count(&submodule),
         commits_before,
@@ -4440,8 +4685,8 @@ fn t24_mutation_refused_in_submodule_replica() {
 }
 
 /// Mutating `bullseye_put` against a repo with detached HEAD must be
-/// refused with a clear error naming the detached state. Auto-commit
-/// onto a dangling local branch would otherwise lose the work.
+/// refused with a clear error naming the detached state. A write on a
+/// checkout with no branch would otherwise lose the work.
 #[test]
 fn t24_mutation_refused_in_detached_head() {
     use bullseye::config;

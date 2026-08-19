@@ -22,8 +22,8 @@ bullseye:
 	@cargo fmt --check >/dev/null && echo "✓ fmt"
 	@cargo clippy --quiet --all-targets -- -D warnings >/dev/null 2>&1 && echo "✓ clippy"
 	@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
-	@test -z "$$(git status --porcelain)" && echo "✓ clean tree" || \
-	 (echo "✗ dirty tree:"; git status --short; exit 1)
+	@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \
+	 (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
 
 # Convenience aliases for common cargo commands.
 test:

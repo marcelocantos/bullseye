@@ -3,13 +3,11 @@
 
 //! Refuse mutations in unsafe repo states (🎯T24).
 //!
-//! When `bullseye_put`/`_retire`/`_revert`/`_set_aside` (or any other
-//! tool that calls [`crate::git_commit::auto_commit_yaml`]) runs from
-//! a directory that turns out to be a *submodule* clone of the target
-//! repo — or a working tree with detached HEAD — the auto-commit step
-//! lands on a branch that nobody pushes. The user later finds the work
-//! "lost" on a dangling local branch in a worktree they didn't realise
-//! was being mutated.
+//! When a mutating tool writes `bullseye.yaml` from a directory that
+//! turns out to be a *submodule* clone of the target repo — or a
+//! working tree with detached HEAD — the ledger lands in a worktree
+//! nobody pushes. The user later finds the work "lost" on a dangling
+//! local branch in a worktree they didn't realise was being mutated.
 //!
 //! This module is the early-refusal step: every mutating handler calls
 //! [`check_mutation_allowed`] before reading or writing the targets
@@ -31,15 +29,15 @@ use std::path::{Path, PathBuf};
 use crate::bounded::{GIT_QUERY_TIMEOUT, git_query};
 
 /// Guard error: the repo containing `bullseye.yaml` is in a state
-/// where auto-committing would silently lose work.
+/// where writing the ledger would silently lose work.
 ///
 /// Render via [`MutationGuard::message`] for the actionable text the
 /// agent (and human reading the error) sees.
 #[derive(Debug, Clone)]
 pub enum MutationGuard {
-    /// The repo is a submodule of another project. Auto-commits land
-    /// on a branch that's local to the submodule worktree, not the
-    /// canonical clone the user expects.
+    /// The repo is a submodule of another project. The write lands
+    /// in the submodule worktree, not the canonical clone the user
+    /// expects.
     Submodule {
         /// Absolute path to the repo containing the discovered
         /// `bullseye.yaml`.
@@ -53,8 +51,8 @@ pub enum MutationGuard {
         suggested_path: Option<PathBuf>,
     },
     /// HEAD is detached (the repo is at a tag, an arbitrary SHA, or a
-    /// dangling commit). Auto-committing creates a fresh local branch
-    /// that goes nowhere.
+    /// dangling commit). The ledger write sits on a checkout with no
+    /// branch and no upstream.
     DetachedHead {
         /// Absolute path to the repo containing the discovered
         /// `bullseye.yaml`.
@@ -80,9 +78,9 @@ impl MutationGuard {
             } => {
                 let mut msg = format!(
                     "bullseye refuses to mutate targets here: the repo at {repo} is a \
-                     submodule of {sup}. Auto-committing the change would land on a \
-                     branch local to this submodule worktree and never reach the \
-                     canonical clone, so the user would later find the work \"lost\".\n\
+                     submodule of {sup}. Writing the ledger here would land in this \
+                     submodule worktree and never reach the canonical clone, so the \
+                     user would later find the work \"lost\".\n\
                      \n\
                      cwd was: {cwd}\n\
                      submodule repo: {repo}\n\
@@ -112,8 +110,8 @@ impl MutationGuard {
                 current_sha,
             } => format!(
                 "bullseye refuses to mutate targets here: the repo at {repo} has \
-                 detached HEAD (currently at {sha}). Auto-committing the change \
-                 would create a dangling local branch with no upstream, so the work \
+                 detached HEAD (currently at {sha}). Writing the ledger here would \
+                 sit on a checkout with no branch and no upstream, so the work \
                  would be invisible to the rest of the project.\n\
                  \n\
                  cwd was: {cwd}\n\
@@ -131,20 +129,20 @@ impl MutationGuard {
 }
 
 /// Refuse the mutation if the repo containing `bullseye.yaml` is in an
-/// unsafe state for auto-committing.
+/// unsafe state for writing the ledger.
 ///
 /// `repo_root` is the directory containing the discovered
-/// `bullseye.yaml` — i.e. the working tree that the auto-commit step
-/// will operate on. NOT the caller's `cwd`, which may sit deeper in
-/// the same tree (or in a different one entirely if the file was
-/// resolved via the external shadow root).
+/// `bullseye.yaml` — i.e. the working tree that would receive the
+/// write. NOT the caller's `cwd`, which may sit deeper in the same
+/// tree (or in a different one entirely if the file was resolved via
+/// the external shadow root).
 ///
 /// Returns:
 ///
 /// - `Ok(())` if the repo is on a named branch in a non-submodule
 ///   working tree — or if `repo_root` isn't inside a git repo at all
-///   (e.g. shadow-root files have no auto-commit semantics in the
-///   first place, so there's nothing to guard).
+///   (e.g. shadow-root files have no git, so there's nothing to
+///   guard).
 /// - `Err(MutationGuard::Submodule { .. })` if `git rev-parse
 ///   --show-superproject-working-tree` returns a non-empty path.
 /// - `Err(MutationGuard::DetachedHead { .. })` if `git symbolic-ref -q
@@ -154,9 +152,8 @@ impl MutationGuard {
 /// detached HEAD reports as Submodule (the more actionable error: fix
 /// the cwd, not the branch).
 pub fn check_mutation_allowed(repo_root: &Path) -> Result<(), MutationGuard> {
-    // No git repo at all → nothing to guard. The auto-commit step
-    // already no-ops in this case (see [`crate::git_commit::auto_commit_yaml`]),
-    // so refusing here would block valid external-shadow-tree usage.
+    // No git repo at all → nothing to guard. Refusing here would
+    // block valid external-shadow-tree usage.
     if !is_git_repo(repo_root) {
         return Ok(());
     }
@@ -303,9 +300,8 @@ mod tests {
     use tempfile::TempDir;
 
     /// Initialise a git repo with a stable identity so commits don't
-    /// depend on the developer's `~/.gitconfig`. Mirrors the helper in
-    /// `git_commit::tests::git_init` — kept local rather than shared so
-    /// the modules stay independently testable.
+    /// depend on the developer's `~/.gitconfig`. Kept local rather than
+    /// shared so the modules stay independently testable.
     fn git_init(dir: &Path) {
         run_git(dir, &["init", "-q", "-b", "master"]);
         run_git(dir, &["config", "user.email", "test@example.com"]);
@@ -346,9 +342,8 @@ mod tests {
 
     #[test]
     fn allows_mutation_outside_git_repo() {
-        // No `.git` here at all. The auto-commit step itself no-ops in
-        // this case, so the guard must not refuse — refusing would
-        // break legitimate external-shadow-tree usage where the
+        // No `.git` here at all. The guard must not refuse — refusing
+        // would break legitimate external-shadow-tree usage where the
         // bullseye.yaml lives outside any working tree.
         let tmp = TempDir::new().unwrap();
         check_mutation_allowed(tmp.path()).expect("non-git dir should pass");

@@ -9,9 +9,20 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of 🎯T62–T72 (hang bounds, UTF-8, ledger heal, CLI parity,
-provenance, SHA-stable amends) on the T41/T50–T61 base.
+Snapshot as of 🎯T73 (no yaml-only auto-commit; dirty ledger does not
+block standing invariants) on the T62–T72 base.
 Changes affecting the interaction surface, newest first:
+
+- **Bullseye does not commit `bullseye.yaml`** (🎯T73; 🎯T22/T72
+  auto-commit rail retired). Mutating tools write the file and leave
+  it dirty. `bullseye_convergence` does not `git commit` before
+  invariants. Standing-invariants dirty-tree checks ignore
+  `bullseye.yaml` (root and nested in-repo paths) so yaml dirt is
+  not a blocking dirty-tree. Durability is a different rail: `/commit`
+  always stages a dirty in-repo ledger, `/push` refuses if it is still
+  dirty. The T72 own-commit amend path is gone, not retained as dead
+  code. No `git_commit` module; no callable path that can still create
+  `Update bullseye.yaml`.
 
 - **Hang bounds, UTF-8 panic, ledger heal, CLI parity, provenance**
   (🎯T62–T72). Reliability and delivery surface that ships in v0.45.0.
@@ -38,8 +49,10 @@ Changes affecting the interaction surface, newest first:
   - **T69:** `--version` / help / startup `Binary:` print
     `CRATE_VERSION (PROVENANCE)` from `build.rs` (12-hex SHA,
     `-dirty` / `-dirty?` / `unknown`). No omit-on-release path.
-  - **T72:** Auto-commit amends only a ledger commit *this process*
-    created. SHAs shown to another process stay reachable.
+  - **T72:** (superseded by 🎯T73) Auto-commit used to amend only a
+    ledger commit *this process* created so cited SHAs stayed
+    reachable. T73 removed auto-commit, so bullseye never rewrites
+    git history.
   Additive reliability + CLI wording + version-string shape.
   Settling clock resets at v0.45.0.
 
@@ -320,7 +333,7 @@ Earlier v0.27.0 changes still in effect:
   suggested canonical clone location (e.g.
   `~/work/<host>/<owner>/<repo>/`). If HEAD is detached (tag, SHA,
   arbitrary checkout), mutation is refused with an explanation that
-  auto-committing would land on a dangling local branch. Read-only
+  writing the ledger would land on a dangling local branch. Read-only
   operations (list, frontier, get, summary, graph, validate, etc.)
   are unaffected. Tool surface is unchanged — the refusal is a new
   error class only.
@@ -343,23 +356,15 @@ Earlier v0.26.0 changes still in effect:
 
 Earlier v0.25.0 changes still in effect:
 
-- **Bullseye self-commits a dirty `bullseye.yaml`** (🎯T22, amend
-  rule narrowed by 🎯T72). Every mutating tool call (`bullseye_put`,
-  `bullseye_retire`, `bullseye_set_aside`, `bullseye_rework`,
-  `bullseye_init`, `bullseye_import`) and the start of
-  `bullseye_convergence` fold a dirty `bullseye.yaml` into git
-  automatically. Decision rule **as it now stands**: if `HEAD` is a
-  commit *this process* created (bullseye records the SHA it put at
-  `HEAD` after each of its own ledger commits) and that commit is
-  still unpushed and still touches exactly `{bullseye.yaml}`, fold
-  the new state via `git commit --amend --no-edit` (existing message
-  preserved); otherwise create a fresh `Update bullseye.yaml` commit
-  containing only `bullseye.yaml` (other staged changes are left in
-  the index untouched). Best-effort: outside a git repo (shadow-tree
-  storage, tempdir tests) and on git failures the auto-commit is a
-  silent no-op and the file stays dirty. No new public Rust API; the
-  `git_commit` module is internal. Eliminates the prior `/cv` skill
-  workaround for the dirty-tree invariants block. See 🎯T22, 🎯T72.
+- **Bullseye does not commit `bullseye.yaml`** (🎯T22 originally
+  auto-committed; 🎯T72 narrowed amend to this-process ownership;
+  🎯T73 retired both). Mutating tools write the file and leave it
+  dirty. `bullseye_convergence` does not fold the ledger into git
+  before invariants. Standing-invariants dirty-tree checks ignore
+  `bullseye.yaml` (including nested in-repo paths). Durability is
+  `/commit` (always stage a dirty in-repo ledger) and `/push`
+  (refuse if it is still dirty). The T72 own-commit amend path is
+  gone. See 🎯T73.
 
 Earlier v0.24.0 changes still in effect:
 

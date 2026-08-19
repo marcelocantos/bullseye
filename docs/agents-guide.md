@@ -627,8 +627,8 @@ bullseye:
 \t@cargo fmt --check >/dev/null && echo "✓ fmt"
 \t@cargo clippy --quiet --all-targets -- -D warnings >/dev/null 2>&1 && echo "✓ clippy"
 \t@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
-\t@test -z "$(git status --porcelain)" && echo "✓ clean tree" || \\
-\t (echo "✗ dirty tree:"; git status --short; exit 1)
+\t@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \\
+\t (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
 ```
 
 **Parallelised variant** (optional): projects with *heterogeneous*
@@ -654,8 +654,8 @@ check-tests:
 \t@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
 
 check-clean:
-\t@test -z "$$(git status --porcelain)" && echo "✓ clean tree" || \\
-\t (echo "✗ dirty tree:"; git status --short; exit 1)
+\t@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \\
+\t (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
 ```
 
 The `NPROC` fallback chain works on Linux (`nproc`), macOS/BSD
@@ -1001,10 +1001,12 @@ the old failure, the installed binary is older than this guide —
   load; `op=rehash` persists the repair. Reads degrade (banner +
   `INVALID` annotations); only `view=validate` hard-fails. See
   [api-v1-core.md](api-v1-core.md).
-- **A cited commit SHA vanished (🎯T72).** Auto-commit amends only a
-  ledger commit *this process* created. Another agent's SHA stays
-  reachable. Residual: consecutive CLI invocations each get a fresh
-  commit, because ownership is process-scoped.
+- **Yaml-only `Update bullseye.yaml` commits (🎯T73).** Bullseye does
+  not commit the ledger. A dirty in-repo `bullseye.yaml` is staged by
+  `/commit` and refused by `/push` if still dirty. Standing
+  invariants ignore the file so yaml dirt does not block `/cv`. A
+  yaml-only auto-commit is a sign of a pre-T73 binary. T72's
+  this-process amend path is gone with the auto-commit rail.
 - **`--version` is not just the crate version (🎯T69).** Workspace
   and Homebrew builds of v0.45.0+ print
   `bullseye 0.45.0 (<12-hex>[-dirty])`. Bare `bullseye 0.44.0` is the
