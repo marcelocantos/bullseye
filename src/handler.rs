@@ -15,7 +15,6 @@ use rust_mcp_sdk::schema::{
 
 use crate::api;
 use crate::config::{self, LOCATION_PROMPT, Location};
-use crate::git_commit;
 use crate::github;
 use crate::graph;
 use crate::id_alloc;
@@ -325,7 +324,7 @@ fn discover_path(cwd: &str) -> Result<std::path::PathBuf, CallToolError> {
 }
 
 /// Refuse the mutation when the repo containing `targets_path` is in
-/// a state that would silently lose the auto-commit (submodule clone,
+/// a state that would silently lose the write (submodule clone,
 /// detached HEAD). See [`crate::repo_guard`] for the full rationale
 /// and the two unsafe states. `cwd` is the caller-supplied working
 /// directory, used only in the error message — the structural check
@@ -785,7 +784,6 @@ fn handle_assign_owner(cwd: &str, id: &str, owner: &str, reason: &str) -> ToolRe
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
-    git_commit::auto_commit_yaml(&path);
     let id_owned = id.to_string();
     let body = format!(
         "Assigned 🎯{id} \"{name}\" to owner {owner}\nReason: {reason}\n\
@@ -820,7 +818,6 @@ fn handle_unassign_owner(cwd: &str, id: &str) -> ToolResult {
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
-    git_commit::auto_commit_yaml(&path);
     let id_owned = id.to_string();
     let body = format!(
         "Unassigned 🎯{id} \"{name}\" — ownership exclusion cleared; \
@@ -1217,8 +1214,6 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
-    git_commit::auto_commit_yaml(&path);
-
     let verb = if outcome.is_create {
         "Created"
     } else {
@@ -1313,8 +1308,6 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     match outcome {
         Outcome::AlreadyAchieved => text_result(format!("🎯{} is already achieved", t.id)),
         Outcome::Retired { name, cost } => {
-            git_commit::auto_commit_yaml(&path);
-
             let mut out = format!("Retired 🎯{} \"{name}\"\nAttestation: {attestation}", t.id);
             if let Some(actual) = t.actual_cost {
                 out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
@@ -1412,8 +1405,6 @@ pub fn handle_revert(t: crate::tools::RevertTool) -> ToolResult {
     })
     .map_err(|e| tool_err(e.to_string()))?;
 
-    git_commit::auto_commit_yaml(&path);
-
     let body = format!(
         "Reverted 🎯{} \"{}\" — status moved Achieved → Converging.\nReason: {reason}\nFile: {}",
         t.id,
@@ -1500,8 +1491,6 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
             id = t.id,
         )),
         Outcome::SetAside { name, prior } => {
-            git_commit::auto_commit_yaml(&path);
-
             let out = format!(
                 "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
                 id = t.id,
@@ -1597,8 +1586,6 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
         .map_err(|e| e.to_string())
     })
     .map_err(|e| tool_err(e.to_string()))?;
-
-    git_commit::auto_commit_yaml(&path);
 
     let mut out = format!(
         "Subdivided 🎯{parent} \"{name}\" — mode `{mode}`\nCreated: {created}",
@@ -1774,8 +1761,6 @@ pub fn handle_init(t: crate::tools::InitTool) -> ToolResult {
     let path = store::create_at(dir, location, &project).map_err(tool_err)?;
     let _ = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
 
-    git_commit::auto_commit_yaml(&path);
-
     text_result(format!(
         "Created starter targets file at {} (location: {}).\n\
          Contains 1 sample target (🎯T1) — edit or replace it with your own.",
@@ -1852,8 +1837,6 @@ pub fn handle_import(t: crate::tools::ImportTool) -> ToolResult {
             .map_err(|e| tool_err(format!("failed to create {}: {e}", parent.display())))?;
     }
     store::with_locked_write(&yaml_path, &file).map_err(|e| tool_err(e.to_string()))?;
-
-    git_commit::auto_commit_yaml(&yaml_path);
 
     text_result(format!(
         "Imported {} targets from {}\n\

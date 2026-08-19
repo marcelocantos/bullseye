@@ -168,7 +168,7 @@ Errors are text messages that include a stable `code=` token:
 | `immutable_achieved` | Content edit on achieved target without reopen |
 | `id_reserved` | Explicit create collides with git-history ID |
 | `validation` | Schema / graph validation failure on write path |
-| `unsafe_repo` | Repo state refuses auto-commit mutations |
+| `unsafe_repo` | Repo is a submodule replica or has detached HEAD |
 | `not_found` | Target or path not found |
 | `invalid_args` | Bad op/view/parameter combination |
 

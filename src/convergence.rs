@@ -35,7 +35,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::bounded::{BoundedError, GIT_QUERY_TIMEOUT, bounded_output, git_query};
-use crate::git_commit;
 use crate::graph;
 use crate::schema::TargetsFile;
 
@@ -66,44 +65,12 @@ pub fn convergence(
         achieved_count,
     ));
 
-    // --- 0. Auto-commit a dirty bullseye.yaml (🎯T22) ---
-    //
-    // If the file was edited externally (or any earlier mutation in
-    // this process didn't reach the post-save hook), fold the change
-    // into git before invariants run. Otherwise, the project's
-    // `make bullseye` dirty-tree check would always block convergence
-    // on a freshly-mutated yaml. Best-effort: a no-git or hook-rejected
-    // case leaves the file dirty and the invariants block fires as
-    // before.
-    //
-    // Skipped entirely when the caller skipped invariants (🎯T62). The
-    // only reason to commit here is to keep the dirty-tree check happy,
-    // so with that check not running there is nothing to keep happy —
-    // and `git commit` fires the repository's `pre-commit` hook, which
-    // is arbitrary project code. `skip_invariants=true` is what a caller
-    // reaches for precisely when the project's own checks are the
-    // suspect, so it must not run any of them by the back door: that is
-    // how the originally-reported hang survived a skip_invariants retry.
-    //
-    // A *killed* step is different from a rejected one and gets its own
-    // line in the report: when a hook blocks — waiting on a lock, a
-    // pinentry prompt, a network mount — the invariants section below
-    // reports a dirty tree with no visible cause. Naming the killed step
-    // turns a baffling failure into an actionable one.
-    if !skip_invariants
-        && let git_commit::AutoCommitOutcome::TimedOut { step, secs } =
-            git_commit::auto_commit_yaml(file_path)
-    {
-        out.push_str(&format!(
-            "## Auto-commit\n\n⚠ `git {step}` of `{}` timed out after {secs}s and was killed — \
-             the file is still dirty, so the invariants check below may report a dirty tree. \
-             Run `git {step}` by hand to see what blocked (a `pre-commit` hook, a held \
-             `index.lock`, or a signing prompt are the usual causes).\n\n",
-            file_path.display(),
-        ));
-    }
-
     // --- 1. Invariants (project-supplied hook) ---
+    //
+    // Dirty in-repo `bullseye.yaml` is not a blocking dirty-tree (🎯T73).
+    // Bullseye does not git-commit the ledger; the project's `make
+    // bullseye` (and the skeleton emitted when the hook is missing)
+    // ignores the file so yaml dirt cannot fail standing invariants.
     //
     // Three paths:
     //   - skip_invariants=true → render "(skipped)" marker, no subprocess
@@ -975,12 +942,14 @@ fn render_next_action(
 }
 
 /// Example `make bullseye` rule shown in the setup instructions.
-const MAKE_BULLSEYE_EXAMPLE: &str = r#"bullseye:
+/// Dirty-tree ignores `bullseye.yaml` at any in-repo path (🎯T73) so a
+/// freshly mutated ledger does not reintroduce T22's block.
+pub(crate) const MAKE_BULLSEYE_EXAMPLE: &str = r#"bullseye:
 	@cargo fmt --check && echo "✓ fmt"
 	@cargo clippy --quiet -- -D warnings && echo "✓ clippy"
 	@cargo test --quiet 2>&1 | grep "test result" && echo "✓ tests"
-	@test -z "$$(git status --porcelain)" && echo "✓ clean" || \
-	 (echo "✗ dirty tree"; git status --short; exit 1)"#;
+	@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean" || \
+	 (echo "✗ dirty tree"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)"#;
 
 #[cfg(test)]
 mod tests {
@@ -1026,6 +995,24 @@ mod tests {
         std::fs::write(tmp.path().join("Makefile"), "all:\n\t@echo hello\n").unwrap();
         let cmd = detect_invariants_command(tmp.path()).unwrap();
         assert_eq!(cmd, vec!["make".to_string(), "bullseye".to_string()]);
+    }
+
+    #[test]
+    fn makefile_skeleton_ignores_bullseye_yaml_in_dirty_tree() {
+        // 🎯T73: the emitted missing-hook skeleton must not reintroduce
+        // T22's "any dirt blocks" check on the ledger file.
+        assert!(
+            MAKE_BULLSEYE_EXAMPLE.contains("grep -vE 'bullseye\\.yaml$$'"),
+            "skeleton dirty-tree must ignore bullseye.yaml; got:\n{MAKE_BULLSEYE_EXAMPLE}"
+        );
+        for line in MAKE_BULLSEYE_EXAMPLE.lines() {
+            if line.contains("git status") {
+                assert!(
+                    line.contains("grep -vE"),
+                    "unfiltered git status reintroduces T22's block: {line}"
+                );
+            }
+        }
     }
 
     #[test]

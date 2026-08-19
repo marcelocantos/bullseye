@@ -1,24 +1,19 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//! A ledger commit SHA stays reachable once bullseye has shown it to a
-//! caller (🎯T72).
+//! Mutations do not write yaml-only git commits (🎯T73).
 //!
-//! Attestation is the fleet's verification currency: a worker reports
-//! the SHA its ledger write produced, and a reviewer who did not watch
-//! the work re-checks the claim with `git merge-base --is-ancestor`.
-//! That only works if the SHA survives. Under 🎯T22's original amend
-//! rule it did not: any unpushed `HEAD` touching exactly
-//! `bullseye.yaml` was eligible to be folded into, which is true of
-//! *every* agent's ledger commit. On 2026-08-15 four amends in under
-//! three minutes orphaned two SHAs that workers had already cited.
+//! 🎯T22 auto-committed a dirty in-repo `bullseye.yaml` after every
+//! mutation (and at the start of convergence). 🎯T72 narrowed amend
+//! eligibility to a SHA this process created, so a second agent's
+//! cited SHA stayed reachable — at the cost of one yaml-only commit
+//! per process. 🎯T73 removes that rail: bullseye writes the file and
+//! leaves it dirty. Durability is `/commit` (stage) and `/push`
+//! (refuse if still dirty).
 //!
-//! These tests drive the real binary, because the boundary under test
-//! is the process boundary — two agents writing one repo seconds apart
-//! are two `bullseye` processes, and an in-process test cannot
-//! establish that. The amend-eligibility state is per-process by
-//! construction, so a second invocation is exactly the case that used
-//! to destroy the first invocation's SHA.
+//! These tests drive the real binary because the production path is
+//! the CLI/MCP process, and because two invocations are the shape of
+//! two agents writing one repo.
 
 use std::path::Path;
 use std::process::Command;
@@ -64,26 +59,15 @@ fn bullseye(repo: &Path, args: &[&str]) -> String {
     text
 }
 
-/// The reachability question a reviewer asks of a cited SHA.
-fn is_ancestor(repo: &Path, sha: &str) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["merge-base", "--is-ancestor", sha, "HEAD"])
-        .status()
-        .unwrap()
-        .success()
-}
-
 /// A git repo with a stable identity, no inherited hooks, and one
-/// non-ledger commit so the first ledger write lands as a commit of its
-/// own.
+/// non-ledger commit so HEAD is not a yaml-only commit to start with.
 fn repo_with_ledger() -> TempDir {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     git(repo, &["init", "-q", "-b", "master"]);
     git(repo, &["config", "user.email", "test@example.com"]);
     git(repo, &["config", "user.name", "Test"]);
+    git(repo, &["config", "commit.gpgsign", "false"]);
     let empty = repo.join(".git/empty-hooks");
     std::fs::create_dir_all(&empty).unwrap();
     git(repo, &["config", "core.hooksPath", empty.to_str().unwrap()]);
@@ -97,21 +81,32 @@ fn repo_with_ledger() -> TempDir {
     tmp
 }
 
+fn commit_count(repo: &Path) -> usize {
+    git(repo, &["rev-list", "--count", "HEAD"])
+        .parse()
+        .unwrap_or(0)
+}
+
+fn head_files(repo: &Path) -> Vec<String> {
+    git(repo, &["show", "--pretty=format:", "--name-only", "HEAD"])
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Two mutations from two separate `bullseye` processes — the shape of
-/// two agents writing one ledger seconds apart. The SHA the first
-/// produced must still be reachable from `HEAD` after the second lands.
-///
-/// Negative control: against the pre-🎯T72 amend rule this fails. The
-/// first process's ledger commit is unpushed and touches exactly
-/// `bullseye.yaml`, so the second process amends it, and the SHA the
-/// first would have reported resolves to nothing reachable.
+/// two agents writing one ledger seconds apart. Neither writes a
+/// yaml-only git commit. Ledger content from both writes is on disk.
 #[test]
-fn a_sha_from_one_process_survives_another_process_mutation() {
+fn two_process_mutations_do_not_create_yaml_only_commits() {
     let tmp = repo_with_ledger();
     let repo = tmp.path();
+    let before = commit_count(repo);
+    let head_before = git(repo, &["rev-parse", "HEAD"]);
+    assert_eq!(before, 1, "fixture is one non-ledger commit");
 
-    // Agent one writes, and reports the SHA it sees.
-    bullseye(
+    let first = bullseye(
         repo,
         &[
             "commit",
@@ -123,14 +118,12 @@ fn a_sha_from_one_process_survives_another_process_mutation() {
             "a",
         ],
     );
-    let first = git(repo, &["rev-parse", "HEAD"]);
     assert!(
-        is_ancestor(repo, &first),
-        "precondition: the SHA is reachable when the first agent reports it"
+        first.contains("ok: true") && first.contains("Created"),
+        "first mutation must be acknowledged; got:\n{first}"
     );
 
-    // Agent two writes seconds later.
-    bullseye(
+    let second = bullseye(
         repo,
         &[
             "commit",
@@ -142,33 +135,50 @@ fn a_sha_from_one_process_survives_another_process_mutation() {
             "b",
         ],
     );
-    let second = git(repo, &["rev-parse", "HEAD"]);
-
-    assert_ne!(second, first, "the second mutation must have committed");
     assert!(
-        is_ancestor(repo, &first),
-        "the first agent's cited SHA {first} was orphaned by the second agent's \
-         write — HEAD is now {second}. A reviewer can no longer verify the \
-         first agent's evidence, and `git gc` will make the failure silent."
+        second.contains("ok: true") && second.contains("Created"),
+        "second mutation must be acknowledged; got:\n{second}"
     );
 
-    // Content from both writes survives — this is about SHA stability,
-    // not data loss, and the fix must not have traded one for the other.
+    assert_eq!(
+        commit_count(repo),
+        before,
+        "mutations must not add a yaml-only commit"
+    );
+    assert_eq!(
+        git(repo, &["rev-parse", "HEAD"]),
+        head_before,
+        "HEAD must not move"
+    );
+    let log = git(repo, &["log", "--oneline"]);
+    assert!(
+        !log.contains("Update bullseye.yaml"),
+        "git history must not gain a bullseye-produced yaml-only commit; got:\n{log}"
+    );
+    let files = head_files(repo);
+    assert_ne!(
+        files,
+        vec!["bullseye.yaml".to_string()],
+        "HEAD must not touch only bullseye.yaml; files={files:?}"
+    );
+
     let ledger = std::fs::read_to_string(repo.join("bullseye.yaml")).unwrap();
     assert!(ledger.contains("First agent target"), "{ledger}");
     assert!(ledger.contains("Second agent target"), "{ledger}");
 }
 
-/// The same property over a longer interleaving: every SHA any of the
-/// processes was shown remains reachable at the end.
+/// Four CLI mutations in a row still leave commit count and HEAD
+/// unchanged. Negative control against the pre-T73 rail, which would
+/// have produced one yaml-only commit per process.
 #[test]
-fn every_sha_shown_to_any_process_stays_reachable() {
+fn every_cli_mutation_leaves_git_history_untouched() {
     let tmp = repo_with_ledger();
     let repo = tmp.path();
+    let before = commit_count(repo);
+    let head_before = git(repo, &["rev-parse", "HEAD"]);
 
-    let mut shown = Vec::new();
     for n in 0..4 {
-        bullseye(
+        let out = bullseye(
             repo,
             &[
                 "commit",
@@ -180,12 +190,25 @@ fn every_sha_shown_to_any_process_stays_reachable() {
                 "a",
             ],
         );
-        shown.push(git(repo, &["rev-parse", "HEAD"]));
+        assert!(
+            out.contains("ok: true"),
+            "mutation {n} must succeed; got:\n{out}"
+        );
     }
 
-    let orphaned: Vec<&String> = shown.iter().filter(|s| !is_ancestor(repo, s)).collect();
+    assert_eq!(commit_count(repo), before);
+    assert_eq!(git(repo, &["rev-parse", "HEAD"]), head_before);
+    let log = git(repo, &["log", "--oneline", "--name-only"]);
     assert!(
-        orphaned.is_empty(),
-        "SHAs shown to a caller and later orphaned: {orphaned:?}"
+        !log.contains("Update bullseye.yaml"),
+        "git log must not contain a yaml-only auto-commit; got:\n{log}"
     );
+
+    let ledger = std::fs::read_to_string(repo.join("bullseye.yaml")).unwrap();
+    for n in 0..4 {
+        assert!(
+            ledger.contains(&format!("Target from agent {n}")),
+            "missing target {n} in ledger:\n{ledger}"
+        );
+    }
 }
