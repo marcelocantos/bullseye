@@ -16,7 +16,7 @@ pub const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// metadata. Set by `build.rs`.
 pub const PROVENANCE: &str = env!("BULLSEYE_BUILD_PROVENANCE");
 
-/// `0.45.0 (a1b2c3d4e5f6)` — release identity plus build identity. Two
+/// `0.46.0 (a1b2c3d4e5f6)` — release identity plus build identity. Two
 /// binaries built from different commits differ here even when their
 /// crate versions match.
 pub const VERSION: &str = concat!(

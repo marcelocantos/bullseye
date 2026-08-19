@@ -242,3 +242,15 @@ maintenance activities. Append-only -- newest entries at the bottom.
 - **Docs**: the decision rule is restated in STABILITY.md, in the
   `src/git_commit.rs` module docs, and here, so the written rule and the
   code agree.
+
+## 2026-08-19 -- /release v0.46.0
+
+- **Outcome**: Released v0.46.0 (darwin-arm64, linux-amd64, linux-arm64).
+  **🎯T73: mutations do not write yaml-only git commits.** Mutating tools
+  write `bullseye.yaml` and leave it dirty. `bullseye_convergence` does
+  not `git commit` before invariants. Standing-invariants dirty-tree
+  checks ignore the ledger (root and nested in-repo paths). Durability
+  is `/commit` (always stage a dirty in-repo ledger) and `/push` (refuse
+  if still dirty). The T22 auto-commit rail and T72 own-commit amend
+  path are gone (`src/git_commit.rs` deleted). Settling clock resets at
+  v0.46.0.

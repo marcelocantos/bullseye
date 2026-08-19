@@ -22,7 +22,7 @@ Changes affecting the interaction surface, newest first:
   always stages a dirty in-repo ledger, `/push` refuses if it is still
   dirty. The T72 own-commit amend path is gone, not retained as dead
   code. No `git_commit` module; no callable path that can still create
-  `Update bullseye.yaml`.
+  `Update bullseye.yaml`. Settling clock resets at v0.46.0.
 
 - **Hang bounds, UTF-8 panic, ledger heal, CLI parity, provenance**
   (🎯T62–T72). Reliability and delivery surface that ships in v0.45.0.
