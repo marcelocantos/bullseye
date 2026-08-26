@@ -8,5 +8,8 @@
 # Claude Code per-project local state (settings, scheduled tasks, worktrees, etc.)
 .claude/
 
+# Agent runtime dir (auth, bundled skills) — never stage
+.claudia-mcp-home/
+
 # Per-machine GitHub-issue mirror sync state (bullseye github sync)
 .bullseye/

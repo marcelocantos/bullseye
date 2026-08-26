@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use crate::ops;
 use crate::schema::{Status, TargetsFile};
 
 /// Banner + legend describing repo-scope frontier ordering. Rendered
@@ -181,8 +182,10 @@ impl MermaidScope {
 /// - **ancestors** — walk `depends_on` outward (deps the seed needs).
 /// - **descendants** — reverse-blocks: targets that list the seed in
 ///   `depends_on` (what the seed unblocks).
-/// - **children** — hierarchical children by ID convention (`T1.1` of `T1`).
+/// - **children** — hierarchical children by ID convention (`T1.1` of
+///   `T1`). Display-only: the blocking edge is `depends_on` (🎯T39.1).
 /// - **parents** — hierarchical parent by ID convention (`T1` of `T1.1`).
+///   Display-only; same caveat as children.
 /// - **frontier** — among 1-hop dependency neighbors of the selection,
 ///   also include nodes currently on the frontier (unblocked leaves).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -917,6 +920,22 @@ pub fn validate_issues(file: &TargetsFile) -> Vec<ValidationIssue> {
             }
             if ob.reason.trim().is_empty() {
                 push("owned_by.reason must be non-empty".to_string());
+            }
+        }
+
+        // 🎯T39.1: an active parent must list every live dotted child
+        // in depends_on. Dotted IDs are a family, not a display prefix;
+        // expand:children walks the prefix for rendering only.
+        if !t.status.is_terminal() {
+            for child in ops::direct_dotted_children(file, id) {
+                if !t.depends_on.iter().any(|d| d == child) {
+                    push(format!(
+                        "dotted child {child} is not in depends_on — a dotted family is an \
+                         umbrella (🎯T39.1); the parent cannot retire until every direct child \
+                         does. Add {child} to depends_on (child_of and split add/aggregate do \
+                         this automatically)"
+                    ));
+                }
             }
         }
 

@@ -96,10 +96,13 @@ pub fn revert(
 /// list the parent in their `depends_on`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubdivideMode {
-    /// Safest default: parent untouched. For every target that listed
-    /// the parent in `depends_on`, the new children are appended
-    /// alongside the parent (the dependent now blocks on both). No
-    /// information is destroyed; the graph strictly tightens.
+    /// Safest default: dependents tighten, and any child whose ID is a
+    /// direct dotted child of the parent (`T4.1` of `T4`) is also
+    /// appended to the parent's `depends_on` (🎯T39.1). For every
+    /// target that listed the parent in `depends_on`, the new children
+    /// are appended alongside the parent. Explicit top-level child IDs
+    /// (e.g. `T42` under parent `T4`) do not wire the parent — they are
+    /// not a dotted family.
     Add,
     /// Parent becomes a converging umbrella: each new child is
     /// appended to the parent's own `depends_on`. The parent moves to
@@ -195,6 +198,11 @@ pub enum SubdivideError {
     /// assigned IDs. The tail must be a subset of the children being
     /// created — there is no fall-through to existing targets.
     TailNotInChildren(String),
+    /// A new child's dotted parent exists and is terminal (🎯T39.1).
+    FamilyParentTerminal {
+        id: String,
+        status: Status,
+    },
 }
 
 impl std::fmt::Display for SubdivideError {
@@ -245,8 +253,127 @@ impl std::fmt::Display for SubdivideError {
                  children being created in this call — supply explicit `id` values on the tail \
                  children and reference those exact IDs."
             ),
+            SubdivideError::FamilyParentTerminal { id, status } => write!(
+                f,
+                "🎯{id} is {status:?} — a dotted child cannot be created under a terminal parent. \
+                 Revert or re-open 🎯{id} first, or file a new top-level target if this is \
+                 spillover rather than family work."
+            ),
         }
     }
+}
+
+impl From<AttachError> for SubdivideError {
+    fn from(e: AttachError) -> Self {
+        match e {
+            AttachError::ParentTerminal { id, status } => {
+                SubdivideError::FamilyParentTerminal { id, status }
+            }
+        }
+    }
+}
+
+/// Direct dotted parent of a numeric family ID (`T4.1` → `T4`,
+/// `T4.1.2` → `T4.1`). Top-level IDs and non-numeric suffixes
+/// (`T1.v`) have no family parent — those are tags, not children.
+pub fn direct_parent_id(id: &str) -> Option<&str> {
+    let (parent, suffix) = id.rsplit_once('.')?;
+    suffix.parse::<u32>().ok()?;
+    Some(parent)
+}
+
+/// Live keys that are direct dotted children of `parent` (`T4.1` and
+/// `T4.2` of `T4`; not `T4.1.1`).
+pub fn direct_dotted_children<'a>(file: &'a TargetsFile, parent: &str) -> Vec<&'a str> {
+    let prefix = format!("{parent}.");
+    file.targets
+        .keys()
+        .filter_map(|k| {
+            let suffix = k.strip_prefix(prefix.as_str())?;
+            if suffix.contains('.') || suffix.parse::<u32>().is_err() {
+                None
+            } else {
+                Some(k.as_str())
+            }
+        })
+        .collect()
+}
+
+/// Error from [`attach_dotted_child`].
+#[derive(Debug, PartialEq)]
+pub enum AttachError {
+    /// The child's dotted parent exists and is achieved or set_aside.
+    ParentTerminal { id: String, status: Status },
+}
+
+impl std::fmt::Display for AttachError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AttachError::ParentTerminal { id, status } => write!(
+                f,
+                "🎯{id} is {status:?} — a dotted child cannot be created under a terminal parent. \
+                 Revert or re-open 🎯{id} first, or file a new top-level target if this is \
+                 spillover rather than family work."
+            ),
+        }
+    }
+}
+
+/// If `child_id` is a direct dotted child of a parent that exists in
+/// `file`, append the child to that parent's `depends_on` and promote
+/// Identified → Converging (🎯T39.1).
+///
+/// Returns whether the parent status changed. No-op (Ok(false)) when
+/// the id is top-level or the parent key is absent. Errors when the
+/// parent exists and is terminal.
+pub fn attach_dotted_child(file: &mut TargetsFile, child_id: &str) -> Result<bool, AttachError> {
+    let Some(parent_id) = direct_parent_id(child_id) else {
+        return Ok(false);
+    };
+    let Some(parent) = file.targets.get_mut(parent_id) else {
+        return Ok(false);
+    };
+    if parent.status.is_terminal() {
+        return Err(AttachError::ParentTerminal {
+            id: parent_id.to_string(),
+            status: parent.status,
+        });
+    }
+    if !parent.depends_on.iter().any(|d| d == child_id) {
+        parent.depends_on.push(child_id.to_string());
+    }
+    if parent.status == Status::Identified {
+        parent.status = Status::Converging;
+        parent.clear_illegal_status_scoped_fields();
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Active (non-terminal) direct dotted children of `id`.
+pub fn active_dotted_children(file: &TargetsFile, id: &str) -> Vec<String> {
+    direct_dotted_children(file, id)
+        .into_iter()
+        .filter(|c| {
+            file.targets
+                .get(*c)
+                .is_some_and(|t| !t.status.is_terminal())
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// Refuse achieving an umbrella while any dotted child is still open.
+pub fn refuse_active_family(file: &TargetsFile, id: &str) -> Result<(), String> {
+    let kids = active_dotted_children(file, id);
+    if kids.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "cannot achieve 🎯{id} while dotted children are still active: {}. \
+         Achieve or set_aside them first — a dotted family is an umbrella (🎯T39.1).",
+        kids.join(", ")
+    ))
 }
 
 /// Auto-assign the next sub-target ID under `parent` (e.g. parent
@@ -464,6 +591,15 @@ pub fn subdivide(
                 }
             }
             rewired_dependents = dependent_ids;
+            // 🎯T39.1: a dotted family is an umbrella. Default child
+            // IDs are `parent.N`, so add must wire the parent the same
+            // way aggregate does for those children. Explicit
+            // top-level IDs are a no-op here.
+            for new_id in &assigned_ids {
+                if attach_dotted_child(file, new_id)? {
+                    parent_status_changed = true;
+                }
+            }
         }
         SubdivideMode::Aggregate => {
             let parent = file

@@ -182,6 +182,14 @@ Unified writes. Ops: `track`, `block`, `split`, `achieve`, `defer`,
 On create (`track`), `name` and `acceptance` are required; **value/cost optional**.
 `op=achieve` requires non-empty `attestation` (🎯T58).
 
+**Child create (`op=track` + `child_of`):** omit `id` and set `child_of`
+to the parent (`child_of: "T4"` allocates the next `T4.N`, appends it
+to T4's `depends_on`, and promotes Identified→Converging). Same
+contract as `bullseye_put` `child_of`. A dotted family is an umbrella:
+the parent cannot retire until every direct child is terminal.
+`op=split` `mode=add` wires the same edge for children whose IDs are
+direct dotted children of the parent.
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `cwd` | string | Working directory |
@@ -231,11 +239,17 @@ Omit `id` to create a new target with an auto-assigned top-level ID
 (`T1`, `T2`, … — next free over live file ∪ git history, 🎯T28). To
 create a child target without choosing the final number, omit `id` and
 set `child_of` to the parent ID (`child_of: "T4"` creates the next free
-`T4.N`). Provide `id` only when the exact target ID is part of the
-user's intent, or to patch an existing target — the handler decides
-create-vs-patch based on whether the ID exists. Explicit dotted IDs
-whose final segment is zero (such as `T4.0`) are rejected because
-humans conflate them with their parent in conversation and reports.
+`T4.N` and appends it to T4's `depends_on`). A dotted family is an
+umbrella: the parent cannot retire, and does not sit on the frontier,
+until every direct child is terminal. `child_of` on a terminal parent
+is refused — revert/reopen first, or file a new top-level target if
+this is spillover rather than family work. Provide `id` only when the
+exact target ID is part of the user's intent, or to patch an existing
+target — the handler decides create-vs-patch based on whether the ID
+exists. An explicit dotted create under a live parent (`id: T4.3` while
+T4 exists) wires the same umbrella edge. Explicit dotted IDs whose
+final segment is zero (such as `T4.0`) are rejected because humans
+conflate them with their parent in conversation and reports.
 
 On create, `name` and `acceptance` are required. `value` and `cost`
 default to `0` (the "not set at repo scope" sentinel) when omitted —
@@ -258,7 +272,7 @@ transitions on achieved targets remain allowed.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | null | Target ID (omit to auto-assign a new top-level ID — see [Target IDs](#target-ids) for the git-history-aware allocation rules). On create, an explicit `id` is rejected if it collides with a slot recorded in git history but absent from the current tree (e.g. deleted, or on another branch). |
-| `child_of` | string | null | Parent ID for auto-assigned child creation. Only valid when `id` is omitted; creates the next free direct child of this target (for example `child_of: "T4"` → `T4.N`). |
+| `child_of` | string | null | Parent ID for auto-assigned child creation. Only valid when `id` is omitted; creates the next free direct child (`T4.N`) and appends it to the parent's `depends_on`. Refuses a terminal parent. |
 | `name` | string | null | Desired state assertion (required on create) |
 | `value` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
 | `cost` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
@@ -363,10 +377,11 @@ retires prematurely once the easy half is done.
 
 Three modes:
 
-- **`add`** (safest default): parent untouched. Every existing
-  dependent of the parent gains the new children as additional
-  `depends_on` entries alongside the parent. Strictly tightens the
-  graph, destroys no information.
+- **`add`** (safest default): every existing dependent of the parent
+  gains the new children as additional `depends_on` entries alongside
+  the parent. Dotted children (`T4.1` of `T4`) are also appended to
+  the parent's `depends_on` — a dotted family is an umbrella. Explicit
+  top-level child IDs are not wired onto the parent.
 - **`aggregate`**: parent becomes a converging umbrella — each new
   child is appended to the parent's `depends_on`, and the parent
   moves to `converging` if previously `identified`. Dependents are
@@ -443,7 +458,7 @@ excluded unless `scope` widens the set.
 | `scope` | string | `active` | Status filter: `active` \| `all` \| `achieved` \| `set_aside` (🎯T57) |
 | `nodes` | string[] | null | Explicit node-ID list — naive subgraph; only those IDs (filtered by scope); edges only when both endpoints selected (🎯T57) |
 | `seeds` | string[] | null | Seed IDs for intelligent expansion (🎯T57) |
-| `expand` | string[] | null | Expansion from seeds (🎯T57): `ancestors` (walk `depends_on` / deps seed needs), `descendants` (reverse-blocks / who lists seed in `depends_on`), `children` / `parents` (hierarchical ID convention `T1.1` ↔ `T1`), `frontier` (also include 1-hop dependency neighbors that are on the frontier) |
+| `expand` | string[] | null | Expansion from seeds (🎯T57): `ancestors` (walk `depends_on` / deps seed needs), `descendants` (reverse-blocks / who lists seed in `depends_on`), `children` / `parents` (display-only ID prefix `T1.1` ↔ `T1` — the blocking edge is `depends_on`, 🎯T39.1), `frontier` (also include 1-hop dependency neighbors that are on the frontier) |
 
 **Selection modes:**
 1. No `nodes`/`seeds` → whole graph for `scope` (default active).
@@ -1017,6 +1032,12 @@ the old failure, the installed binary is older than this guide —
   path until a release is published and `brew upgrade` installs it.
   `BULLSEYE_REACHABILITY_CHECK=skip` opts the local probe out;
   CI's published-release job is the delivery oracle.
+- **A parent on the frontier while dotted children are still open
+  (🎯T39.1).** `child_of` / explicit dotted create / `split add`
+  append the child to the parent's `depends_on`. A dotted family
+  cannot retire until every direct child is terminal. If the parent
+  is independently retireable while `T.N` children are open, the
+  installed binary is older than T39.1 — upgrade.
 - **Do not predict the next target ID.** On create, the allocated ID
   is knowable only from the mutation envelope's `ids:` field. Scanning
   the file for `max(T*)` is a TOCTOU race under concurrency.

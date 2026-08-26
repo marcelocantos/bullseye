@@ -1101,6 +1101,8 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 postpone_predicate: None,
             };
             file.targets.insert(id.clone(), target);
+            // 🎯T39.1: dotted create is a family edge, not a display prefix.
+            ops::attach_dotted_child(file, &id).map_err(|e| e.to_string())?;
         } else {
             // Patch path — only provided fields change.
 
@@ -1111,6 +1113,10 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
                 Some(s) => Some(parse_status_s(s)?),
                 None => None,
             };
+
+            if matches!(new_status, Some(Status::Achieved)) {
+                ops::refuse_active_family(file, &id)?;
+            }
 
             // Safety — reject content edits on achieved targets unless
             // the same call is simultaneously re-opening them. Achieved
@@ -1270,13 +1276,18 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     }
 
     let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
+        let existing = file
+            .targets
+            .get(&t.id)
+            .ok_or_else(|| format!("target {} not found", t.id))?;
+        if existing.status == Status::Achieved {
+            return Ok(Outcome::AlreadyAchieved);
+        }
+        ops::refuse_active_family(file, &t.id)?;
         let target = file
             .targets
             .get_mut(&t.id)
             .ok_or_else(|| format!("target {} not found", t.id))?;
-        if target.status == Status::Achieved {
-            return Ok(Outcome::AlreadyAchieved);
-        }
         target.status = Status::Achieved;
         // Clear what the previous status owned before writing the
         // achieved-only fields (🎯T64) — e.g. a `set_aside_reason` from

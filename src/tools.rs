@@ -99,7 +99,9 @@ pub struct QueryTool {
 #[mcp_tool(
     name = "bullseye_commit",
     description = "Core: mutate the intent ledger. `op` selects the write: \
-        track (create/patch target — name+acceptance on create; value/cost optional), \
+        track (create/patch target — name+acceptance on create; value/cost optional; \
+        omit id and set child_of to allocate the next parent.N and append it to the \
+        parent's depends_on — a dotted family cannot retire until its children do), \
         block (id + blocks sugar), split (subdivide parent into children), \
         achieve (retire with required attestation), defer (set_aside with reason), \
         reopen (revert achieved), \
@@ -123,7 +125,8 @@ pub struct CommitTool {
     #[serde(default)]
     pub id: Option<String>,
 
-    /// Parent for auto-child create on track.
+    /// Parent for auto-child create on track. Allocates the next
+    /// `parent.N` and appends it to the parent's `depends_on` (🎯T39.1).
     #[serde(default)]
     pub child_of: Option<String>,
 
@@ -280,7 +283,9 @@ pub struct GetTool {
     description = "Shim for bullseye_commit op=track. Upsert a target: create if the ID doesn't exist, patch if it does. \
         Omit `id` to create a new target with an auto-assigned top-level ID. \
         To create a child without choosing its final number, omit `id` and set `child_of` \
-        to the parent ID (e.g. `child_of: 'T4'` creates the next free `T4.N`). \
+        to the parent ID (e.g. `child_of: 'T4'` creates the next free `T4.N` and appends \
+        it to T4.depends_on — a dotted family is an umbrella; the parent cannot retire \
+        until every direct child does). \
         Provide `id` (e.g., 'T1.2') only when the exact target ID is part of the user's intent, \
         or to patch an existing target. \
         On create, the assigned ID is knowable ONLY from this tool's return value (`ids:` / \
@@ -316,7 +321,8 @@ pub struct PutTool {
 
     /// Parent ID for auto-assigned child creation. Only valid when
     /// `id` is omitted; creates the next free direct child of this
-    /// target, e.g. `child_of: "T4"` → `T4.1`, `T4.2`, ...
+    /// target, e.g. `child_of: "T4"` → `T4.1`, and appends that child
+    /// to the parent's `depends_on` (🎯T39.1). Refuses a terminal parent.
     #[serde(default)]
     pub child_of: Option<String>,
 
@@ -767,9 +773,10 @@ pub struct SubdivisionChild {
         node rather than the whole subgraph. \
         \
         Modes (safest default first): \
-        - `add`: parent untouched; every existing dependent of the parent gains the new children \
-          as additional `depends_on` entries alongside the parent. Strictly tightens the graph, \
-          destroys no information. \
+        - `add`: every existing dependent of the parent gains the new children as additional \
+          `depends_on` entries alongside the parent. Dotted children (`T4.1` of `T4`) are also \
+          appended to the parent's own `depends_on` (🎯T39.1) — a dotted family is an umbrella. \
+          Explicit top-level child IDs are not wired onto the parent. \
         - `aggregate`: parent becomes a converging umbrella — each new child is appended to the \
           parent's own `depends_on`, and the parent moves to `converging` if previously \
           `identified`. Dependents continue to depend on the parent only; the parent retires once \

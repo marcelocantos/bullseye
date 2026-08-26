@@ -9,11 +9,24 @@ The pre-1.0 period exists to get these right.
 
 ## Interaction surface catalogue
 
-Snapshot as of 🎯T73 (no yaml-only auto-commit; dirty ledger does not
-block standing invariants) on the T62–T72 base.
+Snapshot as of 🎯T39.1 (dotted children are umbrella `depends_on`
+edges) on the T73 / T62–T72 base.
 Changes affecting the interaction surface, newest first:
 
-- **Bullseye does not commit `bullseye.yaml`** (🎯T73; 🎯T22/T72
+- **Dotted child IDs are umbrella edges** (🎯T39.1). `child_of` and
+  explicit dotted-id create under a live parent append the child to
+  the parent's `depends_on` and promote Identified→Converging.
+  `split add` does the same for children whose IDs are direct dotted
+  children of the parent (default `T4.N` slots). `validate` errors when
+  an active parent is missing any live direct dotted child in
+  `depends_on`. `achieve` / `status=achieved` refuse while any direct
+  dotted child is still active. `child_of` and explicit dotted create
+  on a terminal parent are refused. Graph `expand: children` remains display-only — the blocking
+  edge is `depends_on`. Docs that called `add` "parent untouched" or
+  `child_of` ID-only are updated. Settling clock resets at the release
+  that ships this.
+
+- **Bullseye does not commit `bullseye.yaml`** (🎯T73; 🎯T22/T72)
   auto-commit rail retired). Mutating tools write the file and leave
   it dirty. `bullseye_convergence` does not `git commit` before
   invariants. Standing-invariants dirty-tree checks ignore

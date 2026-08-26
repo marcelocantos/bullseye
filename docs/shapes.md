@@ -146,7 +146,9 @@ bullseye_subdivide(
 ```
 
 `aggregate` mode keeps the parent as a converging umbrella that
-retires once all the children retire. Use `add` mode instead if the
+retires once all the children retire. `add` with default dotted IDs
+(`T4.1` of `T4`) does the same for the parent — a dotted family is
+an umbrella (🎯T39.1). Use explicit top-level child IDs if the
 parent's own deliverable should retire independently of the children.
 
 ---
@@ -361,17 +363,21 @@ bullseye_subdivide(
   parent=T_contract,
   mode="add",
   children=[
-    {name: "Impl A", depends_on: []},
-    {name: "Impl B", depends_on: []},
-    {name: "Impl C", depends_on: []},
+    {id: "T_impl_a", name: "Impl A", depends_on: []},
+    {id: "T_impl_b", name: "Impl B", depends_on: []},
+    {id: "T_impl_c", name: "Impl C", depends_on: []},
   ],
 )
 
 bullseye_put(
   name="Integrate against contract X",
-  depends_on=[T_contract_1, T_contract_2, T_contract_3],
+  depends_on=[T_impl_a, T_impl_b, T_impl_c],
 )
 ```
+
+Explicit top-level child IDs keep the contract independently
+retireable. Omitted IDs would allocate `T_contract.1` etc. and
+umbrella the contract under the impls (🎯T39.1).
 
 ---
 

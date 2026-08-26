@@ -2084,8 +2084,289 @@ fn put_child_of_auto_assigns_next_child_id() {
     let file = store::load(&path).unwrap();
     assert!(file.targets.contains_key("T1.1"));
     assert_eq!(file.targets["T1.1"].name, "Child allocated by Bullseye");
+    // 🎯T39.1: child_of is an umbrella edge, not a display prefix.
+    assert_eq!(file.targets["T1"].depends_on, vec!["T1.1"]);
+    assert_eq!(file.targets["T1"].status, Status::Converging);
 
     config::set_external_root_override(None);
+}
+
+#[test]
+fn put_child_of_refuses_terminal_parent() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "child-of-terminal").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    {
+        let mut file = store::load(&path).unwrap();
+        file.targets.get_mut("T1").unwrap().status = Status::Achieved;
+        file.targets.get_mut("T1").unwrap().achieved = Some(chrono::Local::now().date_naive());
+        store::save(&path, &file).unwrap();
+    }
+
+    let err = handle_put(PutTool {
+        cwd,
+        id: None,
+        child_of: Some("T1".to_string()),
+        name: Some("Spillover under achieved parent".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect_err("child_of on achieved parent must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("terminal") || msg.contains("Achieved"),
+        "error should name the terminal parent: {msg}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_explicit_dotted_id_wires_umbrella() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "explicit-dotted").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    handle_put(PutTool {
+        cwd,
+        id: Some("T1.1".to_string()),
+        child_of: None,
+        name: Some("Explicit dotted child".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect("explicit dotted create should succeed");
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T1"].depends_on, vec!["T1.1"]);
+    assert_eq!(file.targets["T1"].status, Status::Converging);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_explicit_dotted_id_refuses_terminal_parent() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "explicit-dotted-terminal").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    {
+        let mut file = store::load(&path).unwrap();
+        file.targets.get_mut("T1").unwrap().status = Status::Achieved;
+        file.targets.get_mut("T1").unwrap().achieved = Some(chrono::Local::now().date_naive());
+        store::save(&path, &file).unwrap();
+    }
+
+    let err = handle_put(PutTool {
+        cwd,
+        id: Some("T1.1".to_string()),
+        child_of: None,
+        name: Some("Spillover under achieved parent".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect_err("explicit dotted create on achieved parent must be rejected");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("terminal") || msg.contains("Achieved"),
+        "error should name the terminal parent: {msg}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn put_status_achieved_refuses_active_dotted_children() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::store;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "put-achieve-family").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        child_of: Some("T1".to_string()),
+        name: Some("Open child".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect("child_of should succeed");
+
+    let err = handle_put(PutTool {
+        cwd,
+        id: Some("T1".to_string()),
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: None,
+        context: None,
+        status: Some("achieved".to_string()),
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect_err("status=achieved must refuse while T1.1 is active");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("T1.1") && msg.contains("umbrella"),
+        "error should name the open child: {msg}"
+    );
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T1"].status, Status::Converging);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn achieve_refuses_active_dotted_children() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::{handle_put, handle_retire};
+    use bullseye::store;
+    use bullseye::tools::{PutTool, RetireTool};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "achieve-family").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    handle_put(PutTool {
+        cwd: cwd.clone(),
+        id: None,
+        child_of: Some("T1".to_string()),
+        name: Some("Open child".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["child exists".to_string()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect("child_of should succeed");
+
+    let err = handle_retire(RetireTool {
+        cwd,
+        id: "T1".to_string(),
+        attestation: "parent looks done if you ignore the children".to_string(),
+        actual_cost: None,
+    })
+    .expect_err("cannot achieve parent while T1.1 is active");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("T1.1") && msg.contains("umbrella"),
+        "error should name the open child: {msg}"
+    );
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T1"].status, Status::Converging);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn validate_flags_active_parent_missing_dotted_child() {
+    use bullseye::schema::Target;
+    use chrono::NaiveDate;
+
+    let mut file = load_fixture();
+    let date = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+    file.targets.insert(
+        "T1.1".to_string(),
+        Target {
+            name: "Orphan-looking child".to_string(),
+            status: Status::Identified,
+            value: 1.0,
+            cost: 1.0,
+            actual_cost: None,
+            attestation: None,
+            set_aside_reason: None,
+            acceptance: vec!["exists".to_string()],
+            checks: vec![],
+            context: String::new(),
+            gates: vec![],
+            depends_on: vec![],
+            cross_depends: vec![],
+            cross_enables: vec![],
+            tags: vec![],
+            strategy: None,
+            origin: "test".to_string(),
+            discovered: date,
+            achieved: None,
+            owned_by: None,
+            postponed_until: None,
+            postpone_predicate: None,
+        },
+    );
+
+    let errors = graph::validate_blocking(&file);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T1") && e.contains("T1.1")),
+        "expected umbrella validation error; got {errors:?}"
+    );
 }
 
 #[test]
@@ -2205,6 +2486,7 @@ fn summary_stale_parent_all_children_achieved() {
             },
         );
     }
+    file.targets.get_mut("T1").unwrap().depends_on = vec!["T1.1".to_string(), "T1.2".to_string()];
 
     // T1 is converging but both children are achieved — stale.
     let out = graph::summary(&file, "test", None, false);
@@ -2249,6 +2531,7 @@ fn summary_shows_grouped_children() {
             postpone_predicate: None,
         },
     );
+    file.targets.get_mut("T1").unwrap().depends_on = vec!["T1.1".to_string()];
 
     let out = graph::summary(&file, "test", None, false);
     // T1 should show a rollup count.
@@ -4890,7 +5173,7 @@ fn child_spec(name: &str, acceptance: &[&str]) -> bullseye::tools::SubdivisionCh
 }
 
 #[test]
-fn subdivide_add_mode_leaves_parent_and_extends_dependents() {
+fn subdivide_add_mode_wires_dotted_parent_and_extends_dependents() {
     use bullseye::config;
     use bullseye::handler::handle_subdivide;
     use bullseye::tools::SubdivideTool;
@@ -4920,14 +5203,11 @@ fn subdivide_add_mode_leaves_parent_and_extends_dependents() {
     assert_eq!(file.targets["T1.2"].name, "Spillover B");
     assert_eq!(file.targets["T1.1"].origin, "subdivide(🎯T1)");
 
-    // Parent untouched.
+    // 🎯T39.1: dotted children make the parent an umbrella. Dependents
+    // still gain the children alongside T1 (add vs aggregate).
     let t1 = &file.targets["T1"];
-    assert_eq!(t1.status, Status::Identified);
-    assert!(
-        t1.depends_on.is_empty(),
-        "add mode must not touch parent depends_on; got {:?}",
-        t1.depends_on
-    );
+    assert_eq!(t1.status, Status::Converging);
+    assert_eq!(t1.depends_on, vec!["T1.1", "T1.2"]);
 
     // Dependents gain the new children alongside T1.
     let t2 = &file.targets["T2"];
