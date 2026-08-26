@@ -119,9 +119,11 @@ create tools prompt for `in_repo` or `external` as before.
 **Ledger durability (🎯T73).** Mutating tools write `bullseye.yaml` and
 leave it dirty — bullseye does not create `Update bullseye.yaml`
 commits. Standing invariants (`make bullseye`) ignore ledger dirt so a
-fresh mutation does not block `/cv`. `/commit` always stages a dirty
-in-repo file; `/push` refuses if it is still dirty. Yaml-only
-auto-commits mean a pre-T73 binary.
+fresh mutation does not block `/cv`. Other dirt should be a loud
+warning (exit 0), not a hard fail — leftover WIP is normal during
+`/cv`; clean-tree remains a ship/release gate. `/commit` always
+stages a dirty in-repo file; `/push` refuses if it is still dirty.
+Yaml-only auto-commits mean a pre-T73 binary.
 
 ## Concurrency protocol
 

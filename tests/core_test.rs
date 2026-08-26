@@ -1027,9 +1027,24 @@ targets:
 /// `make bullseye` that is green except for a dirty-tree check that
 /// ignores `bullseye.yaml` at any in-repo path (🎯T73). `$$` is
 /// Makefile escaping so the shell sees `$(git …)` and `'bullseye\.yaml$'`.
+/// This fixture *fails* on non-ledger dirt — used to prove custom hooks
+/// that still hard-fail continue to block. The recommended skeleton
+/// warns instead (`DIRTY_WARN_MAKEFILE`).
 const YAML_IGNORING_MAKEFILE: &str = r#"bullseye:
 	@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \
 	 (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
+"#;
+
+/// Recommended dirty-tree policy: loud warning, exit 0. Agents decide
+/// whether to park leftover WIP or continue on this session's work.
+const DIRTY_WARN_MAKEFILE: &str = r#"bullseye:
+	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
+	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
+	else \
+	  echo "⚠  DIRTY WORKING TREE"; \
+	  echo "Warning only — invariants still pass (exit 0)."; \
+	  echo "$$dirty"; \
+	fi
 "#;
 
 #[test]
@@ -1446,6 +1461,37 @@ fn convergence_dirty_yaml_passes_when_hook_ignores_ledger() {
     assert!(
         next.contains("**Blocked**"),
         "other dirt must block; got:\n{next}"
+    );
+}
+
+#[test]
+fn convergence_dirty_tree_warns_without_failing_recommended_hook() {
+    // Recommended policy: non-ledger dirt is a loud warning (exit 0),
+    // so /cv can still recommend next work and the agent decides.
+    let tmp = tempfile::tempdir().unwrap();
+    write_project(tmp.path(), DIRTY_WARN_MAKEFILE, SIMPLE_TARGETS_YAML);
+    t73_git_repo_with_readme(tmp.path());
+    t73_git(tmp.path(), &["add", "-A"]);
+    t73_git(tmp.path(), &["commit", "-q", "-m", "add ledger"]);
+
+    std::fs::write(tmp.path().join("NOTES.txt"), "scratch\n").unwrap();
+
+    let path = tmp.path().join("bullseye.yaml");
+    let file = store::load(&path).unwrap();
+    let out = bullseye::convergence::convergence(&file, &path, tmp.path(), None, false);
+    assert!(
+        out.contains("Status: ✅ all green"),
+        "recommended dirty-tree hook must not fail invariants; got:\n{out}"
+    );
+    assert!(
+        out.contains("DIRTY WORKING TREE") || out.contains("Warning only"),
+        "dirty tree must be noisy in invariants output; got:\n{out}"
+    );
+    assert!(!out.contains("**Blocked**"), "got:\n{out}");
+    let next = out.split("## Next action").nth(1).expect("next action");
+    assert!(
+        next.contains("**Execute now**") || next.contains("Work on"),
+        "frontier recommendation must still fire; got:\n{next}"
     );
 }
 

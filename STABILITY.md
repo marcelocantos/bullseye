@@ -13,6 +13,15 @@ Snapshot as of 🎯T39.1 (dotted children are umbrella `depends_on`
 edges) on the T73 / T62–T72 base.
 Changes affecting the interaction surface, newest first:
 
+- **Dirty working tree warns instead of failing standing invariants**
+  (🎯T75). The recommended `make bullseye` / `mk bullseye` hook treats
+  non-ledger dirt as a loud warning (banner + file list, exit 0), not
+  a hard fail — leftover WIP is the normal `/cv` state and agents
+  decide whether to park or continue. `bullseye.yaml` remains ignored
+  (🎯T73). Clean-tree stays a ship/release gate (`/commit`, `/push`).
+  The missing-hook skeleton, agents-guide examples, and this repo's
+  Makefile dogfood the policy. Settling clock resets at v0.48.0.
+
 - **Dotted child IDs are umbrella edges** (🎯T39.1). `child_of` and
   explicit dotted-id create under a live parent append the child to
   the parent's `depends_on` and promote Identified→Converging.
@@ -31,7 +40,9 @@ Changes affecting the interaction surface, newest first:
   it dirty. `bullseye_convergence` does not `git commit` before
   invariants. Standing-invariants dirty-tree checks ignore
   `bullseye.yaml` (root and nested in-repo paths) so yaml dirt is
-  not a blocking dirty-tree. Durability is a different rail: `/commit`
+  not a blocking dirty-tree. The recommended hook treats other dirt
+  as a warning (exit 0), not a failing invariant. Durability is a
+  different rail: `/commit`
   always stages a dirty in-repo ledger, `/push` refuses if it is still
   dirty. The T72 own-commit amend path is gone, not retained as dead
   code. No `git_commit` module; no callable path that can still create
@@ -374,10 +385,11 @@ Earlier v0.25.0 changes still in effect:
   🎯T73 retired both). Mutating tools write the file and leave it
   dirty. `bullseye_convergence` does not fold the ledger into git
   before invariants. Standing-invariants dirty-tree checks ignore
-  `bullseye.yaml` (including nested in-repo paths). Durability is
-  `/commit` (always stage a dirty in-repo ledger) and `/push`
-  (refuse if it is still dirty). The T72 own-commit amend path is
-  gone. See 🎯T73.
+  `bullseye.yaml` (including nested in-repo paths). The recommended
+  hook treats other dirt as a warning (exit 0), not a failing
+  invariant. Durability is `/commit` (always stage a dirty in-repo
+  ledger) and `/push` (refuse if it is still dirty). The T72
+  own-commit amend path is gone. See 🎯T73.
 
 Earlier v0.24.0 changes still in effect:
 

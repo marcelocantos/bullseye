@@ -17,13 +17,27 @@
 #   1. fmt check (sub-second)
 #   2. clippy     (a few seconds warm, via rust-cache in CI)
 #   3. tests      (a few seconds warm)
-#   4. clean tree (trivial git call)
+#   4. dirty tree (warning only — leftover WIP is the normal /cv state)
 bullseye:
 	@cargo fmt --check >/dev/null && echo "✓ fmt"
 	@cargo clippy --quiet --all-targets -- -D warnings >/dev/null 2>&1 && echo "✓ clippy"
 	@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
-	@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \
-	 (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
+	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
+	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
+	else \
+	  echo ""; \
+	  echo "================================================================"; \
+	  echo "⚠  DIRTY WORKING TREE"; \
+	  echo ""; \
+	  echo "Warning only — invariants still pass (exit 0)."; \
+	  echo "Look at the files below before starting a new target."; \
+	  echo "Leftover work from a different objective → park it in a commit first."; \
+	  echo "This session's WIP on the recommended target → continue."; \
+	  echo "================================================================"; \
+	  echo "$$dirty"; \
+	  echo "================================================================"; \
+	  echo ""; \
+	fi
 
 # Convenience aliases for common cargo commands.
 test:

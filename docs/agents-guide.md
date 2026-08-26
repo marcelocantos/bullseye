@@ -633,17 +633,35 @@ top-level instructions file for the freeze directive.
 **Standing-invariants hook**: bullseye_convergence requires a
 `bullseye` rule in the project's `Makefile` or `mkfile`. The rule
 runs whatever checks the project considers "green" — tests, lints,
-clean tree, anything. Exit code 0 = all green, non-zero = at least
-one violation. Stdout is relayed verbatim into the Invariants section.
-Example for a Rust project:
+anything. Exit code 0 = all green, non-zero = at least one
+violation. A dirty working tree should **warn** (loud banner + file
+list, exit 0), not fail: leftover WIP is the normal state of `/cv`,
+and a hard fail blocks the recommendation. Ignore `bullseye.yaml`
+so a just-mutated ledger does not even warn. Clean-tree remains a
+ship/release gate. Stdout is relayed verbatim into the Invariants
+section. Example for a Rust project:
 
 ```make
 bullseye:
 \t@cargo fmt --check >/dev/null && echo "✓ fmt"
 \t@cargo clippy --quiet --all-targets -- -D warnings >/dev/null 2>&1 && echo "✓ clippy"
 \t@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
-\t@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \\
-\t (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
+\t@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \\
+\tif [ -z "$$dirty" ]; then echo "✓ working tree clean"; \\
+\telse \\
+\t  echo ""; \\
+\t  echo "================================================================"; \\
+\t  echo "⚠  DIRTY WORKING TREE"; \\
+\t  echo ""; \\
+\t  echo "Warning only — invariants still pass (exit 0)."; \\
+\t  echo "Look at the files below before starting a new target."; \\
+\t  echo "Leftover work from a different objective → park it in a commit first."; \\
+\t  echo "This session's WIP on the recommended target → continue."; \\
+\t  echo "================================================================"; \\
+\t  echo "$$dirty"; \\
+\t  echo "================================================================"; \\
+\t  echo ""; \\
+\tfi
 ```
 
 **Parallelised variant** (optional): projects with *heterogeneous*
@@ -655,9 +673,9 @@ sub-rules and let make schedule them across cores:
 NPROC := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 MAKEFLAGS += -j$(NPROC)
 
-.PHONY: bullseye check-fmt check-clippy check-tests check-clean
+.PHONY: bullseye check-fmt check-clippy check-tests check-dirty
 
-bullseye: check-fmt check-clippy check-tests check-clean
+bullseye: check-fmt check-clippy check-tests check-dirty
 
 check-fmt:
 \t@cargo fmt --check >/dev/null && echo "✓ fmt"
@@ -668,9 +686,23 @@ check-clippy:
 check-tests:
 \t@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
 
-check-clean:
-\t@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean tree" || \\
-\t (echo "✗ dirty tree:"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)
+check-dirty:
+\t@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \\
+\tif [ -z "$$dirty" ]; then echo "✓ working tree clean"; \\
+\telse \\
+\t  echo ""; \\
+\t  echo "================================================================"; \\
+\t  echo "⚠  DIRTY WORKING TREE"; \\
+\t  echo ""; \\
+\t  echo "Warning only — invariants still pass (exit 0)."; \\
+\t  echo "Look at the files below before starting a new target."; \\
+\t  echo "Leftover work from a different objective → park it in a commit first."; \\
+\t  echo "This session's WIP on the recommended target → continue."; \\
+\t  echo "================================================================"; \\
+\t  echo "$$dirty"; \\
+\t  echo "================================================================"; \\
+\t  echo ""; \\
+\tfi
 ```
 
 The `NPROC` fallback chain works on Linux (`nproc`), macOS/BSD
@@ -1022,6 +1054,12 @@ the old failure, the installed binary is older than this guide —
   invariants ignore the file so yaml dirt does not block `/cv`. A
   yaml-only auto-commit is a sign of a pre-T73 binary. T72's
   this-process amend path is gone with the auto-commit rail.
+- **Dirty working tree in `make bullseye` (🎯T75).** v0.48.0+
+  recommends a loud warning (exit 0) for non-ledger dirt so `/cv` is
+  not blocked by leftover WIP. A hook that still `exit 1`s on dirt
+  is a project choice or stale guidance — update from
+  `docs/agents-guide.md` or upgrade the binary that emits the
+  missing-hook skeleton.
 - **`--version` is not just the crate version (🎯T69).** Workspace
   and Homebrew builds of v0.45.0+ print
   `bullseye 0.45.0 (<12-hex>[-dirty])`. Bare `bullseye 0.44.0` is the

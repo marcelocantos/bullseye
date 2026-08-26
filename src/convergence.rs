@@ -943,13 +943,29 @@ fn render_next_action(
 
 /// Example `make bullseye` rule shown in the setup instructions.
 /// Dirty-tree ignores `bullseye.yaml` at any in-repo path (🎯T73) so a
-/// freshly mutated ledger does not reintroduce T22's block.
+/// freshly mutated ledger does not reintroduce T22's block. Dirt is a
+/// warning (exit 0), not a failing invariant — leftover WIP is the
+/// normal state of /cv.
 pub(crate) const MAKE_BULLSEYE_EXAMPLE: &str = r#"bullseye:
 	@cargo fmt --check && echo "✓ fmt"
 	@cargo clippy --quiet -- -D warnings && echo "✓ clippy"
 	@cargo test --quiet 2>&1 | grep "test result" && echo "✓ tests"
-	@test -z "$$(git status --porcelain | grep -vE 'bullseye\.yaml$$')" && echo "✓ clean" || \
-	 (echo "✗ dirty tree"; git status --short | grep -vE 'bullseye\.yaml$$'; exit 1)"#;
+	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
+	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
+	else \
+	  echo ""; \
+	  echo "================================================================"; \
+	  echo "⚠  DIRTY WORKING TREE"; \
+	  echo ""; \
+	  echo "Warning only — invariants still pass (exit 0)."; \
+	  echo "Look at the files below before starting a new target."; \
+	  echo "Leftover work from a different objective → park it in a commit first."; \
+	  echo "This session's WIP on the recommended target → continue."; \
+	  echo "================================================================"; \
+	  echo "$$dirty"; \
+	  echo "================================================================"; \
+	  echo ""; \
+	fi"#;
 
 #[cfg(test)]
 mod tests {
@@ -1013,6 +1029,18 @@ mod tests {
                 );
             }
         }
+        assert!(
+            MAKE_BULLSEYE_EXAMPLE.contains("DIRTY WORKING TREE"),
+            "skeleton dirty-tree must be a loud warning; got:\n{MAKE_BULLSEYE_EXAMPLE}"
+        );
+        assert!(
+            MAKE_BULLSEYE_EXAMPLE.contains("Warning only"),
+            "skeleton dirty-tree must say warning only; got:\n{MAKE_BULLSEYE_EXAMPLE}"
+        );
+        assert!(
+            !MAKE_BULLSEYE_EXAMPLE.contains("exit 1"),
+            "skeleton dirty-tree must not fail the hook; got:\n{MAKE_BULLSEYE_EXAMPLE}"
+        );
     }
 
     #[test]
