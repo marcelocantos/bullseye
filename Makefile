@@ -6,7 +6,6 @@
 # own convergence hook — classic dogfooding) to check standing
 # invariants before recommending next work.
 
-.PHONY: bullseye test check fmt lint build
 
 # Standing-invariants check. Exit 0 = all green, non-zero = at least
 # one violation. Stdout is relayed verbatim to the agent in the
@@ -59,3 +58,33 @@ lint:
 
 build:
 	cargo build
+
+# --- release (local; the gate above is the preflight oracle) ----------
+#
+#   make release-dist  — build dist/bullseye-<ver>-{darwin-arm64,linux-*}.tar.gz
+#   make release-tap   — update marcelocantos/homebrew-tap (release must exist)
+#   make release       — gate + dist + gh release create + tap + brew upgrade
+#
+# There is no CI. The gate runs here, publish runs here, and both are
+# reproducible on the machine in front of you.
+
+release-dist:
+	./scripts/release-package.sh
+
+release-tap:
+	./scripts/release-tap.sh
+
+# Is the newest PUBLISHED release able to reach every repair path
+# (🎯T70)? Ran in ci.yml until the gate moved local; keep it runnable
+# on its own, not only as part of a release.
+reachability:
+	./scripts/probe-published-release.sh
+
+release: bullseye release-dist
+	./scripts/release-publish.sh
+
+clean:
+	cargo clean
+	rm -rf dist
+
+.PHONY: bullseye test check fmt lint build release release-dist release-tap reachability clean

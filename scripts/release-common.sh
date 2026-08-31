@@ -40,15 +40,18 @@ require_gh() {
 
 # Cross-compiling to Linux needs rustup's toolchain, which carries the
 # linux-gnu std. Homebrew's rust ships only the host target and sits
-# earlier on PATH, so `cargo` alone resolves to a toolchain that cannot
-# see `core` for these targets — and fails with the misleading
-# "target may not be installed", even though `rustup target list` shows
-# it installed (rustup added it to a different toolchain).
-rustup_cargo() {
-	local candidate="$HOME/.cargo/bin/cargo"
-	[[ -x "$candidate" ]] || {
-		echo "rustup cargo not found at $candidate — cross builds need rustup, not Homebrew rust" >&2
+# earlier on PATH, so a plain `cargo` resolves to a toolchain that
+# cannot see `core` for these targets — and says "target may not be
+# installed" for a target `rustup target list` reports as installed
+# (rustup added it to a different toolchain).
+#
+# Putting rustup ahead on PATH rather than just resolving the binary is
+# the load-bearing part: cargo-zigbuild shells out to `cargo` again, so
+# a fixed argv[0] alone still lands the inner build on Homebrew's rust.
+use_rustup_toolchain() {
+	[[ -x "$HOME/.cargo/bin/cargo" ]] || {
+		echo "rustup cargo not found at $HOME/.cargo/bin/cargo — cross builds need rustup, not Homebrew rust" >&2
 		exit 1
 	}
-	printf '%s' "$candidate"
+	export PATH="$HOME/.cargo/bin:$PATH"
 }

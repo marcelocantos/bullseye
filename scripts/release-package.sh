@@ -10,7 +10,7 @@ source "$(dirname "$0")/release-common.sh"
 VERSION="$(release_version)"
 DIST="$ROOT/dist"
 STAGE="$DIST/stage"
-CARGO="$(rustup_cargo)"
+use_rustup_toolchain
 
 rm -rf "$DIST"
 mkdir -p "$STAGE"
@@ -20,7 +20,7 @@ build_one() {
 	local asset="bullseye-${VERSION}-${asset_name}.tar.gz"
 
 	echo "release-package: building ${triple} …" >&2
-	"$CARGO" "$builder" --release --target "$triple"
+	cargo "$builder" --release --target "$triple"
 
 	cp "target/${triple}/release/bullseye" "$STAGE/bullseye"
 	tar -czf "$DIST/$asset" -C "$STAGE" bullseye -C "$ROOT" LICENSE README.md

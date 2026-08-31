@@ -1,0 +1,18 @@
+# Homebrew tap publication for bullseye. `tapper push` runs from the dev
+# Mac after the GitHub release exists; the token lives in the macOS
+# keychain, so there is no Actions secret and no CI step.
+repo: marcelocantos/bullseye
+tap:
+  owner: marcelocantos
+  name: homebrew-tap
+push:
+  darwin_arm64: true
+  linux_amd64: true
+  linux_arm64: true
+  # Deliberately NOT skipping checksums: 🎯T74.5 (entropy audit ENT-005)
+  # is open precisely because an unverified tap plus unsigned assets lets
+  # a compromised token ship a binary brew will not reject. The formula
+  # already carries a sha256 per asset today; keep it that way.
+  skip_checksum: false
+  update_readme_table: true
+test: 'system bin/"bullseye", "--version"'

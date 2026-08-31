@@ -80,4 +80,31 @@ Tests are split between unit tests in modules (`portfolio`, `import`) and integr
 
 ## Delivery
 
-Merged to master.
+Committed to master. Work lands as ordinary commits on `master` — no
+pull requests, no merge commits, no CI gate.
+
+`make bullseye` is the gate, and it is the whole definition of green:
+`cargo fmt --check`, `cargo clippy --all-targets -D warnings`, and the
+test suite. Nothing about "green" is expressible only on a server, so
+it can always be reproduced on the machine in front of you. Each step
+prints its diagnostic on failure rather than a bare exit code.
+
+## Release
+
+Local, from the dev Mac. There is no release workflow:
+
+```bash
+make release-dist   # dist/bullseye-<ver>-{darwin-arm64,linux-amd64,linux-arm64}.tar.gz
+make release-tap    # push the formula to marcelocantos/homebrew-tap (release must exist)
+make release        # gate + dist + gh release create + tap + brew upgrade + verify
+```
+
+The Linux tarballs cross-compile here through `cargo-zigbuild`, which
+supplies the cross linker and glibc headers the bundled SQLite needs.
+**Cross builds require rustup's toolchain, not Homebrew's rust** —
+Homebrew ships only the host target and sits earlier on `PATH`, so a
+plain `cargo` reports "target may not be installed" for a target
+`rustup target list` says is installed. `scripts/release-common.sh`
+resolves `~/.cargo/bin/cargo` explicitly to avoid this.
+
+Version bumps are MINOR-only and go through the `/release` skill.

@@ -30,7 +30,21 @@
 set -euo pipefail
 
 # Platform slug in the release asset name (see .github/workflows/release.yml).
-ASSET_PLATFORM="${BULLSEYE_RELEASE_ASSET:-linux-amd64}"
+# Default to the host's own asset. This used to be hardcoded to
+# linux-amd64, which was right while the only caller was a GitHub
+# runner; run on the dev Mac it downloads an ELF and reports
+# "Exec format error" as a REACHABILITY FAILURE — a false red that
+# looks exactly like the true one. Now that the release runs here, the
+# default has to follow the host.
+default_asset() {
+	case "$(uname -s)/$(uname -m)" in
+	Darwin/arm64) printf 'darwin-arm64' ;;
+	Linux/x86_64) printf 'linux-amd64' ;;
+	Linux/aarch64 | Linux/arm64) printf 'linux-arm64' ;;
+	*) printf 'linux-amd64' ;;
+	esac
+}
+ASSET_PLATFORM="${BULLSEYE_RELEASE_ASSET:-$(default_asset)}"
 # Pin a tag to probe an older release; default is the newest published.
 RELEASE_TAG="${BULLSEYE_RELEASE_TAG:-}"
 REPO="${GITHUB_REPOSITORY:-marcelocantos/bullseye}"
