@@ -22,7 +22,8 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 |------|------|
 | `bullseye_open` | Discover / init / session snapshot |
 | `bullseye_query` | All reads (`view=…`) |
-| `bullseye_commit` | All ledger mutations (`op=…`) |
+| `bullseye_apply` | All ledger mutations — one write verb (🎯T76) |
+| `bullseye_commit` | Named verbs (`op=…`); sugar over `apply` |
 | `bullseye_plan_checks` | Emit sawmill check plan only (does not run checks) |
 
 ### `bullseye_open`
@@ -104,18 +105,81 @@ Disjoint components are allowed (no error solely for disconnected selection).
 Response is fenced ` ```mermaid ` source suitable for chat renderers (e.g. jevons 🎯T59).
 CLI twin: `bullseye query --view graph [--scope …] [--nodes A,B] [--seeds S] [--expand ancestors,…]`.
 
+### `bullseye_apply` (🎯T76)
+
+The single write verb. Takes a **partial desired-state fragment** and
+diffs it against the current file, derives the transitions, enforces the
+evidence policy, and writes.
+
+```yaml
+base: sha256:…            # optional CAS token; mismatch → code=conflict
+targets:
+  T55: {value: 8}         # patch: unmentioned fields are left alone
+  _new:                   # a key beginning with `_` allocates an ID
+    name: …
+    acceptance: [ … ]
+    child_of: T64
+remove: [T99]             # explicit; never inferred from absence
+```
+
+Two rules that are load-bearing rather than incidental:
+
+- **A fragment is partial-merge and never authoritative for absence.**
+  Listing three targets does not delete the other 113. Removal is the
+  explicit `remove:` list, and it refuses to dangle a `depends_on` edge.
+- **Unknown fields are errors**, not silent drops. The same rule now
+  applies to unrecognised CLI flags, which previously returned
+  `ok: true` — a typo was indistinguishable from a successful write.
+
+Patchable fields: `name`, `status`, `value`, `cost`, `actual_cost`,
+`acceptance`, `context`, `tags`, `depends_on`, `blocks`, `origin`,
+`child_of`, `attestation`, `reason`, `owner`, `postponed_until`,
+`postpone_predicate`, plus `clear` (a list of fields to reset — omission
+means "leave alone", so `clear` is how a field becomes nothing) and
+`if_status` (a precondition: refuse unless the target has that status).
+
+The field list in `apply --help` and in the MCP tool description is
+pinned to the schema by tests, so a capability can never again exist
+while the documentation denies it — the root cause 🎯T76 was filed for.
+
+#### Transition policy
+
+Evidence obligations are a data table (`apply::POLICY`), not rules
+scattered across per-verb handlers. They bind on **every** path:
+
+| Transition | Requires |
+|------------|----------|
+| `status → achieved` | `attestation` (non-trivial; `done` / `ok` rejected) |
+| `status → set_aside` | `reason` |
+| `achieved → active` (reopen) | `reason` |
+| owner assigned | `reason` (clearing needs none) |
+
+Everything else — `name`, `acceptance`, `context`, `tags`, `value`,
+`cost`, `depends_on`, `origin` — patches freely on an active target.
+
+CLI twin: `bullseye apply [-f FILE | - | --id ID --set k=v …]`.
+
 ### `bullseye_commit` ops
+
+Named verbs, kept because a verb list teaches the lifecycle in a way a
+bare `apply` cannot. All except `split` and `rehash` are **sugar**: they
+assemble a fragment and call the one engine, so they cannot drift from
+it. `split` is a composite domain operation (`ops::subdivide`) built on
+the same primitives; `rehash` is an integrity op on the file, not a
+ledger mutation.
 
 | `op` | Meaning | Maps to (shim) |
 |------|---------|----------------|
 | `track` | Create or patch a target | `bullseye_put` |
 | `block` | Inject this target into others' `depends_on` (`id` + `blocks`) | `put` with `blocks` |
-| `split` | Subdivide parent into children | `bullseye_subdivide` |
+| `split` | Subdivide parent into children (CLI: `--children-file F\|-`) | `bullseye_subdivide` |
 | `achieve` | Retire as achieved (requires `attestation`) | `bullseye_retire` |
 | `defer` | Set aside with reason | `bullseye_set_aside` |
 | `reopen` | Revert an achieved target | `bullseye_revert` |
 | `assign` | Mark owned-by-another (`id` + `owner` + `reason`) | — |
 | `unassign` | Clear ownership exclusion | — |
+| `postpone` / `wake` | Set / clear the wake condition | — |
+| `rehash` | Re-stamp `content_hash` after an authorised hand edit | — |
 
 On **track create**, the allocated ID is knowable **only** from the
 result envelope (`ids:`) — never predict it (TOCTOU).
