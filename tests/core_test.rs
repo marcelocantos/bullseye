@@ -2046,6 +2046,7 @@ fn put_create_without_value_cost_succeeds() {
     // Cleared at end of test.
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -2105,6 +2106,7 @@ fn put_child_of_auto_assigns_next_child_id() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: Some("T1".to_string()),
@@ -2158,6 +2160,7 @@ fn put_child_of_refuses_terminal_parent() {
     }
 
     let err = handle_put(PutTool {
+        reason: None,
         cwd,
         id: None,
         child_of: Some("T1".to_string()),
@@ -2196,6 +2199,7 @@ fn put_explicit_dotted_id_wires_umbrella() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("T1.1".to_string()),
         child_of: None,
@@ -2240,6 +2244,7 @@ fn put_explicit_dotted_id_refuses_terminal_parent() {
     }
 
     let err = handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("T1.1".to_string()),
         child_of: None,
@@ -2278,6 +2283,7 @@ fn put_status_achieved_refuses_active_dotted_children() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: Some("T1".to_string()),
@@ -2295,6 +2301,7 @@ fn put_status_achieved_refuses_active_dotted_children() {
     .expect("child_of should succeed");
 
     let err = handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("T1".to_string()),
         child_of: None,
@@ -2336,6 +2343,7 @@ fn achieve_refuses_active_dotted_children() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: Some("T1".to_string()),
@@ -2430,6 +2438,7 @@ fn put_rejects_child_of_with_explicit_id() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let err = handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("T1.9".to_string()),
         child_of: Some("T1".to_string()),
@@ -2469,6 +2478,7 @@ fn put_rejects_zero_valued_dotted_explicit_id() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let err = handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("T1.0".to_string()),
         child_of: None,
@@ -4171,6 +4181,7 @@ fn put_rejects_envelope_markers_in_name() {
     let markers = ["<invoke ", "</invoke>", "<parameter ", "</parameter>"];
     for marker in markers {
         let result = handle_put(PutTool {
+            reason: None,
             cwd: cwd.clone(),
             id: None,
             child_of: None,
@@ -4219,6 +4230,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
 
     // context
     let r = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -4241,6 +4253,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
 
     // acceptance[0]
     let r = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -4266,6 +4279,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
 
     // tags[0]
     let r = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -4288,6 +4302,7 @@ fn put_rejects_envelope_markers_in_other_fields() {
 
     // origin
     let r = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -4329,6 +4344,7 @@ fn put_allows_legitimate_angle_bracket_prose() {
 
     // These contain angle brackets but are NOT envelope markers.
     let result = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -4374,6 +4390,7 @@ fn put_file_unchanged_on_envelope_rejection() {
     let before = std::fs::read_to_string(&path).unwrap();
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -4419,6 +4436,7 @@ fn put_rejects_invalid_control_character_and_leaves_file_unchanged() {
     let before = std::fs::read_to_string(&path).unwrap();
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -4464,6 +4482,7 @@ fn put_allows_newline_and_tab_in_context() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd,
         id: None,
         child_of: None,
@@ -4966,6 +4985,7 @@ fn t24_mutation_refused_in_submodule_replica() {
     let commits_before = t24_commit_count(&submodule);
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd: submodule.to_string_lossy().to_string(),
         id: Some("T1".to_string()),
         child_of: None,
@@ -5048,6 +5068,7 @@ fn t24_mutation_refused_in_detached_head() {
     let commits_before = t24_commit_count(&repo);
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd: repo.to_string_lossy().to_string(),
         id: Some("T1".to_string()),
         child_of: None,
@@ -5746,6 +5767,7 @@ fn reshape_fanout_insertion_above_existing_node_via_blocks() {
     let path = tmp.path().join("bullseye.yaml");
 
     let result = handle_put(PutTool {
+        reason: None,
         cwd,
         id: None,
         child_of: None,
@@ -5800,6 +5822,7 @@ fn reshape_chain_extension_via_depends_on_and_blocks() {
     let path = tmp.path().join("bullseye.yaml");
 
     handle_put(PutTool {
+        reason: None,
         cwd,
         id: None,
         child_of: None,
@@ -5915,6 +5938,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
     }
 
     handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("G".to_string()),
         child_of: None,
@@ -6098,6 +6122,7 @@ fn id_alloc_put_skips_branched_ids() {
     // branch. The git-history-aware path must pick T4.
     let cwd = tmp.path().to_string_lossy().to_string();
     let result = handle_put(PutTool {
+        reason: None,
         cwd: cwd.clone(),
         id: None,
         child_of: None,
@@ -6161,6 +6186,7 @@ fn id_alloc_explicit_collision_with_branched_id_is_rejected() {
     // rejected with a message pointing at git history.
     let cwd = tmp.path().to_string_lossy().to_string();
     let err = handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("T2".to_string()),
         child_of: None,
@@ -6850,6 +6876,7 @@ fn t45_immutable_achieved_uses_error_code() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let err = handle_put(PutTool {
+        reason: None,
         cwd,
         id: Some("T1".to_string()),
         child_of: None,

@@ -78,7 +78,28 @@ pub struct Fragment {
     pub postponed_until: Option<NaiveDate>,
     /// Opaque agent-evaluated wake condition.
     pub postpone_predicate: Option<String>,
+    /// Precondition: refuse unless the target currently has this
+    /// status. Complements the file-level `base` hash with a
+    /// per-target check, and lets a verb like `reopen` insist that it
+    /// is really reopening something.
+    pub if_status: Option<String>,
+    /// Fields to reset to empty. A partial fragment says what a field
+    /// *becomes*, which cannot express "becomes nothing" — omitting a
+    /// field means "leave it alone". `clear` is that missing half, and
+    /// is uniform across fields rather than a per-field sentinel.
+    pub clear: Option<Vec<String>>,
 }
+
+/// Fields `clear` accepts, and what clearing each one means.
+pub const CLEARABLE_FIELDS: &[&str] = &[
+    "owner",
+    "postponed_until",
+    "postpone_predicate",
+    "actual_cost",
+    "context",
+    "tags",
+    "depends_on",
+];
 
 /// One row of the documented field surface. Pinned against
 /// [`Fragment`] by a test so help text cannot drift from the schema.
@@ -157,6 +178,14 @@ pub const FIELD_HELP: &[FieldHelp] = &[
         name: "postpone_predicate",
         blurb: "opaque agent-evaluated wake condition",
     },
+    FieldHelp {
+        name: "if_status",
+        blurb: "precondition: refuse unless the target has this status",
+    },
+    FieldHelp {
+        name: "clear",
+        blurb: "list of fields to reset to empty (see CLEARABLE_FIELDS)",
+    },
 ];
 
 /// An evidence obligation attached to a transition.
@@ -192,9 +221,9 @@ pub const POLICY: &[Obligation] = &[
         because: "reopening contradicts a recorded attestation, so the contradiction must be explained",
     },
     Obligation {
-        transition: "owner set or cleared",
+        transition: "owner assigned",
         requires: "reason",
-        because: "ownership moves work out of this frontier without unblocking dependents",
+        because: "assigning moves work out of this frontier without unblocking dependents; clearing it needs no defence",
     },
 ];
 
@@ -307,6 +336,57 @@ fn non_empty(v: &Option<String>) -> bool {
     v.as_deref().is_some_and(|s| !s.trim().is_empty())
 }
 
+/// Normalize and validate achieve attestation (🎯T58).
+///
+/// Soft API nudge: non-empty free text, reject a few trivial tokens
+/// (`done`, `ok`, …). Not a semantic judge of truth.
+pub fn normalize_attestation(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "achieve requires a non-empty `attestation` — a short note on how you believe \
+             the target is met (SHA, test name, persona oracle, owner smoke, residual risk). \
+             Not formal proof."
+                .to_string(),
+        );
+    }
+    // Cheap trivial-string reject (optional acceptance). Case-insensitive
+    // whole-string match only — not a semantic judge.
+    const TRIVIAL: &[&str] = &[
+        "done",
+        "ok",
+        "yes",
+        "yep",
+        "fixed",
+        "n/a",
+        "na",
+        "pass",
+        "passed",
+        "lgtm",
+        "shipped",
+        "complete",
+        "completed",
+        "achieved",
+        "finished",
+    ];
+    let lower = trimmed.to_ascii_lowercase();
+    if TRIVIAL.contains(&lower.as_str()) {
+        return Err(format!(
+            "attestation `{trimmed}` is too trivial — write a short note on how you believe \
+             the target is met (SHA, test name, persona oracle, owner smoke, residual risk). \
+             Not formal proof."
+        ));
+    }
+    if trimmed.chars().count() < 4 {
+        return Err(
+            "attestation is too short — write a short note on how you believe the target is \
+             met (SHA, test name, persona oracle, owner smoke, residual risk). Not formal proof."
+                .to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Check the fragment against [`POLICY`] for one target's transition.
 ///
 /// `from` is `None` for a create.
@@ -316,7 +396,9 @@ fn check_obligations(
     to: Status,
     frag: &Fragment,
 ) -> Result<(), ApplyError> {
-    let owner_change = frag.owner.is_some();
+    // Assigning an owner needs a justification; clearing one does not
+    // — it returns the work to this frontier rather than removing it.
+    let owner_assigned = frag.owner.as_deref().is_some_and(|o| !o.trim().is_empty());
     let becomes_achieved = to == Status::Achieved && from != Some(Status::Achieved);
     let becomes_set_aside = to == Status::SetAside && from != Some(Status::SetAside);
     let reopened = from == Some(Status::Achieved) && to != Status::Achieved;
@@ -327,14 +409,29 @@ fn check_obligations(
             "status → achieved" => becomes_achieved,
             "status → set_aside" => becomes_set_aside,
             "achieved → active (reopen)" => reopened,
-            "owner set or cleared" => owner_change,
+            "owner assigned" => owner_assigned,
             _ => false,
         };
         if !triggered {
             continue;
         }
         let satisfied = match ob.requires {
-            "attestation" => non_empty(&frag.attestation),
+            // Attestation carries a content gate, not just a presence
+            // one: "done" is a claim, not evidence. Enforced here so
+            // `apply` cannot be used to route around the bar that
+            // `commit --op achieve` has always applied.
+            "attestation" => match &frag.attestation {
+                Some(raw) => match normalize_attestation(raw) {
+                    Ok(_) => true,
+                    Err(msg) => {
+                        return Err(ApplyError::new(
+                            ErrorCode::Validation,
+                            format!("apply rejected for 🎯{id}: {msg}"),
+                        ));
+                    }
+                },
+                None => false,
+            },
             "reason" => non_empty(&frag.reason),
             _ => true,
         };
@@ -462,10 +559,32 @@ pub fn apply(
         }
 
         let from = file.targets.get(&id).map(|t| t.status);
+        if let Some(expected) = &frag.if_status {
+            let expected = parse_status(expected)?;
+            if from != Some(expected) {
+                return Err(ApplyError::new(
+                    ErrorCode::Conflict,
+                    match from {
+                        Some(actual) => format!(
+                            "🎯{id} is {actual:?}, but this apply requires it to be \
+                             {expected:?} — the ledger is not in the state you assumed."
+                        ),
+                        None => format!("🎯{id} does not exist, so it cannot be {expected:?}"),
+                    },
+                ));
+            }
+        }
         let to = match &frag.status {
             Some(s) => parse_status(s)?,
             None => from.unwrap_or(Status::Identified),
         };
+        // Structural refusal precedes evidence: telling a caller to
+        // write an attestation for a transition that is forbidden
+        // regardless would be the wrong correction.
+        if to == Status::Achieved && from.is_some() && from != Some(Status::Achieved) {
+            ops::refuse_active_family(file, &id)
+                .map_err(|e| ApplyError::new(ErrorCode::Validation, e))?;
+        }
         check_obligations(&id, from, to, frag)?;
 
         if is_create {
@@ -519,11 +638,6 @@ pub fn apply(
                 .map_err(|e| ApplyError::new(ErrorCode::Validation, e.to_string()))?;
             report.created.push(id.clone());
         } else {
-            if to == Status::Achieved && from != Some(Status::Achieved) {
-                ops::refuse_active_family(file, &id)
-                    .map_err(|e| ApplyError::new(ErrorCode::Validation, e))?;
-            }
-
             // Achieved targets are historical artifacts: their content
             // is immutable unless this same apply reopens them (🎯T8).
             let content_edits = frag.name.is_some()
@@ -572,6 +686,17 @@ pub fn apply(
             if let Some(v) = &frag.depends_on {
                 target.depends_on = v.clone();
             }
+            if (frag.postponed_until.is_some() || frag.postpone_predicate.is_some())
+                && target.status.is_terminal()
+            {
+                return Err(ApplyError::new(
+                    ErrorCode::Validation,
+                    format!(
+                        "🎯{id} is terminal ({:?}) — reopen or un-set-aside before postponing",
+                        target.status
+                    ),
+                ));
+            }
             if let Some(v) = frag.postponed_until {
                 target.postponed_until = Some(v);
             }
@@ -579,6 +704,15 @@ pub fn apply(
                 target.postpone_predicate = Some(v.clone());
             }
             if let Some(owner) = &frag.owner {
+                if !owner.trim().is_empty() && target.status.is_terminal() {
+                    return Err(ApplyError::new(
+                        ErrorCode::Validation,
+                        format!(
+                            "🎯{id} is {:?} — ownership exclusion only applies to active targets",
+                            target.status
+                        ),
+                    ));
+                }
                 target.owned_by = if owner.trim().is_empty() {
                     None
                 } else {
@@ -587,6 +721,29 @@ pub fn apply(
                         reason: frag.reason.clone().unwrap_or_default(),
                     })
                 };
+            }
+
+            if let Some(fields) = &frag.clear {
+                for field in fields {
+                    match field.as_str() {
+                        "owner" => target.owned_by = None,
+                        "postponed_until" => target.postponed_until = None,
+                        "postpone_predicate" => target.postpone_predicate = None,
+                        "actual_cost" => target.actual_cost = None,
+                        "context" => target.context = String::new(),
+                        "tags" => target.tags.clear(),
+                        "depends_on" => target.depends_on.clear(),
+                        other => {
+                            return Err(ApplyError::new(
+                                ErrorCode::InvalidArgs,
+                                format!(
+                                    "cannot clear `{other}` — clearable fields are: {}",
+                                    CLEARABLE_FIELDS.join(", ")
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
 
             if frag.status.is_some() && Some(to) != from {
@@ -601,6 +758,23 @@ pub fn apply(
                     }
                     Status::SetAside => {
                         target.set_aside_reason = frag.reason.clone();
+                    }
+                    // Reopening contradicts a recorded attestation, so
+                    // the explanation is appended to context: the audit
+                    // trail survives in-place rather than living only in
+                    // a tool result nobody reads again.
+                    Status::Identified | Status::Converging if from == Some(Status::Achieved) => {
+                        if let Some(reason) = frag.reason.as_deref().map(str::trim)
+                            && !reason.is_empty()
+                        {
+                            let entry = format!("Reverted {today}: {reason}");
+                            if target.context.is_empty() {
+                                target.context = entry;
+                            } else {
+                                target.context.push_str("\n\n");
+                                target.context.push_str(&entry);
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -812,6 +986,30 @@ targets:
     }
 
     #[test]
+    fn apply_cannot_route_around_the_attestation_content_gate() {
+        // "done" is a claim, not evidence. `commit --op achieve` has
+        // always rejected it; apply must not be the way around that.
+        for trivial in ["done", "ok", "lgtm", "n/a", "xy"] {
+            let mut file = base_file();
+            let err = apply(
+                &mut file,
+                &one(
+                    "T1",
+                    Fragment {
+                        status: Some("achieved".into()),
+                        attestation: Some(trivial.into()),
+                        ..Default::default()
+                    },
+                ),
+                &no_history(),
+            )
+            .expect_err("must refuse trivial attestation");
+            assert_eq!(err.code, ErrorCode::Validation);
+            assert_eq!(file.targets["T1"].status, Status::Identified);
+        }
+    }
+
+    #[test]
     fn set_aside_requires_a_reason_and_records_it() {
         let mut file = base_file();
         let err = apply(
@@ -882,7 +1080,7 @@ targets:
     }
 
     #[test]
-    fn owner_change_requires_a_reason() {
+    fn assigning_an_owner_requires_a_reason() {
         let mut file = base_file();
         let err = apply(
             &mut file,
@@ -897,6 +1095,60 @@ targets:
         )
         .expect_err("must refuse");
         assert!(err.message.contains("owner"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn clearing_an_owner_needs_no_reason() {
+        let mut file = base_file();
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    owner: Some("alice".into()),
+                    reason: Some("alice is driving it".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("assign");
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    owner: Some(String::new()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("clearing needs no reason");
+        assert!(file.targets["T1"].owned_by.is_none());
+    }
+
+    #[test]
+    fn an_owner_cannot_be_assigned_to_a_terminal_target() {
+        let mut file = base_file();
+        let err = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    owner: Some("alice".into()),
+                    reason: Some("r".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert!(
+            err.message.contains("active targets"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -951,6 +1203,131 @@ targets:
                 "UNOBLIGED_FIELDS names unknown field {f}"
             );
         }
+    }
+
+    // --- Preconditions and clearing ---------------------------------
+
+    #[test]
+    fn if_status_refuses_when_the_ledger_is_not_in_the_assumed_state() {
+        let mut file = base_file();
+        let err = apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    if_status: Some("achieved".into()),
+                    name: Some("renamed".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert_eq!(err.code, ErrorCode::Conflict);
+        assert_eq!(file.targets["T1"].name, "thing works");
+    }
+
+    #[test]
+    fn if_status_allows_the_change_when_it_matches() {
+        let mut file = base_file();
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    if_status: Some("identified".into()),
+                    name: Some("renamed".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("applies");
+        assert_eq!(file.targets["T1"].name, "renamed");
+    }
+
+    #[test]
+    fn clear_resets_fields_that_omission_cannot_express() {
+        let mut file = base_file();
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some("some background".into()),
+                    tags: Some(vec!["a".into()]),
+                    postpone_predicate: Some("when CI is green".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("set");
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    clear: Some(vec![
+                        "context".into(),
+                        "tags".into(),
+                        "postpone_predicate".into(),
+                    ]),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("clear");
+        let t = &file.targets["T1"];
+        assert!(t.context.is_empty() && t.tags.is_empty() && t.postpone_predicate.is_none());
+    }
+
+    #[test]
+    fn clearing_an_unclearable_field_names_the_legal_set() {
+        let mut file = base_file();
+        let err = apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    clear: Some(vec!["name".into()]),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert_eq!(err.code, ErrorCode::InvalidArgs);
+        assert!(
+            err.message.contains("clearable fields are"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn reopening_appends_the_reason_to_context_as_an_audit_trail() {
+        let mut file = base_file();
+        apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    status: Some("converging".into()),
+                    reason: Some("regression in prod".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("applies");
+        assert!(
+            file.targets["T2"].context.contains("regression in prod"),
+            "context should carry the revert note: {}",
+            file.targets["T2"].context
+        );
+        assert!(file.targets["T2"].context.contains("Reverted"));
     }
 
     // --- Achieved immutability --------------------------------------

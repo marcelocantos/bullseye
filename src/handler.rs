@@ -416,9 +416,37 @@ pub fn handle_query(t: crate::tools::QueryTool) -> ToolResult {
 }
 
 /// Unified mutation path.
+
+/// Build and run a single-target apply, reporting `op` in the envelope.
+/// The `commit` verbs are sugar: each assembles the fragment its name
+/// implies and hands it to the one engine (🎯T76).
+fn commit_sugar(cwd: &str, id: String, frag: crate::apply::Fragment, op: &str) -> ToolResult {
+    let mut targets = std::collections::BTreeMap::new();
+    targets.insert(id, frag);
+    apply_request_as(
+        cwd,
+        crate::apply::ApplyRequest {
+            targets,
+            ..Default::default()
+        },
+        op,
+    )
+}
+
+/// Required `id` for the verbs that address an existing target.
+fn require_id(id: Option<String>, op: &str) -> Result<String, CallToolError> {
+    id.ok_or_else(|| {
+        tool_err(api::format_error(
+            api::ErrorCode::InvalidArgs,
+            format!("op={op} requires `id`"),
+        ))
+    })
+}
+
 pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
     match t.op.as_str() {
         "track" => handle_put(crate::tools::PutTool {
+            reason: t.reason.clone(),
             cwd: t.cwd,
             id: t.id,
             child_of: t.child_of,
@@ -447,6 +475,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                 ))
             })?;
             handle_put(crate::tools::PutTool {
+                reason: None,
                 cwd: t.cwd,
                 id: Some(id),
                 child_of: None,
@@ -491,12 +520,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
             })
         }
         "achieve" => {
-            let id = t.id.ok_or_else(|| {
-                tool_err(api::format_error(
-                    api::ErrorCode::InvalidArgs,
-                    "op=achieve requires `id`",
-                ))
-            })?;
+            let id = require_id(t.id, "achieve")?;
             let attestation = t.attestation.ok_or_else(|| {
                 tool_err(api::format_error(
                     api::ErrorCode::InvalidArgs,
@@ -505,58 +529,78 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                      residual risk). Not formal proof.",
                 ))
             })?;
-            handle_retire(crate::tools::RetireTool {
-                cwd: t.cwd,
+            commit_sugar(
+                &t.cwd,
                 id,
-                attestation,
-                actual_cost: t.actual_cost,
-            })
+                crate::apply::Fragment {
+                    status: Some("achieved".to_string()),
+                    attestation: Some(attestation),
+                    actual_cost: t.actual_cost,
+                    ..Default::default()
+                },
+                "achieve",
+            )
         }
         "defer" => {
-            let id = t.id.ok_or_else(|| {
-                tool_err(api::format_error(
-                    api::ErrorCode::InvalidArgs,
-                    "op=defer requires `id`",
-                ))
-            })?;
+            let id = require_id(t.id, "defer")?;
             let reason = t.reason.ok_or_else(|| {
                 tool_err(api::format_error(
                     api::ErrorCode::InvalidArgs,
                     "op=defer requires non-empty `reason`",
                 ))
             })?;
-            handle_set_aside(crate::tools::SetAsideTool {
-                cwd: t.cwd,
+            commit_sugar(
+                &t.cwd,
                 id,
-                reason,
-            })
+                crate::apply::Fragment {
+                    status: Some("set_aside".to_string()),
+                    reason: Some(reason),
+                    ..Default::default()
+                },
+                "defer",
+            )
         }
         "reopen" => {
-            let id = t.id.ok_or_else(|| {
-                tool_err(api::format_error(
-                    api::ErrorCode::InvalidArgs,
-                    "op=reopen requires `id`",
-                ))
-            })?;
+            let id = require_id(t.id, "reopen")?;
             let reason = t.reason.ok_or_else(|| {
                 tool_err(api::format_error(
                     api::ErrorCode::InvalidArgs,
                     "op=reopen requires non-empty `reason`",
                 ))
             })?;
-            handle_revert(crate::tools::RevertTool {
-                cwd: t.cwd,
-                id,
-                reason,
+            let result = commit_sugar(
+                &t.cwd,
+                id.clone(),
+                crate::apply::Fragment {
+                    if_status: Some("achieved".to_string()),
+                    status: Some("converging".to_string()),
+                    reason: Some(reason),
+                    ..Default::default()
+                },
+                "reopen",
+            );
+            // The engine reports a generic precondition failure; this
+            // verb has always explained the specific case, so restore
+            // its wording rather than regress the message.
+            result.map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("requires it to be Achieved") {
+                    tool_err(api::format_error(
+                        api::ErrorCode::Conflict,
+                        format!(
+                            "🎯{id} is not Achieved — `bullseye_revert` re-opens \
+                             previously-retired targets. To resume a set-aside target use \
+                             `bullseye_apply` with `status: identified`; to move an active \
+                             target backwards, patch its status directly."
+                        ),
+                    ))
+                } else {
+                    e
+                }
             })
         }
         "assign" => {
-            let id = t.id.ok_or_else(|| {
-                tool_err(api::format_error(
-                    api::ErrorCode::InvalidArgs,
-                    "op=assign requires `id`",
-                ))
-            })?;
+            let id = require_id(t.id, "assign")?;
             let owner = t.owner.ok_or_else(|| {
                 tool_err(api::format_error(
                     api::ErrorCode::InvalidArgs,
@@ -569,26 +613,44 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     "op=assign requires non-empty `reason`",
                 ))
             })?;
-            handle_assign_owner(&t.cwd, &id, &owner, &reason)
+            commit_sugar(
+                &t.cwd,
+                id,
+                crate::apply::Fragment {
+                    owner: Some(owner),
+                    reason: Some(reason),
+                    ..Default::default()
+                },
+                "assign",
+            )
         }
         "unassign" => {
-            let id = t.id.ok_or_else(|| {
-                tool_err(api::format_error(
-                    api::ErrorCode::InvalidArgs,
-                    "op=unassign requires `id`",
-                ))
-            })?;
-            handle_unassign_owner(&t.cwd, &id)
+            let id = require_id(t.id, "unassign")?;
+            commit_sugar(
+                &t.cwd,
+                id,
+                crate::apply::Fragment {
+                    clear: Some(vec!["owner".to_string()]),
+                    ..Default::default()
+                },
+                "unassign",
+            )
         }
         "postpone" => handle_postpone(&t),
         "wake" => {
-            let id = t.id.ok_or_else(|| {
-                tool_err(api::format_error(
-                    api::ErrorCode::InvalidArgs,
-                    "op=wake requires `id`",
-                ))
-            })?;
-            handle_wake(&t.cwd, &id)
+            let id = require_id(t.id, "wake")?;
+            commit_sugar(
+                &t.cwd,
+                id,
+                crate::apply::Fragment {
+                    clear: Some(vec![
+                        "postponed_until".to_string(),
+                        "postpone_predicate".to_string(),
+                    ]),
+                    ..Default::default()
+                },
+                "wake",
+            )
         }
         "rehash" => {
             let reason = t.reason.ok_or_else(|| {
@@ -609,31 +671,26 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
 }
 
 fn handle_postpone(t: &crate::tools::CommitTool) -> ToolResult {
-    let id = t.id.as_ref().ok_or_else(|| {
+    let id = t.id.clone().ok_or_else(|| {
         tool_err(api::format_error(
             api::ErrorCode::InvalidArgs,
             "op=postpone requires `id`",
         ))
     })?;
-    let path = discover_path(&t.cwd)?;
-    ensure_mutation_allowed(&path, &t.cwd)?;
-    check_explicit_target_id("id", id).map_err(tool_err)?;
-    let until = match &t.postponed_until {
-        Some(s) => {
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(
-                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
-                        tool_err(api::format_error(
-                            api::ErrorCode::InvalidArgs,
-                            format!("postponed_until must be YYYY-MM-DD: {e}"),
-                        ))
-                    })?,
-                )
-            }
-        }
+    let until = match t
+        .postponed_until
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) => Some(
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+                tool_err(api::format_error(
+                    api::ErrorCode::InvalidArgs,
+                    format!("postponed_until must be YYYY-MM-DD: {e}"),
+                ))
+            })?,
+        ),
         None => None,
     };
     let pred = t
@@ -647,46 +704,26 @@ fn handle_postpone(t: &crate::tools::CommitTool) -> ToolResult {
             "op=postpone requires postponed_until and/or postpone_predicate",
         );
     }
-    if let Some(ref p) = pred {
-        check_persisted_string("postpone_predicate", p).map_err(tool_err)?;
+    // postpone replaces the whole wake condition rather than merging
+    // into it, so whichever half was not supplied is cleared.
+    let mut clear = Vec::new();
+    if until.is_none() {
+        clear.push("postponed_until".to_string());
     }
-    let id = id.clone();
-    let result = store::with_locked_mutation(&path, |file| {
-        let t = file
-            .targets
-            .get_mut(&id)
-            .ok_or_else(|| format!("target {id} not found"))?;
-        if t.status.is_terminal() {
-            return Err(format!(
-                "🎯{id} is terminal ({:?}) — reopen or un-set-aside before postponing",
-                t.status
-            ));
-        }
-        t.postponed_until = until;
-        t.postpone_predicate = pred.clone();
-        Ok::<(), String>(())
-    });
-    match result {
-        Ok(()) => {
-            let front = api::frontier_ids_from_path(&path);
-            let body = format!(
-                "Postponed 🎯{id} until={} predicate={}",
-                until
-                    .map(|d| d.to_string())
-                    .unwrap_or_else(|| "(none)".into()),
-                pred.as_deref().unwrap_or("(none)")
-            );
-            text_result(api::format_mutation_result(
-                "postpone",
-                std::slice::from_ref(&id),
-                std::slice::from_ref(&id),
-                &front,
-                &path,
-                &body,
-            ))
-        }
-        Err(e) => Err(tool_err(e.to_string())),
+    if pred.is_none() {
+        clear.push("postpone_predicate".to_string());
     }
+    commit_sugar(
+        &t.cwd,
+        id,
+        crate::apply::Fragment {
+            postponed_until: until,
+            postpone_predicate: pred,
+            clear: (!clear.is_empty()).then_some(clear),
+            ..Default::default()
+        },
+        "postpone",
+    )
 }
 
 fn handle_wake(cwd: &str, id: &str) -> ToolResult {
@@ -941,316 +978,36 @@ fn next_top_level_id(
 }
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
-    let path = discover_path(&t.cwd)?;
-    ensure_mutation_allowed(&path, &t.cwd)?;
-
-    // Write-boundary guards (🎯T20 / 🎯T40). Validate every
-    // caller-controlled string before entering the locked mutation
-    // block so the file is never written with protocol or control-byte
-    // corruption.
-    if let Some(s) = &t.id {
-        check_explicit_target_id("id", s).map_err(tool_err)?;
+    // Sugar over `apply` (🎯T76). `track` was always an upsert; the
+    // engine is now the only thing that knows how to perform one, so
+    // this reduces to naming the target and forwarding the fields.
+    if t.id.is_some() && t.child_of.is_some() {
+        return coded_err(
+            api::ErrorCode::InvalidArgs,
+            "`id` and `child_of` are mutually exclusive — provide `id` only when the exact \
+             target ID is intentional, or omit it and set `child_of` to let Bullseye \
+             allocate the next child",
+        );
     }
-    if let Some(s) = &t.child_of {
-        check_explicit_target_id("child_of", s).map_err(tool_err)?;
-    }
-    if let Some(s) = &t.name {
-        check_persisted_string("name", s).map_err(tool_err)?;
-    }
-    if let Some(s) = &t.context {
-        check_persisted_string("context", s).map_err(tool_err)?;
-    }
-    if let Some(s) = &t.origin {
-        check_persisted_string("origin", s).map_err(tool_err)?;
-    }
-    if let Some(items) = &t.acceptance {
-        for (i, s) in items.iter().enumerate() {
-            check_persisted_string(&format!("acceptance[{i}]"), s).map_err(tool_err)?;
-        }
-    }
-    if let Some(items) = &t.tags {
-        for (i, s) in items.iter().enumerate() {
-            check_persisted_string(&format!("tags[{i}]"), s).map_err(tool_err)?;
-        }
-    }
-    if let Some(items) = &t.depends_on {
-        for (i, s) in items.iter().enumerate() {
-            check_explicit_target_id(&format!("depends_on[{i}]"), s).map_err(tool_err)?;
-        }
-    }
-    if let Some(items) = &t.blocks {
-        for (i, s) in items.iter().enumerate() {
-            check_explicit_target_id(&format!("blocks[{i}]"), s).map_err(tool_err)?;
-        }
-    }
-
-    struct Outcome {
-        id: String,
-        is_create: bool,
-        target_name: String,
-        injected_into: Vec<String>,
-    }
-
-    let parse_status_s = |s: &str| -> Result<Status, String> {
-        match s {
-            "identified" => Ok(Status::Identified),
-            "converging" => Ok(Status::Converging),
-            "achieved" => Ok(Status::Achieved),
-            "set_aside" => Err(
-                "status `set_aside` is not settable via bullseye_put — call \
-                 `bullseye_set_aside(id, reason)` instead so the rationale is recorded \
-                 alongside the status change"
-                    .to_string(),
-            ),
-            other => Err(format!(
-                "unknown status: {other} (use identified, converging, achieved)"
-            )),
-        }
+    // A key beginning with `_` asks the engine to allocate; an explicit
+    // id addresses that target directly.
+    let key = t.id.clone().unwrap_or_else(|| "_new".to_string());
+    let frag = crate::apply::Fragment {
+        name: t.name,
+        status: t.status,
+        value: t.value,
+        cost: t.cost,
+        acceptance: t.acceptance,
+        context: t.context,
+        tags: t.tags,
+        depends_on: t.depends_on,
+        blocks: t.blocks,
+        origin: t.origin,
+        child_of: t.child_of,
+        reason: t.reason,
+        ..Default::default()
     };
-
-    // Scan git history for every target ID ever assigned across all
-    // branches/remotes (🎯T28). Done outside the locked mutation so
-    // the (potentially expensive on first call per session)
-    // subprocess isn't holding the file lock. The cache makes
-    // subsequent calls cheap.
-    let historical = id_alloc::historical_ids(&path);
-
-    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
-        // Resolve target ID. None → auto-assign a new top-level ID.
-        let (id, is_create) = match (t.id.clone(), t.child_of.clone()) {
-            (Some(_), Some(_)) => {
-                return Err(
-                    "`id` and `child_of` are mutually exclusive — provide `id` only when the exact target ID is intentional, or omit it and set `child_of` to let Bullseye allocate the next child".to_string(),
-                );
-            }
-            (Some(explicit), None) => {
-                let exists = file.targets.contains_key(&explicit);
-                (explicit, !exists)
-            }
-            (None, Some(parent)) => {
-                if !file.targets.contains_key(&parent) {
-                    return Err(format!("child_of parent {parent} does not exist"));
-                }
-                (ops::next_subtarget_id(file, &parent, &historical), true)
-            }
-            (None, None) => (next_top_level_id(file, &historical), true),
-        };
-
-        // 🎯T28: an explicit-id create that collides with a target
-        // recorded in git history (deleted, or on another branch)
-        // is rejected — the whole point of reserving historical
-        // IDs is so two branches can't independently end up with
-        // the same ID pointing at different targets.
-        if is_create && historical.contains(&id) {
-            return Err(format!(
-                "🎯{id} collides with a target recorded in git history (it may exist \
-                 on another branch or have been deleted from the current tree). \
-                 Pick a different ID, or omit `id` to auto-assign the next free slot."
-            ));
-        }
-
-        if is_create {
-            // Creation path — name and acceptance are required.
-            // value and cost are optional at repo scope (they are portfolio-scope
-            // metadata consumed by cross-repo WSJF ranking, not by the repo-level
-            // frontier ordering which uses `depends_on` shape only).
-            // Omitting them defaults to 0.0, which signals "not set at repo scope"
-            // and is skipped by portfolio WSJF scoring.
-            let name = t
-                .name
-                .clone()
-                .ok_or_else(|| "name is required when creating a target".to_string())?;
-            let value = t.value.unwrap_or(0.0);
-            let cost = t.cost.unwrap_or(0.0);
-            let acceptance = t
-                .acceptance
-                .clone()
-                .filter(|a| !a.is_empty())
-                .ok_or_else(|| "acceptance is required when creating a target".to_string())?;
-
-            let status = match t.status.as_deref() {
-                Some(s) => parse_status_s(s)?,
-                None => Status::Identified,
-            };
-
-            let target = Target {
-                name,
-                status,
-                value,
-                cost,
-                actual_cost: None,
-                set_aside_reason: None,
-                attestation: None,
-                acceptance,
-                checks: Vec::new(),
-                context: t.context.clone().unwrap_or_default(),
-                gates: Vec::new(),
-                depends_on: t.depends_on.clone().unwrap_or_default(),
-                cross_depends: Vec::new(),
-                cross_enables: Vec::new(),
-                tags: t.tags.clone().unwrap_or_default(),
-                strategy: None,
-                origin: t.origin.clone().unwrap_or_else(|| "manual".to_string()),
-                discovered: Local::now().date_naive(),
-                achieved: if status == Status::Achieved {
-                    Some(Local::now().date_naive())
-                } else {
-                    None
-                },
-                owned_by: None,
-                postponed_until: None,
-                postpone_predicate: None,
-            };
-            file.targets.insert(id.clone(), target);
-            // 🎯T39.1: dotted create is a family edge, not a display prefix.
-            ops::attach_dotted_child(file, &id).map_err(|e| e.to_string())?;
-        } else {
-            // Patch path — only provided fields change.
-
-            // Parse the optional new status upfront so the
-            // achieved-immutability check below and the field application
-            // below share a single parse.
-            let new_status: Option<Status> = match t.status.as_deref() {
-                Some(s) => Some(parse_status_s(s)?),
-                None => None,
-            };
-
-            if matches!(new_status, Some(Status::Achieved)) {
-                ops::refuse_active_family(file, &id)?;
-            }
-
-            // Safety — reject content edits on achieved targets unless
-            // the same call is simultaneously re-opening them. Achieved
-            // targets are historical artifacts; their content is
-            // immutable until the human explicitly re-opens them by
-            // patching `status: identified`. See 🎯T8.
-            let target = file.targets.get_mut(&id).expect("existence checked above");
-            let target_currently_achieved = target.status == Status::Achieved;
-            let would_remain_achieved = match new_status {
-                Some(s) => s == Status::Achieved,
-                None => target_currently_achieved,
-            };
-            let content_edits_present = t.name.is_some()
-                || t.value.is_some()
-                || t.cost.is_some()
-                || t.acceptance.is_some()
-                || t.context.is_some()
-                || t.tags.is_some()
-                || t.origin.is_some()
-                || t.depends_on.is_some();
-            if target_currently_achieved && would_remain_achieved && content_edits_present {
-                return Err(format!(
-                    "🎯{id} is achieved — its content is immutable. Re-open it first by \
-                     calling bullseye_put with `status: identified`, then apply content \
-                     changes in a separate call. (Achieved targets are historical artifacts.)"
-                ));
-            }
-
-            if let Some(ref name) = t.name {
-                target.name = name.clone();
-            }
-            if let Some(value) = t.value {
-                target.value = value;
-            }
-            if let Some(cost) = t.cost {
-                target.cost = cost;
-            }
-            if let Some(ref acceptance) = t.acceptance {
-                target.acceptance = acceptance.clone();
-            }
-            if let Some(ref context) = t.context {
-                target.context = context.clone();
-            }
-            if let Some(ref tags) = t.tags {
-                target.tags = tags.clone();
-            }
-            if let Some(ref origin) = t.origin {
-                target.origin = origin.clone();
-            }
-            if let Some(ref deps) = t.depends_on {
-                target.depends_on = deps.clone();
-            }
-            if let Some(status) = new_status {
-                target.status = status;
-                // 🎯T64: a hand-patched status is a status transition
-                // like any other, so it clears the fields the
-                // destination forbids. Done before the achieved-date
-                // default below so the date is set on the new status's
-                // terms, not carried over from the old one.
-                target.clear_illegal_status_scoped_fields();
-                if status == Status::Achieved && target.achieved.is_none() {
-                    target.achieved = Some(Local::now().date_naive());
-                }
-            }
-        }
-
-        // Apply `blocks` sugar: inject `id` into each listed target's depends_on.
-        let mut injected_into: Vec<String> = Vec::new();
-        if let Some(ref blocks) = t.blocks {
-            for other_id in blocks {
-                if other_id == &id {
-                    return Err(format!("target {id} cannot block itself"));
-                }
-                let other = file.targets.get_mut(other_id).ok_or_else(|| {
-                    format!("blocks target {other_id} does not exist (cannot add dependency)")
-                })?;
-                if other.status == Status::Achieved {
-                    return Err(format!(
-                        "cannot inject dependency into 🎯{other_id} — it is achieved. \
-                         Re-open it first by patching `status: identified`. See 🎯T8."
-                    ));
-                }
-                if !other.depends_on.contains(&id) {
-                    other.depends_on.push(id.clone());
-                    injected_into.push(other_id.clone());
-                }
-            }
-        }
-
-        let target_name = file
-            .targets
-            .get(&id)
-            .map(|t| t.name.clone())
-            .unwrap_or_default();
-        Ok(Outcome {
-            id,
-            is_create,
-            target_name,
-            injected_into,
-        })
-    })
-    .map_err(|e| tool_err(e.to_string()))?;
-
-    let verb = if outcome.is_create {
-        "Created"
-    } else {
-        "Updated"
-    };
-    let mut out = format!("{verb} 🎯{}", outcome.id);
-    if !outcome.target_name.is_empty() {
-        out.push_str(&format!(" \"{}\"", outcome.target_name));
-    }
-    if !outcome.injected_into.is_empty() {
-        out.push_str(&format!(
-            "\nInjected as dependency into: {}",
-            outcome
-                .injected_into
-                .iter()
-                .map(|s| format!("🎯{s}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    out.push_str(&format!("\nFile: {}", path.display()));
-    let mut changed = vec![outcome.id.clone()];
-    changed.extend(outcome.injected_into.iter().cloned());
-    mutation_text(
-        &path,
-        "track",
-        std::slice::from_ref(&outcome.id),
-        &changed,
-        out,
-    )
+    commit_sugar(&t.cwd, key, frag, "track")
 }
 
 pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
@@ -1261,7 +1018,7 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
     check_explicit_target_id("id", &t.id).map_err(tool_err)?;
     check_persisted_string("attestation", &t.attestation).map_err(tool_err)?;
 
-    let attestation = match normalize_attestation(&t.attestation) {
+    let attestation = match crate::apply::normalize_attestation(&t.attestation) {
         Ok(a) => a,
         Err(msg) => {
             return Err(tool_err(api::format_error(
@@ -1333,57 +1090,6 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             )
         }
     }
-}
-
-/// Normalize and validate achieve attestation (🎯T58).
-///
-/// Soft API nudge: non-empty free text, reject a few trivial tokens
-/// (`done`, `ok`, …). Not a semantic judge of truth.
-fn normalize_attestation(raw: &str) -> Result<String, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(
-            "achieve requires a non-empty `attestation` — a short note on how you believe \
-             the target is met (SHA, test name, persona oracle, owner smoke, residual risk). \
-             Not formal proof."
-                .to_string(),
-        );
-    }
-    // Cheap trivial-string reject (optional acceptance). Case-insensitive
-    // whole-string match only — not a semantic judge.
-    const TRIVIAL: &[&str] = &[
-        "done",
-        "ok",
-        "yes",
-        "yep",
-        "fixed",
-        "n/a",
-        "na",
-        "pass",
-        "passed",
-        "lgtm",
-        "shipped",
-        "complete",
-        "completed",
-        "achieved",
-        "finished",
-    ];
-    let lower = trimmed.to_ascii_lowercase();
-    if TRIVIAL.contains(&lower.as_str()) {
-        return Err(format!(
-            "attestation `{trimmed}` is too trivial — write a short note on how you believe \
-             the target is met (SHA, test name, persona oracle, owner smoke, residual risk). \
-             Not formal proof."
-        ));
-    }
-    if trimmed.chars().count() < 4 {
-        return Err(
-            "attestation is too short — write a short note on how you believe the target is \
-             met (SHA, test name, persona oracle, owner smoke, residual risk). Not formal proof."
-                .to_string(),
-        );
-    }
-    Ok(trimmed.to_string())
 }
 
 /// Re-open a previously-retired target (🎯T25). Replaces the v4
@@ -2177,6 +1883,7 @@ targets:
 
     fn put(cwd: &str, id: &str) -> PutTool {
         PutTool {
+            reason: None,
             cwd: cwd.to_string(),
             id: Some(id.to_string()),
             child_of: None,
@@ -2234,6 +1941,10 @@ targets:
         let (_tmp, _cfg, cwd) = fixture();
         let mut t = put(&cwd, "T1");
         t.status = Some("identified".to_string());
+        // 🎯T76 tightened this: re-opening an achieved target requires a
+        // reason on every path. `put --status identified` used to be a
+        // back door around the rule `commit --op reopen` always applied.
+        t.reason = Some("acceptance turned out to be wrong".to_string());
         handle_put(t).expect("status-only transition on achieved must succeed");
         let t1 = load_target(&cwd, "T1");
         assert_eq!(t1.status, Status::Identified);
@@ -2252,6 +1963,7 @@ targets:
         let mut t = put(&cwd, "T1");
         t.status = Some("identified".to_string());
         t.name = Some("Re-opened and renamed".to_string());
+        t.reason = Some("fat-fingered historical ID".to_string());
         handle_put(t).expect("atomic reopen + content must succeed");
         let t1 = load_target(&cwd, "T1");
         assert_eq!(t1.status, Status::Identified);

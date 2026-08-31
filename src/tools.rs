@@ -374,6 +374,10 @@ pub struct PutTool {
     /// Tags (e.g., ["visual"]).
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Why an achieved target is being re-opened. Required by the
+    /// evidence policy for that transition (🎯T76); ignored otherwise.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Retire a target (move to achieved).
@@ -957,7 +961,10 @@ pub struct SyncPrioritiesTool {
         a CAS token: a mismatch is code=conflict, meaning the ledger moved under you. \
         Patchable fields: name, status, value, cost, actual_cost, acceptance, context, \
         tags, depends_on, blocks, origin, child_of, attestation, reason, owner, \
-        postponed_until, postpone_predicate. \
+        postponed_until, postpone_predicate, `clear` (a list of fields to reset to empty — \
+        omitting a field means leave it alone, so `clear` is how a field becomes nothing), \
+        and `if_status` (a precondition: refuse unless the target currently has that \
+        status). \
         Evidence required: status→achieved needs attestation; status→set_aside, reopening \
         an achieved target, and any owner change need reason. \
         Prefer this over bullseye_commit and the put/retire/set_aside/revert/subdivide \
