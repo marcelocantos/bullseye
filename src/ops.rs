@@ -198,6 +198,11 @@ pub enum SubdivideError {
     /// assigned IDs. The tail must be a subset of the children being
     /// created — there is no fall-through to existing targets.
     TailNotInChildren(String),
+    /// The write engine refused the child creation (🎯T76). Subdivide
+    /// delegates creation to `apply`, so the engine's validation —
+    /// historical-ID reservation, dotted-family attachment, string
+    /// guards — reaches callers through this variant.
+    Apply(String),
     /// A new child's dotted parent exists and is terminal (🎯T39.1).
     FamilyParentTerminal {
         id: String,
@@ -208,6 +213,7 @@ pub enum SubdivideError {
 impl std::fmt::Display for SubdivideError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            SubdivideError::Apply(msg) => write!(f, "{msg}"),
             SubdivideError::ParentNotFound(id) => write!(f, "parent target {id} not found"),
             SubdivideError::ParentTerminal { id, status } => write!(
                 f,
@@ -537,39 +543,42 @@ pub fn subdivide(
     let parent_name = parent.name.clone();
     let parent_prior_status = parent.status;
 
-    // Create the children.
     let today = Local::now().date_naive();
+
+    // Create the children through the one write engine (🎯T76) rather
+    // than assembling `Target` literals here. The IDs were resolved
+    // above, in this same critical section, so there is no window
+    // between allocation and use — `apply` is handed explicit keys.
+    // Subdivide stays a composite *over* the engine: it owns the
+    // mode-dependent rewiring below, not the creation semantics.
+    let mut fragments: std::collections::BTreeMap<String, crate::apply::Fragment> =
+        std::collections::BTreeMap::new();
     for (child, id) in children.iter().zip(assigned_ids.iter()) {
-        let target = Target {
-            name: child.name.clone(),
-            status: Status::Identified,
-            value: 0.0,
-            cost: 0.0,
-            actual_cost: None,
-            set_aside_reason: None,
-            attestation: None,
-            acceptance: child.acceptance.clone(),
-            checks: Vec::new(),
-            context: child.context.clone().unwrap_or_default(),
-            gates: Vec::new(),
-            depends_on: child.depends_on.clone().unwrap_or_default(),
-            cross_depends: Vec::new(),
-            cross_enables: Vec::new(),
-            tags: child.tags.clone().unwrap_or_default(),
-            strategy: None,
-            origin: format!("subdivide(🎯{parent_id})"),
-            discovered: today,
-            achieved: None,
-            owned_by: None,
-            postponed_until: None,
-            postpone_predicate: None,
-        };
-        file.targets.insert(id.clone(), target);
+        fragments.insert(
+            id.clone(),
+            crate::apply::Fragment {
+                name: Some(child.name.clone()),
+                acceptance: Some(child.acceptance.clone()),
+                context: child.context.clone(),
+                tags: child.tags.clone(),
+                depends_on: child.depends_on.clone(),
+                origin: Some(format!("subdivide(🎯{parent_id})")),
+                ..Default::default()
+            },
+        );
     }
+    crate::apply::apply(
+        file,
+        &crate::apply::ApplyRequest {
+            targets: fragments,
+            ..Default::default()
+        },
+        historical,
+    )
+    .map_err(|e| SubdivideError::Apply(e.message))?;
 
     // Per-mode parent + dependent rewiring.
     let mut rewired_dependents: Vec<String> = Vec::new();
-    let mut parent_status_changed = false;
     match mode {
         SubdivideMode::Add => {
             // Find every active dependent and append each new child
@@ -591,15 +600,10 @@ pub fn subdivide(
                 }
             }
             rewired_dependents = dependent_ids;
-            // 🎯T39.1: a dotted family is an umbrella. Default child
-            // IDs are `parent.N`, so add must wire the parent the same
-            // way aggregate does for those children. Explicit
-            // top-level IDs are a no-op here.
-            for new_id in &assigned_ids {
-                if attach_dotted_child(file, new_id)? {
-                    parent_status_changed = true;
-                }
-            }
+            // 🎯T39.1 (a dotted family is an umbrella) is handled by the
+            // engine's create path, which attaches every dotted child to
+            // its parent. Any resulting parent promotion is picked up by
+            // the status comparison below.
         }
         SubdivideMode::Aggregate => {
             let parent = file
@@ -614,7 +618,6 @@ pub fn subdivide(
             if parent.status == Status::Identified {
                 parent.status = Status::Converging;
                 parent.clear_illegal_status_scoped_fields();
-                parent_status_changed = true;
             }
         }
         SubdivideMode::Retire => {
@@ -672,7 +675,6 @@ pub fn subdivide(
             parent.status = Status::Achieved;
             parent.clear_illegal_status_scoped_fields();
             parent.achieved = Some(today);
-            parent_status_changed = parent_prior_status != Status::Achieved;
             if let Some(reason) = trimmed_reason {
                 let entry = format!("Subdivided {today}: {reason}");
                 if parent.context.is_empty() {
@@ -691,7 +693,13 @@ pub fn subdivide(
         mode,
         created_children: assigned_ids,
         rewired_dependents,
-        parent_status_changed,
+        // Derived from state rather than from whichever branch happened
+        // to promote the parent, so it stays correct no matter which
+        // layer (engine create, or the rewiring below) moved it.
+        parent_status_changed: file
+            .targets
+            .get(parent_id)
+            .is_some_and(|p| p.status != parent_prior_status),
     })
 }
 
