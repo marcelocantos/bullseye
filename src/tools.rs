@@ -458,8 +458,8 @@ pub struct FrontierTool {
         today's date so the audit trail survives in-place. Use when a retirement turns out to have \
         been wrong: regression detected, an acceptance criterion was missed, or external evidence \
         contradicts the achievement. Refuses to revert a target that is not currently achieved — \
-        to resume a set-aside target use `bullseye_put` with `status: identified`; to move an active \
-        target backwards, patch its status directly."
+        to resume a set-aside target, or to move an active one backwards, use `bullseye_apply` \
+        with `status: identified` and a `reason`."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct RevertTool {

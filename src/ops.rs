@@ -26,8 +26,8 @@ impl std::fmt::Display for RevertError {
             RevertError::NotAchieved(id) => write!(
                 f,
                 "🎯{id} is not achieved — `bullseye_revert` re-opens previously-retired targets. \
-                 To resume a set-aside target use `bullseye_put` with `status: identified`; to \
-                 move an active target backwards, patch its status directly."
+                 To resume a set-aside target, or to move an active one backwards, use \
+                 `bullseye_apply` with `status: identified` and a `reason`."
             ),
         }
     }

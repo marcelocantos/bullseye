@@ -589,9 +589,9 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                         api::ErrorCode::Conflict,
                         format!(
                             "🎯{id} is not Achieved — `bullseye_revert` re-opens \
-                             previously-retired targets. To resume a set-aside target use \
-                             `bullseye_apply` with `status: identified`; to move an active \
-                             target backwards, patch its status directly."
+                             previously-retired targets. To resume a set-aside target, or to \
+                             move an active one backwards, use `bullseye_apply` with \
+                             `status: identified` and a `reason`."
                         ),
                     ))
                 } else {
@@ -1094,10 +1094,9 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
 
 /// Re-open a previously-retired target (🎯T25). Replaces the v4
 /// verify→rework retry-budget loop. Refuses to revert a target that
-/// is not currently achieved — the operation is achievement-only;
-/// to resume a set-aside target use `bullseye_put` with
-/// `status: identified`, and to move an active target backwards
-/// patch its status directly.
+/// is not currently achieved — the operation is achievement-only.
+/// To resume a set-aside target, or to move an active one backwards,
+/// use `bullseye_apply` with `status: identified` and a `reason`.
 pub fn handle_revert(t: crate::tools::RevertTool) -> ToolResult {
     let path = discover_path(&t.cwd)?;
     ensure_mutation_allowed(&path, &t.cwd)?;
@@ -1199,8 +1198,9 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
     match outcome {
         Outcome::AlreadyAchieved => Err(tool_err(format!(
             "🎯{id} is already achieved — `bullseye_set_aside` is for targets that were not \
-             delivered. If you need to revise the achievement record, edit bullseye.yaml \
-             directly.",
+             delivered. To revise the achievement record, reopen it and patch in one \
+             `bullseye_apply`: `targets: {{{id}: {{status: identified, reason: <why>, \
+             ...}}}}`.",
             id = t.id,
         ))),
         Outcome::AlreadySetAside { existing_reason } => text_result(format!(
