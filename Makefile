@@ -19,9 +19,15 @@
 #   3. tests      (a few seconds warm)
 #   4. dirty tree (warning only — leftover WIP is the normal /cv state)
 bullseye:
-	@cargo fmt --check >/dev/null && echo "✓ fmt"
-	@cargo clippy --quiet --all-targets -- -D warnings >/dev/null 2>&1 && echo "✓ clippy"
-	@cargo test --quiet >/dev/null 2>&1 && echo "✓ tests"
+	@log=$$(mktemp); \
+	  if cargo fmt --check >"$$log" 2>&1; then echo "✓ fmt"; \
+	  else echo "✗ fmt"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+	@log=$$(mktemp); \
+	  if cargo clippy --quiet --all-targets -- -D warnings >"$$log" 2>&1; then echo "✓ clippy"; \
+	  else echo "✗ clippy"; grep -v '^ *--> vendor/' "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+	@log=$$(mktemp); \
+	  if cargo test --quiet >"$$log" 2>&1; then echo "✓ tests"; \
+	  else echo "✗ tests"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
 	else \

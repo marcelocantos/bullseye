@@ -1464,15 +1464,19 @@ targets:
     discovered: 2026-01-01
 "#,
         );
-        let mut r = ApplyRequest::default();
-        r.remove = vec!["T1".to_string()];
+        let r = ApplyRequest {
+            remove: vec!["T1".to_string()],
+            ..Default::default()
+        };
         let err = apply(&mut file, &r, &no_history()).expect_err("must refuse");
         assert_eq!(err.code, ErrorCode::Validation);
         assert!(err.message.contains("T2"), "got: {}", err.message);
         assert!(file.targets.contains_key("T1"), "refusal must not remove");
 
-        let mut r2 = ApplyRequest::default();
-        r2.remove = vec!["T2".to_string()];
+        let r2 = ApplyRequest {
+            remove: vec!["T2".to_string()],
+            ..Default::default()
+        };
         let rep = apply(&mut file, &r2, &no_history()).expect("leaf removes");
         assert_eq!(rep.removed, vec!["T2"]);
         assert!(!file.targets.contains_key("T2"));
@@ -1481,8 +1485,10 @@ targets:
     #[test]
     fn removing_a_missing_target_is_not_found() {
         let mut file = base_file();
-        let mut r = ApplyRequest::default();
-        r.remove = vec!["T99".to_string()];
+        let r = ApplyRequest {
+            remove: vec!["T99".to_string()],
+            ..Default::default()
+        };
         let err = apply(&mut file, &r, &no_history()).expect_err("must refuse");
         assert_eq!(err.code, ErrorCode::NotFound);
     }

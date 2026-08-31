@@ -3,7 +3,7 @@
 
 use chrono::Local;
 
-use crate::schema::{Check, QueryCheck, Status, Target, TargetsFile};
+use crate::schema::{Check, QueryCheck, Status, TargetsFile};
 
 /// Result of a revert operation.
 #[derive(Debug)]
