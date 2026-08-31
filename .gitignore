@@ -13,3 +13,6 @@
 
 # Per-machine GitHub-issue mirror sync state (bullseye github sync)
 .bullseye/
+
+# Local release artifacts (scripts/release-package.sh).
+dist/
