@@ -2553,6 +2553,15 @@ fn check_apply_strings(req: &crate::apply::ApplyRequest) -> Result<(), String> {
 /// and `bullseye apply` — funnel through here, which is what makes
 /// surface parity structural rather than a thing to remember (🎯T76).
 pub fn apply_request(cwd: &str, req: crate::apply::ApplyRequest) -> ToolResult {
+    apply_request_as(cwd, req, "apply")
+}
+
+/// [`apply_request`], reporting `op` in the result envelope.
+///
+/// The eleven `commit --op` verbs are sugar over apply, but each keeps
+/// its own label so a caller (and the test suite) still sees the verb
+/// it asked for rather than the mechanism underneath.
+pub fn apply_request_as(cwd: &str, req: crate::apply::ApplyRequest, op: &str) -> ToolResult {
     let path = discover_path(cwd)?;
     ensure_mutation_allowed(&path, cwd)?;
     check_apply_strings(&req).map_err(tool_err)?;
@@ -2606,7 +2615,7 @@ pub fn apply_request(cwd: &str, req: crate::apply::ApplyRequest) -> ToolResult {
     lines.push(format!("File: {}", path.display()));
 
     let ids = report.created.clone();
-    mutation_text(&path, "apply", &ids, &report.changed(), lines.join("\n"))
+    mutation_text(&path, op, &ids, &report.changed(), lines.join("\n"))
 }
 
 /// Best-effort target name for the result body. A missing name is a

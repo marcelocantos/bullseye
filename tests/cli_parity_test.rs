@@ -354,3 +354,102 @@ fn apply_rejects_an_unrecognised_flag_instead_of_reporting_success() {
         "a rejected call must never report success:\n{out}"
     );
 }
+
+#[test]
+fn commit_rejects_an_unrecognised_flag_instead_of_reporting_success() {
+    let (code, out) = run(&["commit", "--op", "track", "--valu", "5"]);
+    assert_ne!(code, 0, "an unrecognised flag must fail, got:\n{out}");
+    assert!(out.contains("unrecognised flag"), "got:\n{out}");
+    assert!(!out.contains("ok: true"), "must not report success:\n{out}");
+}
+
+#[test]
+fn commit_help_no_longer_defers_split_to_mcp() {
+    let (_, help) = run(&["commit", "--help"]);
+    assert!(
+        !help.contains("not fully wired"),
+        "split is wired now; help must not send callers to MCP:\n{help}"
+    );
+    assert!(
+        help.contains("--children-file"),
+        "split's children source must be documented:\n{help}"
+    );
+}
+
+/// Split is reachable from the CLI end-to-end, not merely documented.
+#[test]
+fn cli_split_creates_children_from_a_yaml_list() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let yaml = dir.path().join("bullseye.yaml");
+    std::fs::write(
+        &yaml,
+        "schema_version: 5\ntargets:\n  T1:\n    name: parent\n    status: identified\n\
+         \x20   value: 0.0\n    cost: 0.0\n    acceptance: [a]\n    discovered: 2026-01-01\n",
+    )
+    .expect("write fixture");
+
+    let children = dir.path().join("children.yaml");
+    std::fs::write(
+        &children,
+        "- name: first child\n  acceptance: [c1]\n- name: second child\n  acceptance: [c2]\n",
+    )
+    .expect("write children");
+
+    let (code, out) = run(&[
+        "commit",
+        "--op",
+        "split",
+        "--parent",
+        "T1",
+        "--mode",
+        "add",
+        "--children-file",
+        children.to_str().unwrap(),
+        "--cwd",
+        dir.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "cli split failed:\n{out}");
+    assert!(out.contains("T1.1") && out.contains("T1.2"), "got:\n{out}");
+
+    let written = std::fs::read_to_string(&yaml).expect("re-read");
+    assert!(
+        written.contains("first child") && written.contains("second child"),
+        "{written}"
+    );
+
+    // And the stdin route, which is what an agent piping a heredoc uses.
+    let mut child = std::process::Command::new(BIN)
+        .args([
+            "commit",
+            "--op",
+            "split",
+            "--parent",
+            "T1",
+            "--mode",
+            "add",
+            "--children-file",
+            "-",
+            "--cwd",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(b"- name: third child\n  acceptance: [c3]\n")
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait");
+    assert!(out.status.success(), "stdin split failed: {out:?}");
+    assert!(
+        std::fs::read_to_string(&yaml)
+            .expect("re-read")
+            .contains("third child"),
+        "stdin-provided child was not written"
+    );
+}

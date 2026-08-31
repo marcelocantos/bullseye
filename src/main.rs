@@ -393,6 +393,37 @@ fn cli_query(args: &[String]) -> Result<String, String> {
     }))
 }
 
+/// Flags `bullseye commit` accepts, and whether each takes a value.
+/// Declared for the same reason as [`APPLY_FLAGS`]: an unrecognised
+/// flag must fail rather than return `ok: true` (🎯T76).
+const COMMIT_FLAGS: &[(&str, bool)] = &[
+    ("--cwd", true),
+    ("--op", true),
+    ("--id", true),
+    ("--child-of", true),
+    ("--name", true),
+    ("--value", true),
+    ("--cost", true),
+    ("--acceptance", true),
+    ("--context", true),
+    ("--status", true),
+    ("--depends-on", true),
+    ("--blocks", true),
+    ("--origin", true),
+    ("--tags", true),
+    ("--actual-cost", true),
+    ("--attestation", true),
+    ("--reason", true),
+    ("--postponed-until", true),
+    ("--postpone-predicate", true),
+    ("--parent", true),
+    ("--mode", true),
+    ("--children-file", true),
+    ("--retire-reason", true),
+    ("--tail", true),
+    ("--help", false),
+];
+
 fn cli_commit(args: &[String]) -> Result<String, String> {
     if has_flag(args, "--help") || args.is_empty() {
         return Ok("bullseye commit --op OP [--cwd DIR] [fields]\n\
@@ -404,10 +435,43 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
              postpone: --id ID [--postponed-until YYYY-MM-DD] [--postpone-predicate TEXT]\n\
              wake: --id ID\n\
              assign: --id ID --owner HANDLE --reason TEXT\n\
-             split: use MCP (children are structured); CLI split not fully wired\n"
+             split: --parent P --mode add|aggregate|retire --children-file F|- \n\
+             \x20      (children: YAML list of {name, acceptance[, id, context, tags, depends_on]})\n\
+             \x20      [--retire-reason TEXT] [--tail T1,T2]\n\
+             \n\
+             Every op above is sugar over `bullseye apply`, which reaches the same\n\
+             fields directly and in bulk. See `bullseye apply --help`.\n"
             .to_string());
     }
+    reject_unknown_flags(args, COMMIT_FLAGS, "commit")?;
     let op = flag_value(args, "--op").ok_or_else(|| "commit requires --op".to_string())?;
+
+    // 🎯T76: `split` children are structured, which is why the CLI
+    // route used to send callers to MCP. They are read here as a YAML
+    // list from a file or stdin, so split is reachable from both
+    // surfaces like every other capability.
+    let children = match flag_value(args, "--children-file") {
+        Some(src) => {
+            let text = if src == "-" {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                    .map_err(|e| format!("commit: cannot read stdin: {e}"))?;
+                buf
+            } else {
+                std::fs::read_to_string(&src)
+                    .map_err(|e| format!("commit: cannot read {src}: {e}"))?
+            };
+            let parsed: Vec<bullseye::tools::SubdivisionChild> = serde_yaml_ng::from_str(&text)
+                .map_err(|e| {
+                    format!(
+                        "commit: --children-file must be a YAML list of \
+                         {{name, acceptance[, id, context, tags, depends_on]}}: {e}"
+                    )
+                })?;
+            Some(parsed)
+        }
+        None => None,
+    };
     let mut acceptance = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -462,7 +526,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
         postpone_predicate: flag_value(args, "--postpone-predicate"),
         parent: flag_value(args, "--parent"),
         mode: flag_value(args, "--mode"),
-        children: None,
+        children,
         retire_reason: flag_value(args, "--retire-reason"),
         tail: None,
         owner: flag_value(args, "--owner"),
