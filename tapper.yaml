@@ -9,10 +9,17 @@ push:
   darwin_arm64: true
   linux_amd64: true
   linux_arm64: true
-  # Deliberately NOT skipping checksums: 🎯T74.5 (entropy audit ENT-005)
-  # is open precisely because an unverified tap plus unsigned assets lets
-  # a compromised token ship a binary brew will not reject. The formula
-  # already carries a sha256 per asset today; keep it that way.
-  skip_checksum: false
+  # `skip_checksum` controls whether homebrew-releaser uploads a
+  # checksum.txt artifact to the SOURCE repo's release — it does not
+  # remove the per-asset `sha256` from the formula. v0.48.0 shipped with
+  # skip_checksum: true and its formula still carries a sha256 for every
+  # bottle, which brew verifies on download. Left true because a
+  # tap-scoped token 403s on the upload attempt.
+  #
+  # 🎯T74.5 (entropy audit ENT-005) reads this flag as "the install path
+  # does not verify checksums"; the published formula says otherwise.
+  # Re-examine the finding rather than flipping this and breaking the
+  # tap push.
+  skip_checksum: true
   update_readme_table: true
 test: 'system bin/"bullseye", "--version"'

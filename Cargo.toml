@@ -1,6 +1,6 @@
 [package]
 name = "bullseye"
-version = "0.48.0"
+version = "0.49.0"
 edition = "2024"
 description = "MCP server for managing targets — desired states with dependency tracking and frontier computation"
 license = "Apache-2.0"
