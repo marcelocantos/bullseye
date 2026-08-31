@@ -242,3 +242,115 @@ fn convergence_subcommand_runs_against_a_real_ledger() {
         "--skip-invariants must reach the shared handler:\n{out}"
     );
 }
+
+// --- Documented-surface drift (🎯T76) --------------------------------
+//
+// The audit that produced `apply` found that `commit --help` advertised
+// a create-only `track`, while `track` was in fact a full upsert. The
+// capability existed and was undiscoverable, so agents hand-edited the
+// YAML for fields the help denied them. These tests make that class of
+// drift a build failure: the documented field list on each surface is
+// checked against the schema, not against a copy of itself.
+
+/// The field names `Fragment` actually accepts, recovered from serde's
+/// own unknown-field error so the list is derived from the struct
+/// rather than hand-maintained alongside it.
+fn fragment_schema_fields() -> Vec<String> {
+    let err = serde_yaml_ng::from_str::<bullseye::apply::Fragment>("zzz_not_a_field: 1\n")
+        .expect_err("unknown field must be rejected")
+        .to_string();
+    // "unknown field `zzz_not_a_field`, expected one of `name`, `status`, …"
+    err.split('`')
+        .skip(1)
+        .step_by(2)
+        .skip(1)
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn field_help_covers_every_fragment_field() {
+    let schema = fragment_schema_fields();
+    assert!(
+        schema.len() > 5,
+        "failed to recover the field list from serde: {schema:?}"
+    );
+    let documented: Vec<&str> = bullseye::apply::FIELD_HELP.iter().map(|f| f.name).collect();
+
+    // Aliases are alternate spellings of a documented field, not extra
+    // surface, so they are allowed to appear in the schema list only.
+    const ALIASES: &[&str] = &["set_aside_reason"];
+
+    for field in &schema {
+        assert!(
+            documented.contains(&field.as_str()) || ALIASES.contains(&field.as_str()),
+            "Fragment accepts `{field}` but FIELD_HELP does not document it — \
+             the exact drift 🎯T76 exists to prevent"
+        );
+    }
+    for field in &documented {
+        assert!(
+            schema.contains(&field.to_string()),
+            "FIELD_HELP documents `{field}` but Fragment does not accept it"
+        );
+    }
+}
+
+#[test]
+fn apply_help_lists_every_documented_field() {
+    let (code, help) = run(&["apply", "--help"]);
+    assert_eq!(code, 0, "apply --help failed: {help}");
+    for f in bullseye::apply::FIELD_HELP {
+        assert!(
+            help.contains(f.name),
+            "`bullseye apply --help` omits field `{}` — no field may be reachable \
+             only by reading source. Help was:\n{help}",
+            f.name
+        );
+    }
+}
+
+#[test]
+fn apply_help_states_every_evidence_obligation() {
+    let (_, help) = run(&["apply", "--help"]);
+    for ob in bullseye::apply::POLICY {
+        assert!(
+            help.contains(ob.requires),
+            "`apply --help` never mentions `{}`, required by {}",
+            ob.requires,
+            ob.transition
+        );
+    }
+}
+
+#[test]
+fn mcp_apply_description_lists_every_documented_field() {
+    let tools = TargetTools::tools();
+    let apply = tools
+        .iter()
+        .find(|t| t.name == "bullseye_apply")
+        .expect("bullseye_apply must be registered");
+    let description = apply.description.clone().unwrap_or_default();
+    for f in bullseye::apply::FIELD_HELP {
+        assert!(
+            description.contains(f.name),
+            "the bullseye_apply tool description omits field `{}` — an MCP agent \
+             cannot use what the description does not mention",
+            f.name
+        );
+    }
+}
+
+#[test]
+fn apply_rejects_an_unrecognised_flag_instead_of_reporting_success() {
+    let (code, out) = run(&["apply", "--id", "T1", "--valu", "5"]);
+    assert_ne!(code, 0, "an unrecognised flag must fail, got:\n{out}");
+    assert!(
+        out.contains("unrecognised flag"),
+        "expected an unrecognised-flag error, got:\n{out}"
+    );
+    assert!(
+        !out.contains("ok: true"),
+        "a rejected call must never report success:\n{out}"
+    );
+}

@@ -55,6 +55,7 @@ impl ServerHandler for TargetHandler {
             TargetTools::OpenTool(t) => handle_open(t),
             TargetTools::QueryTool(t) => handle_query(t),
             TargetTools::CommitTool(t) => handle_commit(t),
+            TargetTools::ApplyTool(t) => handle_apply(t),
             TargetTools::PlanChecksTool(t) => handle_plan_checks(t),
             // Compatibility shims + extended tools
             TargetTools::ListTool(t) => handle_list(t),
@@ -2497,4 +2498,150 @@ targets:
     fn issuepipe_env_absent_is_silent() {
         assert_eq!(super::issuepipe_env_status_from("", "", "", "5"), "");
     }
+}
+
+/// Validate every caller-controlled string in an apply request before
+/// the locked mutation, so the file is never written with protocol or
+/// control-byte corruption (🎯T20 / 🎯T40). `apply` must not become a
+/// bypass of the guards the per-verb handlers apply.
+fn check_apply_strings(req: &crate::apply::ApplyRequest) -> Result<(), String> {
+    for (key, frag) in &req.targets {
+        if !crate::apply::is_allocation_slot(key) {
+            check_explicit_target_id("target key", key)?;
+        }
+        let label = |f: &str| format!("{key}.{f}");
+        for (field, value) in [
+            ("name", &frag.name),
+            ("context", &frag.context),
+            ("origin", &frag.origin),
+            ("attestation", &frag.attestation),
+            ("reason", &frag.reason),
+            ("owner", &frag.owner),
+            ("postpone_predicate", &frag.postpone_predicate),
+        ] {
+            if let Some(s) = value {
+                check_persisted_string(&label(field), s)?;
+            }
+        }
+        for (field, items) in [("acceptance", &frag.acceptance), ("tags", &frag.tags)] {
+            if let Some(items) = items {
+                for (i, s) in items.iter().enumerate() {
+                    check_persisted_string(&format!("{key}.{field}[{i}]"), s)?;
+                }
+            }
+        }
+        for (field, items) in [("depends_on", &frag.depends_on), ("blocks", &frag.blocks)] {
+            if let Some(items) = items {
+                for (i, s) in items.iter().enumerate() {
+                    check_explicit_target_id(&format!("{key}.{field}[{i}]"), s)?;
+                }
+            }
+        }
+        if let Some(parent) = &frag.child_of {
+            check_explicit_target_id(&label("child_of"), parent)?;
+        }
+    }
+    for (i, id) in req.remove.iter().enumerate() {
+        check_explicit_target_id(&format!("remove[{i}]"), id)?;
+    }
+    Ok(())
+}
+
+/// Run an apply request against the ledger discovered from `cwd`.
+///
+/// The one write path. Both surfaces — the MCP `bullseye_apply` tool
+/// and `bullseye apply` — funnel through here, which is what makes
+/// surface parity structural rather than a thing to remember (🎯T76).
+pub fn apply_request(cwd: &str, req: crate::apply::ApplyRequest) -> ToolResult {
+    let path = discover_path(cwd)?;
+    ensure_mutation_allowed(&path, cwd)?;
+    check_apply_strings(&req).map_err(tool_err)?;
+
+    // Scan git history for every ID ever assigned (🎯T28), outside the
+    // lock: the subprocess is expensive on first call and must not be
+    // run while holding the file lock.
+    let historical = id_alloc::historical_ids(&path);
+
+    // `with_locked_mutation` flattens the closure's error into a
+    // string, which would drop the stable error code. Carry the code
+    // out alongside so a refusal reaches the caller as (code, message)
+    // rather than as bare prose.
+    let mut refusal: Option<api::ErrorCode> = None;
+    let report = store::with_locked_mutation(&path, |file| {
+        crate::apply::apply(file, &req, &historical).map_err(|e| {
+            refusal = Some(e.code);
+            e.message
+        })
+    });
+    let report = match report {
+        Ok(r) => r,
+        Err(e) => {
+            return match refusal {
+                Some(code) => coded_err(code, e.to_string()),
+                None => Err(tool_err(e.to_string())),
+            };
+        }
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    for id in &report.created {
+        let name = read_target_name(&path, id);
+        lines.push(format!("Created 🎯{id}{name}"));
+    }
+    for id in &report.updated {
+        let name = read_target_name(&path, id);
+        lines.push(format!("Updated 🎯{id}{name}"));
+    }
+    for id in &report.removed {
+        lines.push(format!("Removed 🎯{id}"));
+    }
+    for (blocker, blocked) in &report.injected {
+        lines.push(format!(
+            "🎯{blocker} injected as a dependency of 🎯{blocked}"
+        ));
+    }
+    if lines.is_empty() {
+        lines.push("No changes — the fragment already matched the ledger.".to_string());
+    }
+    lines.push(format!("File: {}", path.display()));
+
+    let ids = report.created.clone();
+    mutation_text(&path, "apply", &ids, &report.changed(), lines.join("\n"))
+}
+
+/// Best-effort target name for the result body. A missing name is a
+/// display concern only, never a reason to fail a completed write.
+fn read_target_name(path: &Path, id: &str) -> String {
+    match store::load(path) {
+        Ok(file) => file
+            .targets
+            .get(id)
+            .map(|t| format!(" \"{}\"", t.name))
+            .unwrap_or_default(),
+        Err(_) => String::new(),
+    }
+}
+
+/// MCP entry point for the single write verb (🎯T76). Parses the
+/// fragment text, then hands off to the shared [`apply_request`] that
+/// the CLI also calls.
+pub fn handle_apply(t: crate::tools::ApplyTool) -> ToolResult {
+    let mut req: crate::apply::ApplyRequest =
+        serde_yaml_ng::from_str(&t.fragment).map_err(|e| {
+            tool_err(api::format_error(
+                api::ErrorCode::InvalidArgs,
+                format!(
+                    "fragment is not a valid apply document: {e}\n\
+                     Expected shape: targets: {{T55: {{value: 8}}}} — see the tool \
+                     description for the full field list."
+                ),
+            ))
+        })?;
+    if t.base.is_some() {
+        req.base = t.base;
+    }
+    if t.reason.is_some() {
+        req.reason = t.reason;
+    }
+    apply_request(&t.cwd, req)
 }

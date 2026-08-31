@@ -111,6 +111,7 @@ pub const CLI_ROUTES: &[ToolRoute] = &[
     direct("bullseye_open", "open"),
     direct("bullseye_query", "query"),
     direct("bullseye_commit", "commit"),
+    direct("bullseye_apply", "apply"),
     direct("bullseye_plan_checks", "plan-checks"),
     // Read shims onto `query`.
     shim("bullseye_startup_context", "query", "--view", "context"),

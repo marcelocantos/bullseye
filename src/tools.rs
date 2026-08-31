@@ -942,6 +942,47 @@ pub struct SyncPrioritiesTool {
     pub max_depth: u32,
 }
 
+/// The single write verb (🎯T76).
+#[mcp_tool(
+    name = "bullseye_apply",
+    description = "Core: the single write verb. Applies a partial desired-state fragment \
+        (YAML or JSON text in `fragment`) to the ledger: bullseye diffs it against the \
+        current file, derives the transitions, enforces the evidence policy, and writes. \
+        Fields you do not mention are left alone, and targets you do not mention are NEVER \
+        removed — removal is explicit via a `remove:` list. Unknown fields are rejected \
+        rather than silently dropped. \
+        Shape: `targets: {T55: {value: 8}, _new: {name: …, acceptance: [ … ]}}` — a key \
+        beginning with `_` allocates an ID, reported back in the `ids:` header (never \
+        predict the next ID by scanning the file). Optional top-level `base: sha256:…` is \
+        a CAS token: a mismatch is code=conflict, meaning the ledger moved under you. \
+        Patchable fields: name, status, value, cost, actual_cost, acceptance, context, \
+        tags, depends_on, blocks, origin, child_of, attestation, reason, owner, \
+        postponed_until, postpone_predicate. \
+        Evidence required: status→achieved needs attestation; status→set_aside, reopening \
+        an achieved target, and any owner change need reason. \
+        Prefer this over bullseye_commit and the put/retire/set_aside/revert/subdivide \
+        shims. User intent overrides the frontier — apply records claims; it does not \
+        assign work."
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ApplyTool {
+    /// Working directory to discover bullseye.yaml from.
+    pub cwd: String,
+
+    /// The fragment: a YAML or JSON document with `targets` (a map of
+    /// target ID to partial fields), and optionally `remove`, `base`
+    /// and `reason`. JSON is valid YAML, so either form is accepted.
+    pub fragment: String,
+
+    /// Optional CAS token, overriding any `base` inside `fragment`.
+    #[serde(default)]
+    pub base: Option<String>,
+
+    /// Optional audit note for the apply as a whole.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 tool_box!(
     TargetTools,
     [
@@ -949,6 +990,7 @@ tool_box!(
         OpenTool,
         QueryTool,
         CommitTool,
+        ApplyTool,
         PlanChecksTool,
         // Compatibility shims
         ListTool,

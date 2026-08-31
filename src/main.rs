@@ -49,6 +49,7 @@ async fn main() -> SdkResult<()> {
             "open" => cli_exit(cli_open(&rest[1..])),
             "query" => cli_exit(cli_query(&rest[1..])),
             "commit" => cli_exit(cli_commit(&rest[1..])),
+            "apply" => cli_exit(cli_apply(&rest[1..])),
             "plan-checks" => cli_exit(cli_plan_checks(&rest[1..])),
             "convergence" => cli_exit(cli_convergence(&rest[1..])),
             "portfolio" => cli_exit(cli_portfolio(&rest[1..])),
@@ -226,7 +227,9 @@ fn print_help() {
     println!("                               Start the MCP server (stdio transport)");
     println!("    bullseye open [--cwd DIR] [--location in_repo|external]");
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
-    println!("    bullseye commit --op OP [flags]   # see bullseye commit --help");
+    println!("    bullseye apply [--cwd DIR] (-f FILE | - | --id ID --set k=v ...)");
+    println!("                               The single write verb — see bullseye apply --help");
+    println!("    bullseye commit --op OP [flags]   # sugar over apply; see commit --help");
     println!("    bullseye plan-checks --id ID [--cwd DIR]");
     println!(
         "    bullseye convergence [--cwd DIR] [--skip-invariants] [--momentum ID=MULT,...]\n\
@@ -576,4 +579,211 @@ fn cli_resolve(args: &[String]) -> Result<String, String> {
         reference,
         workspace_root: flag_value(args, "--workspace-root"),
     }))
+}
+
+/// Flags `bullseye apply` accepts, and whether each takes a value.
+///
+/// Declared rather than discovered so an unrecognised flag can be an
+/// error. The old hand-rolled parsing accepted anything and returned
+/// `ok: true`, which meant a typo'd flag looked like a successful
+/// write — a documented reason agents gave up on the CLI and edited
+/// the YAML by hand (🎯T76).
+const APPLY_FLAGS: &[(&str, bool)] = &[
+    ("--cwd", true),
+    ("--file", true),
+    ("-f", true),
+    ("--id", true),
+    ("--set", true),
+    ("--base", true),
+    ("--remove", true),
+    ("--reason", true),
+    ("--help", false),
+];
+
+/// Reject any flag the subcommand does not declare.
+fn reject_unknown_flags(
+    args: &[String],
+    spec: &[(&str, bool)],
+    subcommand: &str,
+) -> Result<(), String> {
+    let mut i = 0;
+    while i < args.len() {
+        let tok = &args[i];
+        // A bare "-" means stdin; anything else starting with "-" is a
+        // flag we must recognise. Values are skipped explicitly below,
+        // so a value that happens to look like a flag is not misread.
+        if tok == "-" || !tok.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        let (name, inline_value) = match tok.split_once('=') {
+            Some((n, _)) => (n, true),
+            None => (tok.as_str(), false),
+        };
+        match spec.iter().find(|(f, _)| *f == name) {
+            Some((_, takes_value)) => {
+                i += if *takes_value && !inline_value { 2 } else { 1 };
+            }
+            None => {
+                let accepted = spec.iter().map(|(f, _)| *f).collect::<Vec<_>>().join(", ");
+                return Err(format!(
+                    "{subcommand}: unrecognised flag `{name}`.\nAccepted flags: {accepted}\n\
+                     Run `bullseye {subcommand} --help` for the full field list."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// All values given for a repeatable flag, in order.
+fn flag_values(args: &[String], name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == name {
+            if let Some(v) = args.get(i + 1) {
+                out.push(v.clone());
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(rest) = args[i].strip_prefix(&format!("{name}=")) {
+            out.push(rest.to_string());
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `bullseye apply` help, with the field list generated from
+/// [`bullseye::apply::FIELD_HELP`] so the documented surface cannot
+/// drift from the schema (🎯T76).
+fn apply_help() -> String {
+    let mut s = String::from(
+        "bullseye apply [--cwd DIR] (-f FILE | - | --id ID --set k=v ...)\n\
+         \n\
+         Applies a partial desired-state fragment. Fields you do not mention are\n\
+         left alone, and targets you do not mention are never removed — removal is\n\
+         explicit via `remove:` (fragment) or --remove ID[,ID] (flags).\n\
+         \n\
+         Fragment form (YAML on stdin or -f FILE):\n\
+         \x20 base: sha256:…            # optional CAS token; mismatch = code=conflict\n\
+         \x20 targets:\n\
+         \x20   T55: {value: 8}         # patch an existing target\n\
+         \x20   _new: {name: …, acceptance: [ … ]}   # `_` prefix allocates an ID\n\
+         \x20 remove: [T99]\n\
+         \n\
+         Flag form:\n\
+         \x20 bullseye apply --id T55 --set value=8 --set cost=5\n\
+         \n\
+         Fields:\n",
+    );
+    for f in bullseye::apply::FIELD_HELP {
+        s.push_str(&format!("\x20 {:<19} {}\n", f.name, f.blurb));
+    }
+    s.push_str("\nEvidence required by transition:\n");
+    for ob in bullseye::apply::POLICY {
+        s.push_str(&format!(
+            "\x20 {:<28} requires `{}`\n",
+            ob.transition, ob.requires
+        ));
+    }
+    s
+}
+
+/// Build a one-target request from `--id` plus repeated `--set k=v`.
+///
+/// Values are typed by field rather than by parsing each as YAML:
+/// target prose routinely contains colons and commas, and a
+/// YAML-parsed `--set name="T5: do the thing"` would silently become a
+/// map. Unknown keys still fail, because the assembled mapping is
+/// deserialized into `Fragment`, which denies unknown fields.
+fn fragment_from_sets(sets: &[String]) -> Result<bullseye::apply::Fragment, String> {
+    use serde_yaml_ng::Value;
+    let mut map = serde_yaml_ng::Mapping::new();
+    let mut acceptance: Vec<Value> = Vec::new();
+    for pair in sets {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("--set expects key=value, got `{pair}`"))?;
+        match key {
+            "value" | "cost" | "actual_cost" => {
+                let n: f64 = value
+                    .parse()
+                    .map_err(|_| format!("--set {key}={value}: expected a number"))?;
+                map.insert(Value::from(key), Value::from(n));
+            }
+            // Repeatable: each --set acceptance=… appends one criterion,
+            // because criteria contain commas and must not be split.
+            "acceptance" => acceptance.push(Value::from(value)),
+            "tags" | "depends_on" | "blocks" => {
+                let items: Vec<Value> = value
+                    .split(',')
+                    .map(|p| p.trim())
+                    .filter(|p| !p.is_empty())
+                    .map(Value::from)
+                    .collect();
+                map.insert(Value::from(key), Value::Sequence(items));
+            }
+            _ => {
+                map.insert(Value::from(key), Value::from(value));
+            }
+        }
+    }
+    if !acceptance.is_empty() {
+        map.insert(Value::from("acceptance"), Value::Sequence(acceptance));
+    }
+    // serde's own error already enumerates the legal fields.
+    serde_yaml_ng::from_value(Value::Mapping(map)).map_err(|e| e.to_string())
+}
+
+fn cli_apply(args: &[String]) -> Result<String, String> {
+    if has_flag(args, "--help") || args.is_empty() {
+        return Ok(apply_help());
+    }
+    reject_unknown_flags(args, APPLY_FLAGS, "apply")?;
+
+    let from_file = flag_value(args, "-f").or_else(|| flag_value(args, "--file"));
+    let from_stdin = args.iter().any(|a| a == "-");
+
+    let mut req: bullseye::apply::ApplyRequest = if let Some(path) = from_file {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("apply: cannot read {path}: {e}"))?;
+        serde_yaml_ng::from_str(&text).map_err(|e| format!("apply: {path}: {e}"))?
+    } else if from_stdin {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+            .map_err(|e| format!("apply: cannot read stdin: {e}"))?;
+        serde_yaml_ng::from_str(&text).map_err(|e| format!("apply: stdin: {e}"))?
+    } else {
+        let id = flag_value(args, "--id").ok_or_else(|| {
+            "apply: give either a fragment (-f FILE or -) or --id ID with --set k=v".to_string()
+        })?;
+        let frag = fragment_from_sets(&flag_values(args, "--set"))?;
+        let mut targets = std::collections::BTreeMap::new();
+        targets.insert(id, frag);
+        bullseye::apply::ApplyRequest {
+            targets,
+            ..Default::default()
+        }
+    };
+
+    // Flags layer over a fragment so `-f frag.yaml --base <hash>` works.
+    if let Some(base) = flag_value(args, "--base") {
+        req.base = Some(base);
+    }
+    if let Some(reason) = flag_value(args, "--reason") {
+        req.reason = Some(reason);
+    }
+    if let Some(remove) = flag_value(args, "--remove") {
+        req.remove.extend(
+            remove
+                .split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty()),
+        );
+    }
+
+    tool_result_text(bullseye::handler::apply_request(&default_cwd(args), req))
 }
