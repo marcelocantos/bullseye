@@ -7774,3 +7774,60 @@ fn validate_accepts_an_achieved_target_whose_dependencies_are_terminal() {
         "a terminal dependency must not be reported: {errors:?}"
     );
 }
+
+/// A blocked target must announce itself as blocked in the views an
+/// agent actually reads (🎯T80). The frontier already excluded it; the
+/// gap was that `view=target` and `view=list` rendered
+/// `status: identified`, which reads as "ready to start", so skipping a
+/// dependency chain required no deliberate override — just believing
+/// the surface.
+#[test]
+fn blocked_targets_are_marked_blocked_in_the_read_views() {
+    let file: bullseye::schema::TargetsFile = serde_yaml_ng::from_str(
+        "schema_version: 5\ntargets:\n\
+         \x20 T6:\n    name: base\n    status: identified\n    value: 0.0\n    cost: 0.0\n\
+         \x20   acceptance: [a]\n    discovered: 2026-01-01\n\
+         \x20 T7:\n    name: middle\n    status: identified\n    value: 0.0\n    cost: 0.0\n\
+         \x20   acceptance: [a]\n    depends_on: [T6]\n    discovered: 2026-01-01\n",
+    )
+    .expect("fixture parses");
+
+    let ready = &file.targets["T6"];
+    let blocked = &file.targets["T7"];
+    assert!(
+        bullseye::graph::open_blockers(&file, ready).is_empty(),
+        "a target with no dependencies is not blocked"
+    );
+    assert_eq!(
+        bullseye::graph::open_blockers(&file, blocked),
+        vec!["T6".to_string()],
+        "an open dependency must be reported as a blocker"
+    );
+}
+
+/// Terminal dependencies do not block, and the two terminal states are
+/// equivalent for this purpose: a target the owner set aside no longer
+/// gates its dependents any more than an achieved one does.
+#[test]
+fn terminal_dependencies_do_not_block() {
+    for terminal in ["achieved", "set_aside"] {
+        let extra = if terminal == "achieved" {
+            "    attestation: done\n    achieved: 2026-01-02\n"
+        } else {
+            "    set_aside_reason: not pursuing\n"
+        };
+        let yaml = format!(
+            "schema_version: 5\ntargets:\n\
+             \x20 T6:\n    name: base\n    status: {terminal}\n    value: 0.0\n    cost: 0.0\n\
+             \x20   acceptance: [a]\n    discovered: 2026-01-01\n{extra}\
+             \x20 T7:\n    name: middle\n    status: identified\n    value: 0.0\n    cost: 0.0\n\
+             \x20   acceptance: [a]\n    depends_on: [T6]\n    discovered: 2026-01-01\n"
+        );
+        let file: bullseye::schema::TargetsFile =
+            serde_yaml_ng::from_str(&yaml).expect("fixture parses");
+        assert!(
+            bullseye::graph::open_blockers(&file, &file.targets["T7"]).is_empty(),
+            "a {terminal} dependency must not block"
+        );
+    }
+}

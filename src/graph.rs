@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use crate::ops;
-use crate::schema::{Status, TargetsFile};
+use crate::schema::{Status, Target, TargetsFile};
 
 /// Banner + legend describing repo-scope frontier ordering. Rendered
 /// at the top of the frontier section in every repo-scope output
@@ -810,6 +810,29 @@ pub fn validate_blocking(file: &TargetsFile) -> Vec<String> {
 /// degrade around the named targets rather than refusing to answer
 /// (🎯T64). `view=validate` is the one surface whose job *is* to report
 /// these, so it reports them and nothing else.
+/// The still-open targets standing between `target` and work on it.
+///
+/// `depends_on` is a hard blocking edge — "must be achieved before work
+/// on this one begins" — but until 🎯T80 the read surfaces never said
+/// so. A blocked target rendered as `status: identified`, which reads
+/// as *ready to start*, and an agent had to fetch every dependency and
+/// compare statuses to learn otherwise. The frontier knew; the view an
+/// agent actually reads denied it. Terminal dependencies (achieved or
+/// set_aside) do not block, and unknown IDs are reported by validation
+/// rather than counted here.
+pub fn open_blockers(file: &TargetsFile, target: &Target) -> Vec<String> {
+    target
+        .depends_on
+        .iter()
+        .filter(|d| {
+            file.targets
+                .get(*d)
+                .is_some_and(|dep| !dep.status.is_terminal())
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn validate_issues(file: &TargetsFile) -> Vec<ValidationIssue> {
     let mut errors = Vec::new();
     let mut seen_ids: HashSet<&str> = HashSet::new();

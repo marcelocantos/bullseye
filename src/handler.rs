@@ -804,6 +804,22 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
             v = target.value,
             c = target.cost,
         ));
+        // 🎯T80: `Identified` renders identically whether a target is
+        // ready or blocked, so a scanning agent cannot tell them apart
+        // without fetching every dependency. Say it on the row.
+        if !target.status.is_terminal() {
+            let blockers = graph::open_blockers(&file, target);
+            if !blockers.is_empty() {
+                out.push_str(&format!(
+                    "  BLOCKED — not workable until achieved: {}\n",
+                    blockers
+                        .iter()
+                        .map(|b| format!("🎯{b}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
         for message in issues_by_target.get(*id).into_iter().flatten() {
             out.push_str(&format!("  INVALID: {message}\n"));
         }
@@ -834,7 +850,32 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
     let yaml = serde_yaml_ng::to_string(target).map_err(|e| tool_err(e.to_string()))?;
     // 🎯T64: a single-target read always answers. Errors on *this*
     // target are appended as a note; errors elsewhere are irrelevant here.
-    let mut out = format!("🎯{} {}\n\n{yaml}", t.id, target.name);
+    // 🎯T80: lead with workability. `status: identified` on a blocked
+    // target reads as "ready to start", which is how a dependency chain
+    // gets skipped — the reader would otherwise have to fetch every
+    // entry in depends_on and compare statuses to learn otherwise.
+    let blockers = if target.status.is_terminal() {
+        Vec::new()
+    } else {
+        graph::open_blockers(&file, target)
+    };
+    let banner = if blockers.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n⛔ BLOCKED — do not work this target yet.\n\
+             Open blocker(s) that must be achieved or set_aside first: {}\n\
+             `depends_on` is a hard edge: bullseye refuses to record this target as\n\
+             achieved while they are open. Work the blockers, or drop the edge if it\n\
+             no longer holds.\n",
+            blockers
+                .iter()
+                .map(|b| format!("🎯{b}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let mut out = format!("🎯{} {}\n{banner}\n{yaml}", t.id, target.name);
     let own_issues: Vec<String> = graph::validate_issues(&file)
         .into_iter()
         .filter(|i| i.target == t.id)
