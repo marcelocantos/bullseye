@@ -103,6 +103,21 @@ Verify with `lsof -iTCP:18743 -sTCP:LISTEN`. **Do not probe `/mcp` with
 bare `curl`** — MCP answers JSON-RPC POSTs, so a plain GET returns
 nothing and reads as "server down".
 
+**Process-global caches carry a TTL** (`cache::TTL`, 5 min, overridable
+with `BULLSEYE_CACHE_TTL_SECS`). They were written for a process that
+lived as long as one agent session; a daemon removed that ceiling. The
+workspace scan in `resolve` has no other validation, so the TTL is its
+correctness mechanism — without it a repo cloned after startup stays
+invisible. The id-history and parse caches are already exact (a git ref
+fingerprint and an mtime), so there the TTL only bounds memory.
+Deliberately keyed on elapsed time rather than on client lifecycle:
+MCP2 is stateless, so there will be no session whose end could carry an
+invalidation.
+
+`--default-location` is process-wide, so under the daemon it is a
+machine-wide default rather than the per-invocation choice it was
+under stdio.
+
 A single daemon does **not** make bullseye a single writer: the CLI,
 other repos' agents, and hand edits still mutate the file concurrently,
 so the flock + CAS + `content_hash` machinery stays load-bearing.

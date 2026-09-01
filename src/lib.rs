@@ -4,6 +4,7 @@
 pub mod api;
 pub mod apply;
 pub mod bounded;
+pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod convergence;

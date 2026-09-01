@@ -36,11 +36,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
 use crate::bounded::{GIT_QUERY_TIMEOUT, git_query};
+use crate::cache;
 
 /// Process-global cache. Keyed by canonical repo-top path; value is
 /// the repo's ref fingerprint at scan time plus the set of every
@@ -55,8 +57,12 @@ use crate::bounded::{GIT_QUERY_TIMEOUT, git_query};
 /// handed out again — silently, with an ok envelope. Validating
 /// against the current refs costs one `git rev-parse --all` per
 /// mutation instead of a full `git log -p --all`.
-/// Ref fingerprint at scan time, paired with the IDs that scan found.
-type CachedScan = (String, HashSet<String>);
+/// Ref fingerprint at scan time, paired with the IDs that scan found,
+/// stamped with when it was taken.
+///
+/// The fingerprint is what makes the entry *correct*; the stamp only
+/// bounds how long an untouched repo occupies memory (🎯T78.1).
+type CachedScan = (Instant, String, HashSet<String>);
 
 static CACHE: Mutex<Option<HashMap<PathBuf, CachedScan>>> = Mutex::new(None);
 
@@ -155,14 +161,15 @@ fn ref_fingerprint(repo_top: &Path) -> Option<String> {
 fn cache_get(repo_top: &Path, fingerprint: &str) -> Option<HashSet<String>> {
     let guard = CACHE.lock().expect("id_alloc cache poisoned");
     let cache = guard.as_ref()?;
-    let (cached_fingerprint, ids) = cache.get(repo_top)?;
-    (cached_fingerprint == fingerprint).then(|| ids.clone())
+    let (stamped, cached_fingerprint, ids) = cache.get(repo_top)?;
+    (cached_fingerprint == fingerprint && !cache::expired(*stamped)).then(|| ids.clone())
 }
 
 fn cache_put(repo_top: PathBuf, fingerprint: String, ids: HashSet<String>) {
     let mut guard = CACHE.lock().expect("id_alloc cache poisoned");
     let cache = guard.get_or_insert_with(HashMap::new);
-    cache.insert(repo_top, (fingerprint, ids));
+    cache.retain(|_, (stamped, _, _)| !cache::expired(*stamped));
+    cache.insert(repo_top, (Instant::now(), fingerprint, ids));
 }
 
 fn relative_pathspec(yaml_path: &Path, repo_top: &Path) -> Option<String> {

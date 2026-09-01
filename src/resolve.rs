@@ -17,6 +17,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use crate::cache;
 use std::sync::Mutex;
 
 const MAX_DEPTH: usize = 5;
@@ -151,16 +154,39 @@ fn repo_matches_suffix(repo: &Path, ref_parts: &[&str]) -> bool {
 }
 
 /// Per-process scan cache. Keyed by workspace root.
-static CACHE: Mutex<Option<HashMap<PathBuf, Vec<PathBuf>>>> = Mutex::new(None);
+/// Workspace scans, stamped with the time they were taken.
+///
+/// Unlike the id-allocation and parse caches this has no exactness
+/// check to fall back on — a workspace gains and loses repos by
+/// filesystem operations bullseye never sees. The TTL is therefore the
+/// correctness mechanism, not merely eviction: without it a repo cloned
+/// after the process started stays invisible for the life of that
+/// process, which was one agent session under stdio and is unbounded
+/// under a daemon (🎯T78.1).
+type StampedScan = (Instant, Vec<PathBuf>);
+
+static CACHE: Mutex<Option<HashMap<PathBuf, StampedScan>>> = Mutex::new(None);
 
 fn scan_repos(workspace_root: &Path) -> Vec<PathBuf> {
+    {
+        let guard = CACHE.lock().expect("resolve cache poisoned");
+        if let Some(map) = guard.as_ref()
+            && let Some((stamped, hit)) = map.get(workspace_root)
+            && !cache::expired(*stamped)
+        {
+            return hit.clone();
+        }
+    }
+    // Walk outside the lock: it touches the filesystem and must not
+    // block every other workspace resolution while it runs.
+    let repos = walk_for_repos(workspace_root);
     let mut guard = CACHE.lock().expect("resolve cache poisoned");
     let map = guard.get_or_insert_with(HashMap::new);
-    if let Some(hit) = map.get(workspace_root) {
-        return hit.clone();
-    }
-    let repos = walk_for_repos(workspace_root);
-    map.insert(workspace_root.to_path_buf(), repos.clone());
+    cache::sweep(map);
+    map.insert(
+        workspace_root.to_path_buf(),
+        (Instant::now(), repos.clone()),
+    );
     repos
 }
 

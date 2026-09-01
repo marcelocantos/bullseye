@@ -148,6 +148,10 @@ pub fn hash_mismatch_warning(path: &Path, check: &HashCheck) -> Option<String> {
 struct CacheEntry {
     /// The mtime of the file at parse time.
     mtime: SystemTime,
+    /// When this entry was parsed. Correctness rests on `mtime`; the
+    /// stamp bounds how long an untouched ledger sits in memory, and
+    /// stops an unstattable file being served indefinitely (🎯T78.1).
+    stamped: Instant,
     /// The last successfully parsed targets file.
     file: TargetsFile,
 }
@@ -426,8 +430,11 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
 
         if let Some(entry) = cache.get(&key) {
             // If we couldn't stat the file, fall back to the cached copy.
-            // If the mtime is unchanged, return the cached copy.
-            if current_mtime.is_none() || current_mtime == Some(entry.mtime) {
+            // If the mtime is unchanged, return the cached copy. Either
+            // way an expired entry is a miss: a file we cannot stat must
+            // not be served from memory forever.
+            let usable = current_mtime.is_none() || current_mtime == Some(entry.mtime);
+            if usable && !crate::cache::expired(entry.stamped) {
                 return Ok(entry.file.clone());
             }
         }
@@ -441,10 +448,12 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
             let mtime = current_mtime.unwrap_or(SystemTime::UNIX_EPOCH);
             let mut guard = PARSE_CACHE.lock().expect("parse cache mutex poisoned");
             let cache = guard.get_or_insert_with(HashMap::new);
+            cache.retain(|_, e| !crate::cache::expired(e.stamped));
             cache.insert(
                 key,
                 CacheEntry {
                     mtime,
+                    stamped: Instant::now(),
                     file: file.clone(),
                 },
             );
