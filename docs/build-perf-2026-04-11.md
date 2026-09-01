@@ -211,3 +211,30 @@ cargo build --no-default-features
 - **Measurement notes**: each local incremental measurement was run
   twice; first run warms filesystem caches and is discarded. Clean
   builds measured once.
+
+## 2026-08-31 — HTTP transport (🎯T78)
+
+Enabling the SDK's `hyper-server` feature to serve MCP over HTTP costs:
+
+| | baseline (stdio only) | with `hyper-server` |
+|---|---|---|
+| clean debug build, `--no-default-features` | **12 s** | **18 s** (+50%) |
+| distinct crates in the normal dep graph | **85** | **161** |
+
+Method: `git worktree` at the pre-change commit versus the working
+tree, each with its own `CARGO_TARGET_DIR`, warm registry, M4 Max.
+Both builds verified to produce a binary — an earlier attempt that
+merely toggled the Cargo feature measured 13 s for a build that had in
+fact failed to compile, because `main.rs` still referenced
+`hyper_server`. A timing whose binary was never checked is not a
+measurement.
+
+The added crates are axum, axum-server, hyper and the http-body stack,
+plus tokio's `signal` and `net` features — `signal` is required by the
+SDK's graceful-shutdown path and sat outside 🎯T47's trimmed set while
+stdio was the only transport.
+
+Judged worth it: the cost is paid by whoever builds bullseye, while the
+benefit (one supervised process instead of a spawn per agent session)
+is paid back on every session start across the fleet. Revisit if the
+clean build passes ~30 s.

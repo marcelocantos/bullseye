@@ -26,20 +26,42 @@ but no MCP client can talk to it.
    ```bash
    brew install marcelocantos/tap/bullseye
    ```
-2. **Register the MCP server with your agent.** Bullseye is
-   **stdio-only** — there is no HTTP port and no `brew services`
-   definition. Do not use `--transport http` or `localhost:<port>`.
-   For Claude Code:
+2. **Start the HTTP daemon (preferred transport).** One supervised
+   process serves every agent on the machine:
    ```bash
+   supervisor/install.sh     # from a clone; renders supervisor.d/bullseye.ini
+   lsof -iTCP:18743 -sTCP:LISTEN    # confirm it is listening
+   ```
+   **Do not probe `/mcp` with bare `curl`.** MCP answers JSON-RPC
+   POSTs, so a plain GET returns nothing and looks like a dead server.
+   Skip this step only if you are using the stdio transport, which is
+   spawned per session and needs no daemon.
+3. **Register the MCP server with your agent.** For Claude Code:
+   ```bash
+   claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
+   # stdio alternative (no daemon):
    claude mcp add --scope user bullseye -- bullseye
    ```
    For Grok:
    ```bash
+   grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
+   # stdio alternative (no daemon):
    grok mcp add --scope user bullseye -- bullseye
    ```
    For other MCP clients, add this block to the client's config
    (usually `.mcp.json` at project scope or the equivalent user-scope
    file):
+   ```json
+   {
+     "mcpServers": {
+       "bullseye": {
+         "type": "http",
+         "url": "http://127.0.0.1:18743/mcp"
+       }
+     }
+   }
+   ```
+   stdio alternative:
    ```json
    {
      "mcpServers": {
@@ -50,17 +72,19 @@ but no MCP client can talk to it.
      }
    }
    ```
-3. **Restart the agent session.** MCP server registration only takes
+4. **Restart the agent session.** MCP server registration only takes
    effect on the next session start. Tools added in this step are not
    visible to the running session.
-4. **Verify end-to-end.** First run `bullseye --version` — a v0.45.0+
+5. **Verify end-to-end.** First run `bullseye --version` — a v0.45.0+
    binary prints `bullseye 0.45.0 (<12-hex>)` (crate version plus
    build provenance). Then in a fresh session call `bullseye_open`
    with `cwd` set to any project — it should return either a context
    summary, an init prompt for repos with no `bullseye.yaml`, or a
    graceful "no targets file found" notice. Any of those confirms the
-   server is responding through the MCP transport. Do **not** use
-   `curl` to probe the process: there is no HTTP endpoint.
+   server is responding through the MCP transport. Do **not** use bare
+   `curl` to probe `/mcp`: it answers JSON-RPC POSTs, so a plain GET
+   returns nothing and reads as a dead server. Use
+   `lsof -iTCP:18743 -sTCP:LISTEN` to check the daemon instead.
 
 Repository: <https://github.com/marcelocantos/bullseye>
 

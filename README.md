@@ -24,7 +24,19 @@ Recommended (Homebrew, macOS / Linux):
 brew install marcelocantos/tap/bullseye
 ```
 
-Then register the stdio MCP server (pick the client you use):
+Then choose a transport.
+
+**HTTP (preferred).** One supervised daemon serves every agent on the
+machine, so startup cost is paid once rather than per session:
+
+```bash
+supervisor/install.sh          # renders supervisor.d/bullseye.ini and starts it
+claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
+# or
+grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
+```
+
+**stdio.** Spawned per session; no daemon to run:
 
 ```bash
 claude mcp add --scope user bullseye -- bullseye
@@ -32,9 +44,18 @@ claude mcp add --scope user bullseye -- bullseye
 grok mcp add --scope user bullseye -- bullseye
 ```
 
-Restart the agent session, then verify with `bullseye --version`
-and a `bullseye_open` call. There is no HTTP port and no
-`brew services` definition — do not probe with `curl`.
+Restart the agent session either way — registration only takes effect
+on the next session start — then verify with a `bullseye_open` call.
+
+For the HTTP transport, confirm the daemon is up with:
+
+```bash
+lsof -iTCP:18743 -sTCP:LISTEN
+```
+
+**Do not probe `/mcp` with bare `curl`.** MCP answers JSON-RPC POSTs,
+so a plain GET returns nothing, which reads as "server down" and sends
+agents into a diagnostic loop.
 
 Or from source:
 
@@ -55,11 +76,15 @@ following prompt into the agent:
 Install bullseye from https://github.com/marcelocantos/bullseye.
 Installation is not complete until every step succeeds:
 1. brew install marcelocantos/tap/bullseye
-2. Register the stdio MCP server (not HTTP, no port):
-   - Claude: claude mcp add --scope user bullseye -- bullseye
-   - Grok:   grok mcp add --scope user bullseye -- bullseye
-3. Restart this session (the MCP registration only takes effect on the next session start).
-4. Verify: bullseye --version, then call bullseye_open with cwd set to my current project.
+2. Start the HTTP MCP daemon: run supervisor/install.sh from a clone of the repo.
+   Confirm it is listening: lsof -iTCP:18743 -sTCP:LISTEN
+   Do NOT probe /mcp with curl — MCP answers JSON-RPC POSTs, so a GET looks dead.
+3. Register it:
+   - Claude: claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
+   - Grok:   grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
+   (stdio alternative, no daemon: claude mcp add --scope user bullseye -- bullseye)
+4. Restart this session (the MCP registration only takes effect on the next session start).
+5. Verify: bullseye --version, then call bullseye_open with cwd set to my current project.
 
 Then read https://raw.githubusercontent.com/marcelocantos/bullseye/master/docs/agents-guide.md
 for the full agent guide.

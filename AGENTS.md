@@ -78,6 +78,35 @@ surfaces — MCP tools and CLI — sharing one entry point. Core:
 
 Tests are split between unit tests in modules (`portfolio`, `import`) and integration tests in `tests/core_test.rs` using a fixture at `tests/fixtures/bullseye.yaml`. Tests cover schema parsing, frontier, validation, revert, startup context, portfolio discovery, and YAML roundtrip.
 
+## Transport
+
+Two transports, one handler and one `server_details` — the tool set is
+identical by construction, not by convention (🎯T78).
+
+| Transport | Start | Used by |
+|---|---|---|
+| HTTP (preferred) | `bullseye serve [--addr HOST:PORT]` — `/mcp`, default `127.0.0.1:18743`, env `BULLSEYE_ADDR` | supervisord; agents via an mcpbridge `url` entry |
+| stdio | bare `bullseye` | direct spawners; fallback |
+
+Loopback only, deliberately: the ledger is a local artifact and the
+server carries no authentication of its own.
+
+Install the daemon with `supervisor/install.sh`, which renders
+`supervisor/bullseye.ini` into `supervisor.d`, evicts any other owner of
+the port, and starts it. The program runs the **Homebrew** binary, so a
+tree build never squats the shared port — every agent on the machine
+talks to that one process, and unreleased tool schemas must not reach
+them. To run unreleased code, set `BULLSEYE_BIN` and a different
+`BULLSEYE_ADDR`.
+
+Verify with `lsof -iTCP:18743 -sTCP:LISTEN`. **Do not probe `/mcp` with
+bare `curl`** — MCP answers JSON-RPC POSTs, so a plain GET returns
+nothing and reads as "server down".
+
+A single daemon does **not** make bullseye a single writer: the CLI,
+other repos' agents, and hand edits still mutate the file concurrently,
+so the flock + CAS + `content_hash` machinery stays load-bearing.
+
 ## Delivery
 
 Committed to master. Work lands as ordinary commits on `master` — no

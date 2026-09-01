@@ -11,7 +11,9 @@ use bullseye::tools::{
     CommitTool, ConvergenceTool, ImportTool, MomentumEntry, OpenTool, PlanChecksTool,
     PortfolioTool, QueryTool, ResolveTool,
 };
-use rust_mcp_sdk::mcp_server::{McpServerOptions, server_runtime};
+use rust_mcp_sdk::mcp_server::{
+    HyperServerOptions, McpServerOptions, hyper_server, server_runtime,
+};
 use rust_mcp_sdk::schema::{
     CallToolResult, ContentBlock, Implementation, InitializeResult, ProtocolVersion,
     ServerCapabilities, ServerCapabilitiesTools,
@@ -22,6 +24,49 @@ use rust_mcp_sdk::{
 
 const AGENT_GUIDE: &str = include_str!("../docs/agents-guide.md");
 
+/// Loopback address the HTTP MCP daemon binds by default (🎯T78).
+/// Loopback only, deliberately: the ledger is a local artifact and the
+/// server has no authentication of its own.
+const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:18743";
+
+/// The MCP server identity and capability advertisement.
+///
+/// Shared by both transports (🎯T78): stdio and the HTTP daemon must
+/// present the identical tool set, so there is exactly one definition
+/// and no second registration list to drift.
+fn server_details() -> InitializeResult {
+    InitializeResult {
+        server_info: Implementation {
+            name: "bullseye".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            title: Some("Bullseye — Intent Ledger MCP Server".to_string()),
+            description: Some(
+                "Shared intent ledger: desired states, dependencies, and claim lifecycle. \
+                 Core tools: bullseye_open, bullseye_query, bullseye_commit, bullseye_plan_checks."
+                    .to_string(),
+            ),
+            icons: vec![],
+            website_url: None,
+        },
+        capabilities: ServerCapabilities {
+            tools: Some(ServerCapabilitiesTools { list_changed: None }),
+            ..Default::default()
+        },
+        meta: None,
+        instructions: Some(
+            "Bullseye is an intent ledger (git-for-intent), not a task assigner. \
+             Core tools: bullseye_open (discover/init/context), bullseye_query \
+             (views: context|frontier|target|list|summary|graph|validate), \
+             bullseye_commit (ops: track|block|split|achieve|defer|reopen), \
+             bullseye_plan_checks (plan only). User intent overrides the frontier. \
+             Commit at boundaries for lasting work; do not gate one-shot tasks on the graph. \
+             Legacy tools remain as shims; portfolio/github/convergence/import/resolve are extended (L2)."
+                .to_string(),
+        ),
+        protocol_version: ProtocolVersion::V2025_11_25.into(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> SdkResult<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -29,6 +74,37 @@ async fn main() -> SdkResult<()> {
     // subcommand, or alone when starting MCP: `bullseye --default-location external`.
     let (server_flags, rest) = split_server_flags(&args[1..]);
     apply_server_flags(&server_flags);
+
+    // `serve` starts the HTTP transport and never returns; it is handled
+    // before the subcommand table because it is async and the table's
+    // arms all exit the process (🎯T78).
+    if rest.first().is_some_and(|a| a == "serve") {
+        let serve_args = &rest[1..];
+        if has_flag(serve_args, "--help") {
+            println!(
+                "bullseye serve [--addr HOST:PORT]\n\
+                 \n\
+                 Start the HTTP MCP server. Endpoint: /mcp\n\
+                 Default address: {DEFAULT_SERVE_ADDR} (override with --addr or BULLSEYE_ADDR)\n\
+                 \n\
+                 Bare `bullseye` still speaks stdio, so both transports remain available\n\
+                 and serve the identical tool set.\n\
+                 \n\
+                 Verify with: lsof -iTCP:<port> -sTCP:LISTEN\n\
+                 Do NOT probe /mcp with bare curl — MCP answers JSON-RPC POSTs, so a\n\
+                 plain GET returns nothing and reads as \"server down\"."
+            );
+            process::exit(0);
+        }
+        if let Err(msg) = reject_unknown_flags(serve_args, SERVE_FLAGS, "serve") {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+        let addr = flag_value(serve_args, "--addr")
+            .or_else(|| std::env::var("BULLSEYE_ADDR").ok())
+            .unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_string());
+        return serve_http(&addr).await;
+    }
 
     if !rest.is_empty() {
         match rest[0].as_str() {
@@ -126,37 +202,7 @@ async fn main() -> SdkResult<()> {
         }
     }
 
-    let server_details = InitializeResult {
-        server_info: Implementation {
-            name: "bullseye".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            title: Some("Bullseye — Intent Ledger MCP Server".to_string()),
-            description: Some(
-                "Shared intent ledger: desired states, dependencies, and claim lifecycle. \
-                 Core tools: bullseye_open, bullseye_query, bullseye_commit, bullseye_plan_checks."
-                    .to_string(),
-            ),
-            icons: vec![],
-            website_url: None,
-        },
-        capabilities: ServerCapabilities {
-            tools: Some(ServerCapabilitiesTools { list_changed: None }),
-            ..Default::default()
-        },
-        meta: None,
-        instructions: Some(
-            "Bullseye is an intent ledger (git-for-intent), not a task assigner. \
-             Core tools: bullseye_open (discover/init/context), bullseye_query \
-             (views: context|frontier|target|list|summary|graph|validate), \
-             bullseye_commit (ops: track|block|split|achieve|defer|reopen), \
-             bullseye_plan_checks (plan only). User intent overrides the frontier. \
-             Commit at boundaries for lasting work; do not gate one-shot tasks on the graph. \
-             Legacy tools remain as shims; portfolio/github/convergence/import/resolve are extended (L2)."
-                .to_string(),
-        ),
-        protocol_version: ProtocolVersion::V2025_11_25.into(),
-    };
-
+    let server_details = server_details();
     // Event-path background consumer (🎯T35): when BULLSEYE_ISSUEPIPE_* env
     // is set, poll the Master so issues become targets without CLI action.
     #[cfg(feature = "github-issues")]
@@ -225,6 +271,9 @@ fn print_help() {
     println!("USAGE:");
     println!("    bullseye [--default-location in_repo|external]");
     println!("                               Start the MCP server (stdio transport)");
+    println!("    bullseye serve [--addr HOST:PORT]");
+    println!("                               Start the HTTP MCP server (default 127.0.0.1:18743,");
+    println!("                               endpoint /mcp; env BULLSEYE_ADDR)");
     println!("    bullseye open [--cwd DIR] [--location in_repo|external]");
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
     println!("    bullseye apply [--cwd DIR] (-f FILE | - | --id ID --set k=v ...)");
@@ -850,4 +899,47 @@ fn cli_apply(args: &[String]) -> Result<String, String> {
     }
 
     tool_result_text(bullseye::handler::apply_request(&default_cwd(args), req))
+}
+
+/// Flags `bullseye serve` accepts.
+const SERVE_FLAGS: &[(&str, bool)] = &[("--addr", true), ("--help", false)];
+
+/// Run the HTTP MCP server until terminated (🎯T78).
+///
+/// Same handler and same `server_details` as the stdio path — only the
+/// transport differs, which is what keeps the two surfaces honest.
+async fn serve_http(addr: &str) -> SdkResult<()> {
+    let (host, port) = match addr.rsplit_once(':') {
+        Some((h, p)) => match p.parse::<u16>() {
+            Ok(port) => (h.to_string(), port),
+            Err(_) => {
+                eprintln!("serve: --addr expects HOST:PORT, got `{addr}` (port not a number)");
+                process::exit(1);
+            }
+        },
+        None => {
+            eprintln!("serve: --addr expects HOST:PORT, got `{addr}`");
+            process::exit(1);
+        }
+    };
+
+    // 🎯T35 event-path consumer, same as the stdio path.
+    #[cfg(feature = "github-issues")]
+    bullseye::github_issues::http::maybe_spawn_background_from_env();
+
+    eprintln!(
+        "bullseye {} serving MCP on http://{host}:{port}/mcp",
+        bullseye::version::VERSION
+    );
+
+    let server = hyper_server::create_server(
+        server_details(),
+        TargetHandler.to_mcp_server_handler(),
+        HyperServerOptions {
+            host,
+            port,
+            ..Default::default()
+        },
+    );
+    server.start().await
 }
