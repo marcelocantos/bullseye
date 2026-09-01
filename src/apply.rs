@@ -581,8 +581,26 @@ pub fn apply(
         // Structural refusal precedes evidence: telling a caller to
         // write an attestation for a transition that is forbidden
         // regardless would be the wrong correction.
-        if to == Status::Achieved && from.is_some() && from != Some(Status::Achieved) {
-            ops::refuse_active_family(file, &id)
+        if to == Status::Achieved && from != Some(Status::Achieved) {
+            // The effective edge set: a fragment may rewrite depends_on
+            // in the same call, so check what the target will have
+            // rather than what it had.
+            // Dotted children are wired into the parent's depends_on
+            // (🎯T39.1), so they would also trip the dependency check
+            // below. Ask the family question first: for an umbrella the
+            // family message names the relationship, which is the more
+            // useful correction.
+            if from.is_some() {
+                ops::refuse_active_family(file, &id)
+                    .map_err(|e| ApplyError::new(ErrorCode::Validation, e))?;
+            }
+            let effective_deps: Vec<String> = frag.depends_on.clone().unwrap_or_else(|| {
+                file.targets
+                    .get(&id)
+                    .map(|t| t.depends_on.clone())
+                    .unwrap_or_default()
+            });
+            ops::refuse_open_dependencies(file, &id, &effective_deps)
                 .map_err(|e| ApplyError::new(ErrorCode::Validation, e))?;
         }
         check_obligations(&id, from, to, frag)?;
@@ -1328,6 +1346,156 @@ targets:
             file.targets["T2"].context
         );
         assert!(file.targets["T2"].context.contains("Reverted"));
+    }
+
+    // --- depends_on gates achievement (🎯T79) ------------------------
+
+    fn chain() -> TargetsFile {
+        // T8 -> T7 -> T6, the shape reported from xbnf.
+        file_with(
+            r#"
+schema_version: 5
+targets:
+  T6:
+    name: base
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance: [a]
+    discovered: 2026-01-01
+  T7:
+    name: middle
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance: [a]
+    depends_on: [T6]
+    discovered: 2026-01-01
+  T8:
+    name: top
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance: [a]
+    depends_on: [T7]
+    discovered: 2026-01-01
+"#,
+        )
+    }
+
+    fn achieve(id: &str) -> ApplyRequest {
+        one(
+            id,
+            Fragment {
+                status: Some("achieved".into()),
+                attestation: Some("the work is genuinely done".into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn achieving_a_target_with_open_dependencies_is_refused() {
+        let mut file = chain();
+        let err = apply(&mut file, &achieve("T8"), &no_history()).expect_err("must refuse");
+        assert_eq!(err.code, ErrorCode::Validation);
+        assert!(
+            err.message.contains("T7"),
+            "must name the blocker: {}",
+            err.message
+        );
+        assert_eq!(
+            file.targets["T8"].status,
+            Status::Identified,
+            "refusal must not mutate"
+        );
+    }
+
+    #[test]
+    fn the_chain_unblocks_in_dependency_order() {
+        let mut file = chain();
+        apply(&mut file, &achieve("T6"), &no_history()).expect("base has no blockers");
+        apply(&mut file, &achieve("T7"), &no_history()).expect("T6 is achieved");
+        apply(&mut file, &achieve("T8"), &no_history()).expect("T7 is achieved");
+        assert_eq!(file.targets["T8"].status, Status::Achieved);
+    }
+
+    #[test]
+    fn a_set_aside_dependency_unblocks_just_like_an_achieved_one() {
+        // set_aside is terminal: the owner decided not to pursue it, so
+        // it no longer gates dependents. The test is terminality, not
+        // achievement.
+        let mut file = chain();
+        apply(
+            &mut file,
+            &one(
+                "T7",
+                Fragment {
+                    status: Some("set_aside".into()),
+                    reason: Some("superseded by another approach".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("set aside");
+        apply(&mut file, &achieve("T8"), &no_history()).expect("a set-aside blocker unblocks");
+    }
+
+    #[test]
+    fn a_dangling_dependency_does_not_block_achievement() {
+        // A depends_on edge pointing at a target that does not exist is
+        // a validation error in its own right; failing the achieve for
+        // it would report the wrong problem.
+        let mut file = chain();
+        file.targets.get_mut("T8").unwrap().depends_on = vec!["T999".to_string()];
+        apply(&mut file, &achieve("T8"), &no_history()).expect("dangling edge must not block");
+    }
+
+    #[test]
+    fn creating_a_target_directly_as_achieved_still_honours_its_dependencies() {
+        let mut file = chain();
+        let err = apply(
+            &mut file,
+            &one(
+                "T9",
+                Fragment {
+                    name: Some("born achieved".into()),
+                    acceptance: Some(vec!["a".into()]),
+                    depends_on: Some(vec!["T7".into()]),
+                    status: Some("achieved".into()),
+                    attestation: Some("done before it began".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert!(err.message.contains("T7"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_fragment_that_drops_the_edge_in_the_same_call_may_achieve() {
+        // The check runs against the edge set the target will have, not
+        // the one it had — dropping an edge that no longer holds is a
+        // legitimate way to unblock.
+        let mut file = chain();
+        apply(
+            &mut file,
+            &one(
+                "T8",
+                Fragment {
+                    status: Some("achieved".into()),
+                    attestation: Some("T7 turned out not to gate this".into()),
+                    depends_on: Some(vec![]),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("dropping the edge in the same call unblocks");
+        assert_eq!(file.targets["T8"].status, Status::Achieved);
+        assert!(file.targets["T8"].depends_on.is_empty());
     }
 
     // --- Achieved immutability --------------------------------------

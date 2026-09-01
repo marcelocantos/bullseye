@@ -198,6 +198,9 @@ pub enum SubdivideError {
     /// assigned IDs. The tail must be a subset of the children being
     /// created — there is no fall-through to existing targets.
     TailNotInChildren(String),
+    /// `retire` mode would have achieved a parent whose declared
+    /// blockers are still open (🎯T79).
+    OpenDependencies(String),
     /// The write engine refused the child creation (🎯T76). Subdivide
     /// delegates creation to `apply`, so the engine's validation —
     /// historical-ID reservation, dotted-family attachment, string
@@ -213,6 +216,7 @@ pub enum SubdivideError {
 impl std::fmt::Display for SubdivideError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            SubdivideError::OpenDependencies(msg) => write!(f, "{msg}"),
             SubdivideError::Apply(msg) => write!(f, "{msg}"),
             SubdivideError::ParentNotFound(id) => write!(f, "parent target {id} not found"),
             SubdivideError::ParentTerminal { id, status } => write!(
@@ -382,6 +386,48 @@ pub fn refuse_active_family(file: &TargetsFile, id: &str) -> Result<(), String> 
     ))
 }
 
+/// Refuse achieving a target whose declared blockers are still open.
+///
+/// `depends_on` is the single structural edge type: "targets that must
+/// be achieved before work on this one begins". Nothing enforced that
+/// on the achieve path, so a target could be recorded as achieved with
+/// its blockers still `identified` — leaving a ledger that contradicts
+/// itself, and an attestation asserting work that by the graph's own
+/// account could not have started.
+///
+/// `set_aside` unblocks exactly as `achieved` does (a target the owner
+/// decided not to pursue no longer gates its dependents), so the test
+/// is terminality, not achievement.
+///
+/// Unknown IDs are not treated as blockers: a dangling `depends_on`
+/// edge is a validation error reported in its own right, and failing
+/// the achieve for it would report the wrong problem.
+pub fn refuse_open_dependencies(
+    file: &TargetsFile,
+    id: &str,
+    depends_on: &[String],
+) -> Result<(), String> {
+    let open: Vec<String> = depends_on
+        .iter()
+        .filter(|dep| {
+            file.targets
+                .get(*dep)
+                .is_some_and(|t| !t.status.is_terminal())
+        })
+        .cloned()
+        .collect();
+    if open.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "cannot achieve 🎯{id} while it depends on open target(s): {}. \
+         Achieve or set_aside them first, or drop the edge if it no longer \
+         holds — `depends_on` means they must be achieved before work on \
+         🎯{id} begins, so achieving it now would contradict the graph.",
+        open.join(", ")
+    ))
+}
+
 /// Auto-assign the next sub-target ID under `parent` (e.g. parent
 /// `T15` → `T15.1`, `T15.2`, …). Only direct numeric children count;
 /// deeper paths like `T15.1.3` are ignored when picking the next slot.
@@ -536,6 +582,27 @@ pub fn subdivide(
         }
         _ => None,
     };
+
+    // `retire` mode ends with `parent.status = Achieved`, so it must
+    // answer the same question the achieve path does: a target cannot
+    // be recorded as achieved while its declared blockers are open.
+    // Checked here, with the other eager validation, so a refusal never
+    // leaves a partial mutation behind. The parent's own children are
+    // exempt — they do not exist yet, and wiring them in is what this
+    // operation is for.
+    if mode == SubdivideMode::Retire {
+        let parent_deps = file
+            .targets
+            .get(parent_id)
+            .map(|t| t.depends_on.clone())
+            .unwrap_or_default();
+        let unrelated: Vec<String> = parent_deps
+            .into_iter()
+            .filter(|d| !assigned_ids.contains(d))
+            .collect();
+        refuse_open_dependencies(file, parent_id, &unrelated)
+            .map_err(SubdivideError::OpenDependencies)?;
+    }
 
     // Snapshot the parent's name and original status before we touch
     // anything. Parent retirement (Retire mode) and umbrella promotion

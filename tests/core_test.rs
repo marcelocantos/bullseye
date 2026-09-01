@@ -7728,3 +7728,49 @@ fn t64_one_invalid_target_does_not_brick_other_reads() {
 
     config::set_external_root_override(None);
 }
+
+/// An achieved target whose blockers are still open is a ledger that
+/// contradicts itself. Nothing enforced this on the write path until
+/// 🎯T79, so ledgers already carry violations; validate must surface
+/// them rather than leave them silent. Found in the wild in xbnf, where
+/// T8 was achieved with T7 (and transitively T6) still identified.
+#[test]
+fn validate_reports_an_achieved_target_with_open_dependencies() {
+    let file: bullseye::schema::TargetsFile = serde_yaml_ng::from_str(
+        "schema_version: 5\ntargets:\n\
+         \x20 T6:\n    name: base\n    status: identified\n    value: 0.0\n    cost: 0.0\n\
+         \x20   acceptance: [a]\n    discovered: 2026-01-01\n\
+         \x20 T7:\n    name: top\n    status: achieved\n    value: 0.0\n    cost: 0.0\n\
+         \x20   acceptance: [a]\n    attestation: done\n    depends_on: [T6]\n\
+         \x20   discovered: 2026-01-01\n    achieved: 2026-01-02\n",
+    )
+    .expect("fixture parses");
+
+    let errors = bullseye::graph::validate(&file);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("T7") && e.contains("open target(s): T6")),
+        "validate must report the contradiction, got: {errors:?}"
+    );
+}
+
+/// The converse: a coherent chain must not be flagged.
+#[test]
+fn validate_accepts_an_achieved_target_whose_dependencies_are_terminal() {
+    let file: bullseye::schema::TargetsFile = serde_yaml_ng::from_str(
+        "schema_version: 5\ntargets:\n\
+         \x20 T6:\n    name: base\n    status: achieved\n    value: 0.0\n    cost: 0.0\n\
+         \x20   acceptance: [a]\n    attestation: done\n    discovered: 2026-01-01\n\
+         \x20   achieved: 2026-01-01\n\
+         \x20 T7:\n    name: top\n    status: achieved\n    value: 0.0\n    cost: 0.0\n\
+         \x20   acceptance: [a]\n    attestation: done\n    depends_on: [T6]\n\
+         \x20   discovered: 2026-01-01\n    achieved: 2026-01-02\n",
+    )
+    .expect("fixture parses");
+    let errors = bullseye::graph::validate(&file);
+    assert!(
+        !errors.iter().any(|e| e.contains("open target")),
+        "a terminal dependency must not be reported: {errors:?}"
+    );
+}

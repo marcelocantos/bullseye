@@ -829,6 +829,32 @@ pub fn validate_issues(file: &TargetsFile) -> Vec<ValidationIssue> {
             );
         }
 
+        // An achieved target whose declared blockers are still open is
+        // a ledger that contradicts itself: `depends_on` asserts they
+        // must be achieved before work here begins, so the attestation
+        // claims work the graph says could not have started. Nothing
+        // enforced this on the write path until 🎯T79, so existing
+        // ledgers carry violations that are otherwise invisible —
+        // reported here so they can be found rather than waited for.
+        if t.status == Status::Achieved {
+            let open: Vec<&str> = t
+                .depends_on
+                .iter()
+                .filter(|d| {
+                    file.targets
+                        .get(*d)
+                        .is_some_and(|dep| !dep.status.is_terminal())
+                })
+                .map(String::as_str)
+                .collect();
+            if !open.is_empty() {
+                push(format!(
+                    "achieved while depending on open target(s): {}",
+                    open.join(", ")
+                ));
+            }
+        }
+
         // Value/cost: 0.0 means "not set at repo scope" (portfolio-scope
         // metadata is optional). Only reject explicitly negative values,
         // which are always a mistake, and non-zero sub-1 values that
