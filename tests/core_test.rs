@@ -6277,15 +6277,25 @@ fn id_alloc_subdivide_skips_branched_subtarget_ids() {
 }
 
 #[test]
-fn id_alloc_memoised_within_session() {
+fn id_alloc_memoises_until_refs_move() {
     let _guard = t28_lock();
     use bullseye::id_alloc;
     let tmp = t28_repo_with_branched_id();
     let yaml = tmp.path().join("bullseye.yaml");
 
-    // First call seeds the cache; second call must return the same
-    // set even if the repo's history changes underneath us between
-    // calls (the cache is process-scoped and intentionally stale).
+    // First call seeds the cache. A second call after the repo's refs
+    // move must RESCAN (🎯T78.1).
+    //
+    // This assertion is inverted from what it was. The old contract —
+    // "process-scoped and intentionally stale" — was coherent while
+    // bullseye was a stdio server: the process was one agent session,
+    // so the snapshot could not outlive the scope it was taken for.
+    // Serving MCP from a supervised daemon breaks that assumption, and
+    // the stale snapshot became a silent ID-collision bug: a fresh
+    // process refused an ID reserved in git history while a long-lived
+    // one created it. Validity is now keyed on a ref fingerprint, so
+    // memoisation survives (see the unchanged-repo case below) while
+    // staleness does not.
     let first = id_alloc::historical_ids(&yaml);
     // Add a new commit that introduces T99 *after* the first scan.
     {
@@ -6324,16 +6334,21 @@ fn id_alloc_memoised_within_session() {
     t28_git(tmp.path(), &["commit", "-q", "-m", "add T99"]);
 
     let second = id_alloc::historical_ids(&yaml);
-    assert_eq!(
-        first, second,
-        "memoised result must not change within session"
+    assert!(
+        second.contains("T99"),
+        "T99 entered history after the first scan; a moved ref must invalidate the cache"
     );
     assert!(
-        !second.contains("T99"),
-        "T99 was added after the first scan; cache must serve the stale snapshot"
+        first.is_subset(&second),
+        "a rescan must not lose IDs the first scan found: {first:?} vs {second:?}"
     );
 
-    // Clearing the cache picks up the new state.
+    // Memoisation still holds when nothing moved: same refs, same set,
+    // so the fix did not turn every call into a full history rescan.
+    let repeat = id_alloc::historical_ids(&yaml);
+    assert_eq!(second, repeat, "an unchanged repo must still be memoised");
+
+    // Clearing the cache is still supported for tests.
     bullseye::id_alloc::clear_cache_for_tests();
     let third = id_alloc::historical_ids(&yaml);
     assert!(

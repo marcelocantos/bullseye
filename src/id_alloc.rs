@@ -38,13 +38,27 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use regex::Regex;
+use sha2::{Digest, Sha256};
 
 use crate::bounded::{GIT_QUERY_TIMEOUT, git_query};
 
 /// Process-global cache. Keyed by canonical repo-top path; value is
-/// the set of every target ID ever added to that repo's
-/// `bullseye.yaml`. Filled lazily on first call per repo.
-static CACHE: Mutex<Option<HashMap<PathBuf, HashSet<String>>>> = Mutex::new(None);
+/// the repo's ref fingerprint at scan time plus the set of every
+/// target ID ever added to that repo's `bullseye.yaml`.
+///
+/// The fingerprint is what makes this safe in a long-lived process
+/// (🎯T78.1). Until bullseye served HTTP, "process lifetime" was one
+/// agent session, so a snapshot of git history taken at first touch
+/// was a coherent contract. A supervised daemon outlives the thing the
+/// snapshot was scoped to: it would keep answering from history it read
+/// weeks ago, so an ID reserved on a branch fetched since would be
+/// handed out again — silently, with an ok envelope. Validating
+/// against the current refs costs one `git rev-parse --all` per
+/// mutation instead of a full `git log -p --all`.
+/// Ref fingerprint at scan time, paired with the IDs that scan found.
+type CachedScan = (String, HashSet<String>);
+
+static CACHE: Mutex<Option<HashMap<PathBuf, CachedScan>>> = Mutex::new(None);
 
 static ID_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -80,7 +94,12 @@ pub fn historical_ids(yaml_path: &Path) -> HashSet<String> {
         return HashSet::new();
     };
 
-    if let Some(cached) = cache_get(&repo_top) {
+    // A repo whose refs cannot be read is rescanned every time rather
+    // than served from a snapshot of unknown age.
+    let fingerprint = ref_fingerprint(&repo_top);
+    if let Some(fp) = fingerprint.as_deref()
+        && let Some(cached) = cache_get(&repo_top, fp)
+    {
         return cached;
     }
 
@@ -109,20 +128,41 @@ pub fn historical_ids(yaml_path: &Path) -> HashSet<String> {
         ids.insert(cap[1].to_string());
     }
 
-    cache_put(repo_top, ids.clone());
+    // Only cache when the fingerprint is known; otherwise the entry
+    // could never be invalidated correctly.
+    if let Some(fp) = fingerprint {
+        cache_put(repo_top, fp, ids.clone());
+    }
     ids
 }
 
-fn cache_get(repo_top: &Path) -> Option<HashSet<String>> {
-    let guard = CACHE.lock().expect("id_alloc cache poisoned");
-    let cache = guard.as_ref()?;
-    cache.get(repo_top).cloned()
+/// Cheap fingerprint of every ref in the repo.
+///
+/// Any commit, fetch, branch switch or merge that could introduce a
+/// target ID moves at least one ref, so a stable fingerprint means the
+/// history scan is still valid. Returns `None` when git cannot answer,
+/// which callers treat as "do not trust the cache" rather than as "no
+/// change".
+fn ref_fingerprint(repo_top: &Path) -> Option<String> {
+    let refs = git_query(repo_top, &["rev-parse", "--all"], GIT_QUERY_TIMEOUT)?;
+    let mut hasher = Sha256::new();
+    hasher.update(refs.as_bytes());
+    Some(format!("{:x}", hasher.finalize()))
 }
 
-fn cache_put(repo_top: PathBuf, ids: HashSet<String>) {
+/// Cached ID set for `repo_top`, but only if the repo's refs have not
+/// moved since the scan.
+fn cache_get(repo_top: &Path, fingerprint: &str) -> Option<HashSet<String>> {
+    let guard = CACHE.lock().expect("id_alloc cache poisoned");
+    let cache = guard.as_ref()?;
+    let (cached_fingerprint, ids) = cache.get(repo_top)?;
+    (cached_fingerprint == fingerprint).then(|| ids.clone())
+}
+
+fn cache_put(repo_top: PathBuf, fingerprint: String, ids: HashSet<String>) {
     let mut guard = CACHE.lock().expect("id_alloc cache poisoned");
     let cache = guard.get_or_insert_with(HashMap::new);
-    cache.insert(repo_top, ids);
+    cache.insert(repo_top, (fingerprint, ids));
 }
 
 fn relative_pathspec(yaml_path: &Path, repo_top: &Path) -> Option<String> {
