@@ -3,10 +3,11 @@
 
 //! HTTP transport oracle (🎯T78).
 //!
-//! `bullseye serve` and bare stdio share one handler and one
-//! `server_details`, so the tool sets are identical *by construction*.
-//! This test refuses to take that on trust: it boots the shipped binary
-//! over HTTP and reads back what the server actually advertises.
+//! HTTP is the only MCP transport (🎯T81), so this test carries the
+//! whole server surface: if a tool is registered but not advertised
+//! here, it is not reachable by any agent at all. It refuses to take
+//! that on trust and boots the shipped binary to read back what the
+//! server actually advertises.
 //!
 //! Uses `curl` rather than an HTTP crate on purpose — enabling
 //! `hyper-server` already cost 76 crates (docs/build-perf-2026-04-11.md),
@@ -118,7 +119,7 @@ fn initialize(port: u16) -> (String, String) {
 }
 
 #[test]
-fn http_transport_serves_mcp_and_advertises_the_same_tools_as_stdio() {
+fn http_transport_serves_mcp_and_advertises_every_registered_tool() {
     let port = TEST_PORT;
     let _server = start(port);
 
@@ -132,9 +133,9 @@ fn http_transport_serves_mcp_and_advertises_the_same_tools_as_stdio() {
         "initialize should negotiate a protocol version, got:\n{init}"
     );
 
-    // Every tool the binary registers must be reachable over HTTP. This
-    // is the property that would silently rot if the transports ever
-    // grew separate registration lists.
+    // Every tool the binary registers must be reachable over HTTP.
+    // With stdio gone there is no second path that could compensate for
+    // a gap here.
     let (listed, _) = post_with_session(
         port,
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
@@ -173,5 +174,31 @@ fn serve_rejects_an_unrecognised_flag() {
         String::from_utf8_lossy(&out.stderr).contains("unrecognised flag"),
         "got: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A bare invocation is the shape a stale stdio registration uses. It
+/// must fail, and it must fail *silently on stdout* (🎯T81): an MCP
+/// client spawning this expects a handshake there, so usage text would
+/// be read as protocol noise and hang the client waiting — a far worse
+/// failure than a process that exits explaining what to do.
+#[test]
+fn a_bare_invocation_fails_loudly_on_stderr_and_writes_nothing_to_stdout() {
+    let out = Command::new(BIN).output().expect("runs");
+    assert!(!out.status.success(), "bare invocation must not succeed");
+    assert!(
+        out.stdout.is_empty(),
+        "stdout must stay empty so an MCP client sees no protocol noise, got: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no longer speaks stdio"), "got: {err}");
+    assert!(
+        err.contains("bullseye serve"),
+        "must name the replacement: {err}"
+    );
+    assert!(
+        err.contains("/mcp"),
+        "must name the endpoint to register: {err}"
     );
 }

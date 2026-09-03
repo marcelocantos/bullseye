@@ -34,19 +34,14 @@ but no MCP client can talk to it.
    ```
    **Do not probe `/mcp` with bare `curl`.** MCP answers JSON-RPC
    POSTs, so a plain GET returns nothing and looks like a dead server.
-   Skip this step only if you are using the stdio transport, which is
-   spawned per session and needs no daemon.
+   This step is not optional: HTTP is the only transport.
 3. **Register the MCP server with your agent.** For Claude Code:
    ```bash
    claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
-   # stdio alternative (no daemon):
-   claude mcp add --scope user bullseye -- bullseye
    ```
    For Grok:
    ```bash
    grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
-   # stdio alternative (no daemon):
-   grok mcp add --scope user bullseye -- bullseye
    ```
    For other MCP clients, add this block to the client's config
    (usually `.mcp.json` at project scope or the equivalent user-scope
@@ -61,17 +56,10 @@ but no MCP client can talk to it.
      }
    }
    ```
-   stdio alternative:
-   ```json
-   {
-     "mcpServers": {
-       "bullseye": {
-         "command": "bullseye",
-         "args": []
-       }
-     }
-   }
-   ```
+   Register the **url**, never the binary as a `command`. Spawning
+   `bullseye` no longer starts a server — it exits with instructions,
+   because usage text on stdout would be read as protocol noise and
+   hang the client.
 4. **Restart the agent session.** MCP server registration only takes
    effect on the next session start. Tools added in this step are not
    visible to the running session.

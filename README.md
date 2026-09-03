@@ -24,10 +24,9 @@ Recommended (Homebrew, macOS / Linux):
 brew install marcelocantos/tap/bullseye
 ```
 
-Then choose a transport.
-
-**HTTP (preferred).** One supervised daemon serves every agent on the
-machine, so startup cost is paid once rather than per session:
+Then start the daemon. MCP is served over HTTP only — one supervised
+process for every agent on the machine, so startup cost is paid once
+rather than per session.
 
 ```bash
 supervisor/install.sh          # renders supervisor.d/bullseye.ini and starts it
@@ -36,18 +35,15 @@ claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
 grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
 ```
 
-**stdio.** Spawned per session; no daemon to run:
+Restart the agent session — registration only takes effect on the next
+session start — then verify with a `bullseye_open` call.
 
-```bash
-claude mcp add --scope user bullseye -- bullseye
-# or
-grok mcp add --scope user bullseye -- bullseye
-```
+Register the **URL**, not the binary. Spawning `bullseye` as a command
+no longer starts a server: it exits with instructions, because a stale
+stdio registration that printed usage on stdout would be read as
+protocol noise and hang the client.
 
-Restart the agent session either way — registration only takes effect
-on the next session start — then verify with a `bullseye_open` call.
-
-For the HTTP transport, confirm the daemon is up with:
+Confirm the daemon is up with:
 
 ```bash
 lsof -iTCP:18743 -sTCP:LISTEN
@@ -82,7 +78,6 @@ Installation is not complete until every step succeeds:
 3. Register it:
    - Claude: claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
    - Grok:   grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
-   (stdio alternative, no daemon: claude mcp add --scope user bullseye -- bullseye)
 4. Restart this session (the MCP registration only takes effect on the next session start).
 5. Verify: bullseye --version, then call bullseye_open with cwd set to my current project.
 
@@ -112,7 +107,7 @@ claude mcp add --scope user bullseye -- bullseye
 grok mcp add --scope user bullseye -- bullseye
 ```
 
-The server communicates over stdio using the MCP protocol.
+The server speaks MCP over HTTP at `/mcp`. There is no stdio transport.
 
 ## Storage locations
 

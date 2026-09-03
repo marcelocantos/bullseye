@@ -11,16 +11,12 @@ use bullseye::tools::{
     CommitTool, ConvergenceTool, ImportTool, MomentumEntry, OpenTool, PlanChecksTool,
     PortfolioTool, QueryTool, ResolveTool,
 };
-use rust_mcp_sdk::mcp_server::{
-    HyperServerOptions, McpServerOptions, hyper_server, server_runtime,
-};
+use rust_mcp_sdk::mcp_server::{HyperServerOptions, hyper_server};
 use rust_mcp_sdk::schema::{
     CallToolResult, ContentBlock, Implementation, InitializeResult, ProtocolVersion,
     ServerCapabilities, ServerCapabilitiesTools,
 };
-use rust_mcp_sdk::{
-    McpServer, StdioTransport, ToMcpServerHandler, TransportOptions, error::SdkResult,
-};
+use rust_mcp_sdk::{ToMcpServerHandler, error::SdkResult};
 
 const AGENT_GUIDE: &str = include_str!("../docs/agents-guide.md");
 
@@ -87,8 +83,8 @@ async fn main() -> SdkResult<()> {
                  Start the HTTP MCP server. Endpoint: /mcp\n\
                  Default address: {DEFAULT_SERVE_ADDR} (override with --addr or BULLSEYE_ADDR)\n\
                  \n\
-                 Bare `bullseye` still speaks stdio, so both transports remain available\n\
-                 and serve the identical tool set.\n\
+                 This is the only MCP transport; a bare `bullseye` invocation is a\n\
+                 stale stdio registration and exits with instructions.\n\
                  \n\
                  Verify with: lsof -iTCP:<port> -sTCP:LISTEN\n\
                  Do NOT probe /mcp with bare curl — MCP answers JSON-RPC POSTs, so a\n\
@@ -202,24 +198,30 @@ async fn main() -> SdkResult<()> {
         }
     }
 
-    let server_details = server_details();
-    // Event-path background consumer (🎯T35): when BULLSEYE_ISSUEPIPE_* env
-    // is set, poll the Master so issues become targets without CLI action.
-    #[cfg(feature = "github-issues")]
-    bullseye::github_issues::http::maybe_spawn_background_from_env();
-
-    let transport = StdioTransport::new(TransportOptions::default())?;
-    let handler = TargetHandler.to_mcp_server_handler();
-    let server = server_runtime::create_server(McpServerOptions {
-        transport,
-        handler,
-        server_details,
-        task_store: None,
-        client_task_store: None,
-        message_observer: None,
-    });
-
-    server.start().await
+    // Bare invocation used to start an stdio MCP server (🎯T81). HTTP is
+    // now the only transport, so this shape is almost always a stale
+    // stdio registration pointing at the binary.
+    //
+    // Fail here rather than printing usage. A registration that spawns
+    // this expects an MCP handshake on stdout; usage text would be read
+    // as protocol noise and the client would hang waiting — far harder
+    // to diagnose than a process that exits saying what to do instead.
+    eprintln!(
+        "bullseye no longer speaks stdio — HTTP is the only MCP transport.\n\
+         \n\
+         Start the server:   bullseye serve   (listens on {DEFAULT_SERVE_ADDR}, endpoint /mcp)\n\
+         Under supervisord:  supervisor/install.sh   (from a clone of the repo)\n\
+         \n\
+         Then register the URL rather than this binary:\n\
+         \x20 claude mcp add --scope user --transport http bullseye http://{DEFAULT_SERVE_ADDR}/mcp\n\
+         \x20 grok   mcp add --transport http bullseye http://{DEFAULT_SERVE_ADDR}/mcp\n\
+         \n\
+         If you reached this from an MCP client, its config still names the\n\
+         binary as a command; change it to a url entry and restart the session.\n\
+         \n\
+         `bullseye --help` lists the CLI subcommands."
+    );
+    process::exit(2);
 }
 
 /// Peel global server flags from argv. Recognises
@@ -269,8 +271,6 @@ fn print_help() {
     );
     println!();
     println!("USAGE:");
-    println!("    bullseye [--default-location in_repo|external]");
-    println!("                               Start the MCP server (stdio transport)");
     println!("    bullseye serve [--addr HOST:PORT]");
     println!("                               Start the HTTP MCP server (default 127.0.0.1:18743,");
     println!("                               endpoint /mcp; env BULLSEYE_ADDR)");
@@ -923,7 +923,7 @@ async fn serve_http(addr: &str) -> SdkResult<()> {
         }
     };
 
-    // 🎯T35 event-path consumer, same as the stdio path.
+    // 🎯T35 event-path consumer.
     #[cfg(feature = "github-issues")]
     bullseye::github_issues::http::maybe_spawn_background_from_env();
 

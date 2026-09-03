@@ -80,13 +80,14 @@ Tests are split between unit tests in modules (`portfolio`, `import`) and integr
 
 ## Transport
 
-Two transports, one handler and one `server_details` — the tool set is
-identical by construction, not by convention (🎯T78).
+HTTP is the only MCP transport (🎯T81): `bullseye serve [--addr HOST:PORT]`
+serves `/mcp`, default `127.0.0.1:18743`, env `BULLSEYE_ADDR`. Agents reach
+it through an mcpbridge `url` entry; supervisord owns the process.
 
-| Transport | Start | Used by |
-|---|---|---|
-| HTTP (preferred) | `bullseye serve [--addr HOST:PORT]` — `/mcp`, default `127.0.0.1:18743`, env `BULLSEYE_ADDR` | supervisord; agents via an mcpbridge `url` entry |
-| stdio | bare `bullseye` | direct spawners; fallback |
+A bare `bullseye` invocation is a stale stdio registration and exits
+non-zero with migration instructions, writing nothing to stdout — usage
+text there would be read as protocol noise and hang the client rather
+than fail it.
 
 Loopback only, deliberately: the ledger is a local artifact and the
 server carries no authentication of its own.
@@ -115,8 +116,7 @@ MCP2 is stateless, so there will be no session whose end could carry an
 invalidation.
 
 `--default-location` is process-wide, so under the daemon it is a
-machine-wide default rather than the per-invocation choice it was
-under stdio.
+machine-wide default rather than a per-invocation choice.
 
 A single daemon does **not** make bullseye a single writer: the CLI,
 other repos' agents, and hand edits still mutate the file concurrently,
