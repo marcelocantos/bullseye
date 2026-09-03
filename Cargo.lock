@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "bullseye"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "async-trait",
  "chrono",
