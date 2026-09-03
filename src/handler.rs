@@ -109,6 +109,12 @@ fn coded_err(code: api::ErrorCode, msg: impl Into<String>) -> ToolResult {
     )))
 }
 
+/// [`store::MutationError`] to a coded [`CallToolError`] via its own
+/// [`store::MutationError::code`] — never `classify_message` (🎯T74.14).
+fn mutation_tool_err(e: store::MutationError) -> CallToolError {
+    CallToolError::from_message(api::format_error(e.code(), e.to_string()))
+}
+
 /// Mutation success envelope: structured header + human body + frontier.
 fn mutation_text(
     path: &Path,
@@ -943,19 +949,19 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
         Retired { name: String, cost: f64 },
     }
 
-    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
-        let existing = file
-            .targets
-            .get(&t.id)
-            .ok_or_else(|| format!("target {} not found", t.id))?;
+    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, api::CodedError> {
+        let not_found = || {
+            api::CodedError::new(
+                api::ErrorCode::NotFound,
+                format!("target {} not found", t.id),
+            )
+        };
+        let existing = file.targets.get(&t.id).ok_or_else(not_found)?;
         if existing.status == Status::Achieved {
             return Ok(Outcome::AlreadyAchieved);
         }
         ops::refuse_active_family(file, &t.id)?;
-        let target = file
-            .targets
-            .get_mut(&t.id)
-            .ok_or_else(|| format!("target {} not found", t.id))?;
+        let target = file.targets.get_mut(&t.id).ok_or_else(not_found)?;
         target.status = Status::Achieved;
         // Clear what the previous status owned before writing the
         // achieved-only fields (🎯T64) — e.g. a `set_aside_reason` from
@@ -982,7 +988,7 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             cost: target.cost,
         })
     })
-    .map_err(|e| tool_err(e.to_string()))?;
+    .map_err(mutation_tool_err)?;
 
     match outcome {
         Outcome::AlreadyAchieved => text_result(format!("🎯{} is already achieved", t.id)),
@@ -1027,10 +1033,10 @@ pub fn handle_revert(t: crate::tools::RevertTool) -> ToolResult {
         ));
     }
 
-    let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
-        ops::revert(file, &t.id, &reason).map_err(|e| e.to_string())
+    let result = store::with_locked_mutation(&path, |file| {
+        ops::revert(file, &t.id, &reason).map_err(|e| api::CodedError::new(e.code(), e.to_string()))
     })
-    .map_err(|e| tool_err(e.to_string()))?;
+    .map_err(mutation_tool_err)?;
 
     let body = format!(
         "Reverted 🎯{} \"{}\" — status moved Achieved → Converging.\nReason: {reason}\nFile: {}",
@@ -1079,11 +1085,13 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
         SetAside { name: String, prior: Status },
     }
 
-    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, String> {
-        let target = file
-            .targets
-            .get_mut(&t.id)
-            .ok_or_else(|| format!("target {} not found", t.id))?;
+    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, api::CodedError> {
+        let target = file.targets.get_mut(&t.id).ok_or_else(|| {
+            api::CodedError::new(
+                api::ErrorCode::NotFound,
+                format!("target {} not found", t.id),
+            )
+        })?;
         if target.status == Status::Achieved {
             return Ok(Outcome::AlreadyAchieved);
         }
@@ -1103,7 +1111,7 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
             prior,
         })
     })
-    .map_err(|e| tool_err(e.to_string()))?;
+    .map_err(mutation_tool_err)?;
 
     match outcome {
         Outcome::AlreadyAchieved => Err(tool_err(format!(
@@ -1201,7 +1209,7 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
     // taken across branches, not just the current tree.
     let historical = id_alloc::historical_ids(&path);
 
-    let result = store::with_locked_mutation(&path, |file| -> Result<_, String> {
+    let result = store::with_locked_mutation(&path, |file| {
         ops::subdivide(
             file,
             &t.parent,
@@ -1211,9 +1219,9 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
             tail.as_deref(),
             &historical,
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| api::CodedError::new(e.code(), e.to_string()))
     })
-    .map_err(|e| tool_err(e.to_string()))?;
+    .map_err(mutation_tool_err)?;
 
     let mut out = format!(
         "Subdivided 🎯{parent} \"{name}\" — mode `{mode}`\nCreated: {created}",
@@ -1798,25 +1806,15 @@ pub fn apply_request_as(cwd: &str, req: crate::apply::ApplyRequest, op: &str) ->
     // run while holding the file lock.
     let historical = id_alloc::historical_ids(&path);
 
-    // `with_locked_mutation` flattens the closure's error into a
-    // string, which would drop the stable error code. Carry the code
-    // out alongside so a refusal reaches the caller as (code, message)
-    // rather than as bare prose.
-    let mut refusal: Option<api::ErrorCode> = None;
-    let report = store::with_locked_mutation(&path, |file| {
-        crate::apply::apply(file, &req, &historical).map_err(|e| {
-            refusal = Some(e.code);
-            e.message
-        })
-    });
+    // `apply::apply` already returns `ApplyError` (= `api::CodedError`),
+    // and `with_locked_mutation`'s bound accepts it directly, so the
+    // code survives the closure boundary without a side-channel local
+    // to carry it — the workaround this comment used to describe.
+    let report =
+        store::with_locked_mutation(&path, |file| crate::apply::apply(file, &req, &historical));
     let report = match report {
         Ok(r) => r,
-        Err(e) => {
-            return match refusal {
-                Some(code) => coded_err(code, e.to_string()),
-                None => Err(tool_err(e.to_string())),
-            };
-        }
+        Err(e) => return Err(mutation_tool_err(e)),
     };
 
     let mut lines: Vec<String> = Vec::new();

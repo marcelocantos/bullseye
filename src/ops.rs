@@ -3,6 +3,7 @@
 
 use chrono::Local;
 
+use crate::api::{CodedError, ErrorCode};
 use crate::schema::{Check, QueryCheck, Status, TargetsFile};
 
 /// Result of a revert operation.
@@ -29,6 +30,21 @@ impl std::fmt::Display for RevertError {
                  To resume a set-aside target, or to move an active one backwards, use \
                  `bullseye_apply` with `status: identified` and a `reason`."
             ),
+        }
+    }
+}
+
+impl RevertError {
+    /// The envelope code for this refusal, derived structurally from
+    /// the variant rather than by matching the display text (🎯T74.14).
+    /// `NotAchieved`'s message contains neither "not found" nor
+    /// "conflict", so before this it fell through `classify_message`'s
+    /// default arm to `InvalidArgs` — wrong for what is a business-rule
+    /// refusal, not a malformed argument.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            RevertError::TargetNotFound(_) => ErrorCode::NotFound,
+            RevertError::NotAchieved(_) => ErrorCode::Validation,
         }
     }
 }
@@ -204,8 +220,10 @@ pub enum SubdivideError {
     /// The write engine refused the child creation (🎯T76). Subdivide
     /// delegates creation to `apply`, so the engine's validation —
     /// historical-ID reservation, dotted-family attachment, string
-    /// guards — reaches callers through this variant.
-    Apply(String),
+    /// guards — reaches callers through this variant. Carries the
+    /// engine's own `CodedError` rather than just its message, so
+    /// `code()` below can forward the real code instead of guessing.
+    Apply(CodedError),
     /// A new child's dotted parent exists and is terminal (🎯T39.1).
     FamilyParentTerminal {
         id: String,
@@ -273,6 +291,31 @@ impl std::fmt::Display for SubdivideError {
     }
 }
 
+impl SubdivideError {
+    /// The envelope code for this refusal, derived structurally from
+    /// the variant (🎯T74.14) rather than by matching the display
+    /// text — several of these messages (e.g. `IdCollision`,
+    /// `EmptyChildField`) contain none of `classify_message`'s magic
+    /// phrases and would otherwise fall through to a default.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            SubdivideError::ParentNotFound(_) => ErrorCode::NotFound,
+            SubdivideError::ParentTerminal { .. }
+            | SubdivideError::FamilyParentTerminal { .. }
+            | SubdivideError::OpenDependencies(_) => ErrorCode::Validation,
+            SubdivideError::NoChildren
+            | SubdivideError::IdCollision(_)
+            | SubdivideError::DuplicateChildId(_)
+            | SubdivideError::EmptyChildField { .. }
+            | SubdivideError::EmptyRetireReason
+            | SubdivideError::TailRequiresRetireMode
+            | SubdivideError::EmptyTail
+            | SubdivideError::TailNotInChildren(_) => ErrorCode::InvalidArgs,
+            SubdivideError::Apply(e) => e.code,
+        }
+    }
+}
+
 impl From<AttachError> for SubdivideError {
     fn from(e: AttachError) -> Self {
         match e {
@@ -329,6 +372,14 @@ impl std::fmt::Display for AttachError {
     }
 }
 
+impl AttachError {
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            AttachError::ParentTerminal { .. } => ErrorCode::Validation,
+        }
+    }
+}
+
 /// If `child_id` is a direct dotted child of a parent that exists in
 /// `file`, append the child to that parent's `depends_on` and promote
 /// Identified → Converging (🎯T39.1).
@@ -374,15 +425,18 @@ pub fn active_dotted_children(file: &TargetsFile, id: &str) -> Vec<String> {
 }
 
 /// Refuse achieving an umbrella while any dotted child is still open.
-pub fn refuse_active_family(file: &TargetsFile, id: &str) -> Result<(), String> {
+pub fn refuse_active_family(file: &TargetsFile, id: &str) -> Result<(), CodedError> {
     let kids = active_dotted_children(file, id);
     if kids.is_empty() {
         return Ok(());
     }
-    Err(format!(
-        "cannot achieve 🎯{id} while dotted children are still active: {}. \
-         Achieve or set_aside them first — a dotted family is an umbrella (🎯T39.1).",
-        kids.join(", ")
+    Err(CodedError::new(
+        ErrorCode::Validation,
+        format!(
+            "cannot achieve 🎯{id} while dotted children are still active: {}. \
+             Achieve or set_aside them first — a dotted family is an umbrella (🎯T39.1).",
+            kids.join(", ")
+        ),
     ))
 }
 
@@ -406,7 +460,7 @@ pub fn refuse_open_dependencies(
     file: &TargetsFile,
     id: &str,
     depends_on: &[String],
-) -> Result<(), String> {
+) -> Result<(), CodedError> {
     let open: Vec<String> = depends_on
         .iter()
         .filter(|dep| {
@@ -419,12 +473,15 @@ pub fn refuse_open_dependencies(
     if open.is_empty() {
         return Ok(());
     }
-    Err(format!(
-        "cannot achieve 🎯{id} while it depends on open target(s): {}. \
-         Achieve or set_aside them first, or drop the edge if it no longer \
-         holds — `depends_on` means they must be achieved before work on \
-         🎯{id} begins, so achieving it now would contradict the graph.",
-        open.join(", ")
+    Err(CodedError::new(
+        ErrorCode::Validation,
+        format!(
+            "cannot achieve 🎯{id} while it depends on open target(s): {}. \
+             Achieve or set_aside them first, or drop the edge if it no longer \
+             holds — `depends_on` means they must be achieved before work on \
+             🎯{id} begins, so achieving it now would contradict the graph.",
+            open.join(", ")
+        ),
     ))
 }
 
@@ -601,7 +658,7 @@ pub fn subdivide(
             .filter(|d| !assigned_ids.contains(d))
             .collect();
         refuse_open_dependencies(file, parent_id, &unrelated)
-            .map_err(SubdivideError::OpenDependencies)?;
+            .map_err(|e| SubdivideError::OpenDependencies(e.message))?;
     }
 
     // Snapshot the parent's name and original status before we touch
@@ -642,7 +699,7 @@ pub fn subdivide(
         },
         historical,
     )
-    .map_err(|e| SubdivideError::Apply(e.message))?;
+    .map_err(SubdivideError::Apply)?;
 
     // Per-mode parent + dependent rewiring.
     let mut rewired_dependents: Vec<String> = Vec::new();

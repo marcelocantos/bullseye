@@ -242,26 +242,11 @@ pub const UNOBLIGED_FIELDS: &[&str] = &[
 ];
 
 /// A refusal, carrying the stable error code the envelope reports.
-#[derive(Debug, PartialEq)]
-pub struct ApplyError {
-    pub code: ErrorCode,
-    pub message: String,
-}
-
-impl ApplyError {
-    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for ApplyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
+/// Alias of the shared [`crate::api::CodedError`] (🎯T74.14) — `apply`
+/// used to own its own copy of this shape, which is exactly the kind
+/// of duplication that let the code get dropped again downstream in
+/// `ops::subdivide`'s `SubdivideError::Apply(e.message)`.
+pub type ApplyError = crate::api::CodedError;
 
 /// What an apply did.
 #[derive(Debug, Default, PartialEq)]
@@ -590,9 +575,10 @@ pub fn apply(
             // below. Ask the family question first: for an umbrella the
             // family message names the relationship, which is the more
             // useful correction.
+            // Both already return `CodedError` with `Validation` baked
+            // in, so `?` carries the code through without re-wrapping.
             if from.is_some() {
-                ops::refuse_active_family(file, &id)
-                    .map_err(|e| ApplyError::new(ErrorCode::Validation, e))?;
+                ops::refuse_active_family(file, &id)?;
             }
             let effective_deps: Vec<String> = frag.depends_on.clone().unwrap_or_else(|| {
                 file.targets
@@ -600,8 +586,7 @@ pub fn apply(
                     .map(|t| t.depends_on.clone())
                     .unwrap_or_default()
             });
-            ops::refuse_open_dependencies(file, &id, &effective_deps)
-                .map_err(|e| ApplyError::new(ErrorCode::Validation, e))?;
+            ops::refuse_open_dependencies(file, &id, &effective_deps)?;
         }
         check_obligations(&id, from, to, frag)?;
 
