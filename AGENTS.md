@@ -47,7 +47,8 @@ main.rs        — MCP server + CLI (open/query/commit/plan-checks + L2)
 api.rs         — Mutation envelopes and stable error codes (🎯T45)
 schema.rs      — TargetsFile, Target, Status, …
 store.rs       — YAML I/O, flock + CAS mutations
-graph.rs       — Frontier, validation, Mermaid, startup context
+graph/         — Frontier, validation, Mermaid, startup context (split by
+                 role: frontier.rs, validate.rs, mermaid.rs, render.rs)
 handler.rs     — Tool dispatch
 tools.rs       — MCP tool definitions
 portfolio.rs   — Cross-repo discovery and portfolio summary
