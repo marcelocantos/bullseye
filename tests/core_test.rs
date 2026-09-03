@@ -3471,9 +3471,9 @@ fn concurrent_mutations_do_not_lose_updates() {
     // serialized-back-to-disk write clobbers the other. With flock, the
     // mutations serialise and both targets must be present at the end.
     //
-    // We use threads rather than subprocesses because fs2's advisory
-    // locks (flock(2) on POSIX, LockFileEx on Windows) are tied to the
-    // open-file-description — each thread's independent
+    // We use threads rather than subprocesses because std::fs::File's
+    // advisory locks (flock(2) on POSIX, LockFileEx on Windows) are tied
+    // to the open-file-description — each thread's independent
     // `OpenOptions::open(...)` gets a distinct OFD, so same-process
     // threads contend on the lock exactly like cross-process writers
     // would. This catches the same lost-update race with ~0ms overhead
