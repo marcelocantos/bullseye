@@ -4156,6 +4156,53 @@ fn revert_clears_attestation() {
     config::set_external_root_override(None);
 }
 
+/// 🎯T74.14: `RevertError::NotAchieved`'s message contains neither
+/// "not found" nor "conflict" nor any other phrase `classify_message`
+/// recognizes, so before `MutationError::Apply` and friends carried a
+/// typed `CodedError`, this refusal fell through to `classify_message`'s
+/// default arm and was misreported as `invalid_args` — wrong for what
+/// is a business-rule refusal, not a malformed argument. The code must
+/// now come from `RevertError::code()` regardless of wording.
+#[test]
+fn t74_14_revert_of_non_achieved_target_yields_validation_not_invalid_args() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_revert;
+    use bullseye::tools::RevertTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    // T1 is created `identified` by default — never achieved.
+    store::create_at(tmp.path(), Location::InRepo, "t74-14-revert").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    let err = handle_revert(RevertTool {
+        cwd,
+        id: "T1".into(),
+        reason: "checking the code on a not-yet-achieved target".into(),
+    })
+    .expect_err("reverting a non-achieved target must be refused");
+    let msg = err.to_string();
+
+    assert!(
+        !msg.contains("not found") && !msg.contains("conflict"),
+        "test premise broken — message now contains a magic phrase, so it \
+         no longer exercises the substring-classification gap: {msg}"
+    );
+    assert!(
+        msg.contains("code=validation"),
+        "expected the specific `validation` code even though the message \
+         omits every phrase `classify_message` recognizes: {msg}"
+    );
+    assert!(
+        !msg.contains("code=invalid_args"),
+        "must not fall back to the generic invalid_args default: {msg}"
+    );
+
+    config::set_external_root_override(None);
+}
+
 // --- 🎯T20: envelope-leak guard ---
 //
 // Tests for the check_no_envelope_leak validator wired into every

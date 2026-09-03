@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use tempfile::NamedTempFile;
 
+use crate::api::{CodedError, ErrorCode};
 use crate::config::{Location, external_root};
 use sha2::{Digest, Sha256};
 
@@ -616,10 +617,37 @@ pub enum MutationError {
     /// writer (editor, script) modified the file in the window.
     Conflict { path: PathBuf },
     /// The closure supplied to [`with_locked_mutation`] returned an
-    /// error. The mutation was not applied.
-    Apply(String),
+    /// error. The mutation was not applied. Carries the closure's own
+    /// [`CodedError`] rather than a bare `String` (🎯T74.14) — this is
+    /// the flattening point the entropy audit's ENT-014 named:
+    /// previously any type implementing `Into<String>` collapsed to
+    /// prose here, and the code was re-derived downstream by matching
+    /// English phrases in that prose.
+    Apply(CodedError),
     /// Serialising or writing the mutated yaml back failed.
     Save(String),
+}
+
+impl MutationError {
+    /// The envelope code for this failure, computed structurally from
+    /// which variant occurred — never by matching [`Display`] output.
+    /// `LockTimeout`'s message, for instance, has never contained the
+    /// literal phrase `classify_message` looks for.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            MutationError::LockTimeout { .. } | MutationError::Conflict { .. } => {
+                ErrorCode::Conflict
+            }
+            MutationError::Apply(e) => e.code,
+            // No structural code fits an I/O, parse, or serialise
+            // failure yet — `InvalidArgs` is the same default the
+            // classifier fell back to, but chosen deliberately here
+            // rather than by scanning for phrases these never contain.
+            MutationError::LockIo(_) | MutationError::Load(_) | MutationError::Save(_) => {
+                ErrorCode::InvalidArgs
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for MutationError {
@@ -734,7 +762,7 @@ pub fn with_locked_write(path: &Path, file: &TargetsFile) -> Result<(), Mutation
 pub fn with_locked_mutation<F, T, E>(path: &Path, f: F) -> Result<T, MutationError>
 where
     F: FnOnce(&mut TargetsFile) -> Result<T, E>,
-    E: Into<String>,
+    E: Into<CodedError>,
 {
     let _lock = acquire_lock(path)?;
 

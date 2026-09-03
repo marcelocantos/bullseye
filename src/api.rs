@@ -44,7 +44,56 @@ pub fn format_error(code: ErrorCode, message: impl AsRef<str>) -> String {
     format!("code={}\nmessage: {}", code.as_str(), message.as_ref())
 }
 
+/// A refusal that carries its stable [`ErrorCode`] alongside the human
+/// message, so the code travels with the error value instead of being
+/// re-derived from its prose after the fact (🎯T74.14 — see
+/// [`classify_message`]'s doc comment for the failure mode this exists
+/// to route around). `ops` and `store` return this — or a domain error
+/// with a `code()` method that produces one — everywhere a mutation can
+/// be refused, so the MCP envelope's `code=` line is never a guess.
+#[derive(Debug, PartialEq)]
+pub struct CodedError {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+impl CodedError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for CodedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CodedError {}
+
+/// Fallback for call sites not yet migrated to a structural code (e.g.
+/// closures that in practice never return `Err`). Fixed at
+/// `InvalidArgs` regardless of the message's wording — a documented
+/// default, not a per-message guess, so unlike [`classify_message`] it
+/// cannot silently reclassify itself as the text changes.
+impl From<String> for CodedError {
+    fn from(message: String) -> Self {
+        CodedError::new(ErrorCode::InvalidArgs, message)
+    }
+}
+
 /// Best-effort classification of an existing error string into a code.
+///
+/// This is the residual path for call sites that only ever produce a
+/// bare `String` (validation helpers, ad hoc `err(...)` returns) — a
+/// new message here that omits the phrases below is silently
+/// misclassified as `InvalidArgs` (🎯T74.14). Anywhere the error
+/// originates in `ops`/`store`/`apply`, prefer threading a
+/// [`CodedError`] (or a domain error with a `code()` method) instead
+/// of adding another phrase to this function.
 pub fn classify_message(msg: &str) -> ErrorCode {
     let lower = msg.to_ascii_lowercase();
     if lower.contains("no bullseye.yaml") || lower.contains("create bullseye.yaml") {
