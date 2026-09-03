@@ -23,6 +23,10 @@ github-issues = ["dep:ureq"]
 [dependencies]
 async-trait = "0.1.89"
 chrono = { version = "0.4.44", features = ["serde"] }
+# 🎯T77: restoring the default SIGPIPE disposition on CLI paths needs a
+# raw signal call; std exposes no API for it. Already in the tree
+# transitively, so this adds no compile cost.
+libc = "0.2"
 fs2 = "0.4.3"
 regex = "1"
 rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }

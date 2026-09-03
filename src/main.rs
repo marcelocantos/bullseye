@@ -20,6 +20,29 @@ use rust_mcp_sdk::{ToMcpServerHandler, error::SdkResult};
 
 const AGENT_GUIDE: &str = include_str!("../docs/agents-guide.md");
 
+/// Restore the default SIGPIPE disposition for CLI paths (🎯T77).
+///
+/// Rust's runtime sets SIGPIPE to `SIG_IGN`, so a write to a closed
+/// pipe returns EPIPE and `println!` panics — `bullseye query … | head`
+/// prints a panic and a backtrace note where every other Unix tool
+/// exits quietly. Agents pipe CLI output into `head`/`grep` constantly,
+/// and that panic reads as a bullseye failure rather than a truncated
+/// read.
+///
+/// Deliberately NOT applied to `serve`, which returns before this is
+/// called. A server running with the default disposition is *killed* by
+/// a client that disconnects mid-write — which is the reason Rust
+/// ignores the signal in the first place. The right disposition depends
+/// on whether the process is a filter or a server, and bullseye is both.
+fn restore_default_sigpipe() {
+    // SAFETY: called once, on the CLI path only, before any output.
+    // Setting a signal disposition is async-signal-safe and there are
+    // no other threads running at this point.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 /// Loopback address the HTTP MCP daemon binds by default (🎯T78).
 /// Loopback only, deliberately: the ledger is a local artifact and the
 /// server has no authentication of its own.
@@ -101,6 +124,10 @@ async fn main() -> SdkResult<()> {
             .unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_string());
         return serve_http(&addr).await;
     }
+
+    // 🎯T77: from here down we are a CLI, so behave like one when a
+    // reader goes away.
+    restore_default_sigpipe();
 
     if !rest.is_empty() {
         match rest[0].as_str() {
