@@ -24,7 +24,7 @@ use crate::schema::{
 /// but short enough that a stale lock doesn't hang the caller's session.
 const LOCK_WAIT: Duration = Duration::from_secs(5);
 
-/// Polling interval while spinning on `try_lock_exclusive`.
+/// Polling interval while spinning on `File::try_lock`.
 const LOCK_POLL: Duration = Duration::from_millis(50);
 
 /// Self-documentation banner prepended to every serialized
