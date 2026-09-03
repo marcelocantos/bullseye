@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
-use fs2::FileExt;
 use tempfile::NamedTempFile;
 
 use crate::config::{Location, external_root};
@@ -657,10 +656,12 @@ impl From<MutationError> for String {
 ///
 /// Steps, in order:
 /// 1. Open (creating if necessary) a sibling lockfile `<path>.lock`.
-/// 2. Acquire an exclusive advisory lock via `fs2::FileExt`. On POSIX
-///    this is `flock(2) LOCK_EX`; on Windows it's `LockFileEx`. Wait
-///    up to [`LOCK_WAIT`] for the lock, polling every [`LOCK_POLL`].
-///    A timeout returns [`MutationError::LockTimeout`].
+/// 2. Acquire an exclusive advisory lock via `std::fs::File::try_lock`
+///    (stable since Rust 1.89 — no external crate needed; was `fs2`,
+///    now unmaintained, see 🎯T74.9). On POSIX this is `flock(2)
+///    LOCK_EX`; on Windows it's `LockFileEx`. Wait up to [`LOCK_WAIT`]
+///    for the lock, polling every [`LOCK_POLL`]. A timeout returns
+///    [`MutationError::LockTimeout`].
 /// 3. Read and parse `path` **fresh from disk**, bypassing the parse
 ///    cache. The cache is fine for read-only tools but must not be
 ///    trusted inside a mutation — another process may have written
@@ -698,10 +699,9 @@ fn acquire_lock(yaml_path: &Path) -> Result<std::fs::File, MutationError> {
 
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
-        #[allow(deprecated)]
-        match lock_file.try_lock_exclusive() {
+        match lock_file.try_lock() {
             Ok(()) => return Ok(lock_file),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(std::fs::TryLockError::WouldBlock) => {
                 if Instant::now() >= deadline {
                     return Err(MutationError::LockTimeout {
                         path: lock_path,
@@ -710,7 +710,7 @@ fn acquire_lock(yaml_path: &Path) -> Result<std::fs::File, MutationError> {
                 }
                 std::thread::sleep(LOCK_POLL);
             }
-            Err(e) => {
+            Err(std::fs::TryLockError::Error(e)) => {
                 return Err(MutationError::LockIo(format!(
                     "lock {}: {e}",
                     lock_path.display()
