@@ -274,3 +274,228 @@ fn bullseye_never_executes_a_command_check() {
         "planning must not run the command — bullseye plans, the caller executes",
     );
 }
+
+// --- Unknown check kinds degrade, never poison (🎯T85) -------------------
+
+/// A ledger carrying a check kind this build does not understand,
+/// alongside targets that use only known kinds.
+const FUTURE_KIND_YAML: &str = r#"
+schema_version: 5
+targets:
+  T1:
+    name: Checked by some future kind
+    status: identified
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - the future thing holds
+    origin: manual
+    discovered: 2026-09-06
+    checks:
+    - http:
+        url: https://example.invalid/health
+        expect_status: 200
+  T2:
+    name: An unrelated target with a known check
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - cargo test passes
+    origin: manual
+    discovered: 2026-09-06
+    checks:
+    - command:
+        run: cargo test --workspace
+  T3:
+    name: An unrelated target with no checks at all
+    status: identified
+    value: 1.0
+    cost: 1.0
+    acceptance:
+    - something else holds
+    origin: manual
+    discovered: 2026-09-06
+"#;
+
+#[test]
+fn an_unknown_check_kind_does_not_poison_the_whole_ledger() {
+    // THE TRAP. `Check` is an untagged enum, so before 🎯T85 a single
+    // unrecognised kind failed the parse of the entire file and every
+    // unrelated target became unreadable. A 0.52.0 binary reading a
+    // ledger with a `command:` check reported "data did not match any
+    // variant of untagged enum Check" and loaded nothing at all. A tool
+    // whose new field bricks older readers is a trap for exactly the
+    // fleet that has to migrate.
+    use bullseye::schema::{Check, TargetsFile};
+
+    let file: TargetsFile =
+        serde_yaml_ng::from_str(FUTURE_KIND_YAML).expect("an unknown kind must not fail the parse");
+
+    assert_eq!(file.targets.len(), 3, "every target still loads");
+    assert!(matches!(file.targets["T1"].checks[0], Check::Unknown(_)));
+    assert!(matches!(file.targets["T2"].checks[0], Check::Command { .. }));
+    assert!(file.targets["T3"].checks.is_empty());
+}
+
+#[test]
+fn an_unknown_check_is_preserved_across_a_round_trip() {
+    // Degrading must not mean discarding. A ledger that passes through
+    // an older binary has to come out the other side still carrying the
+    // newer reader's check, or the "tolerant" reader silently deletes
+    // work it merely failed to understand.
+    use bullseye::schema::TargetsFile;
+
+    let file: TargetsFile = serde_yaml_ng::from_str(FUTURE_KIND_YAML).unwrap();
+    let out = serde_yaml_ng::to_string(&file).unwrap();
+
+    assert!(
+        out.contains("https://example.invalid/health") && out.contains("expect_status"),
+        "the unknown check's payload must survive verbatim:\n{out}",
+    );
+    let reparsed: TargetsFile = serde_yaml_ng::from_str(&out).unwrap();
+    assert_eq!(reparsed.targets["T1"].checks, file.targets["T1"].checks);
+}
+
+#[test]
+fn an_unknown_check_can_never_be_reported_as_passing() {
+    // The other half of the requirement: a reader that cannot honour a
+    // check must not let anyone call the target checked. The plan marks
+    // it Unsupported rather than Pending, so there is no slot inviting a
+    // caller to fill in a pass it never earned.
+    use bullseye::ops::{CheckKind, CheckOutcome, CheckSpec, CheckTool, verify_plan};
+    use bullseye::schema::TargetsFile;
+
+    let file: TargetsFile = serde_yaml_ng::from_str(FUTURE_KIND_YAML).unwrap();
+    let plan = verify_plan(&file, "T1").expect("planning still succeeds");
+
+    assert_eq!(plan.checks[0].tool, CheckTool::Unsupported);
+    assert_eq!(plan.report_template.checks[0].kind, CheckKind::Unknown);
+    assert_eq!(
+        plan.report_template.checks[0].outcome,
+        CheckOutcome::Unsupported,
+        "an unrunnable check starts decided, not Pending",
+    );
+    assert!(
+        plan.checks[0].description.contains("upgrade"),
+        "the description must tell the reader what to do: {:?}",
+        plan.checks[0].description,
+    );
+    match &plan.checks[0].spec {
+        CheckSpec::Unknown { unknown } => {
+            let text = serde_yaml_ng::to_string(unknown).unwrap();
+            assert!(text.contains("example.invalid"), "payload carried through");
+        }
+        other => panic!("expected Unknown, got {other:?}"),
+    }
+
+    // And the verdict rule refuses to round it up.
+    assert_eq!(
+        plan.report_template.verdict(),
+        CheckOutcome::Unsupported,
+        "a report containing an unsupported check is not a pass",
+    );
+}
+
+#[test]
+fn a_mixed_report_is_never_rounded_up_to_a_pass() {
+    use bullseye::ops::{CheckKind, CheckOutcome, CheckResult, VerifyReport};
+
+    let report = |outcomes: &[CheckOutcome]| VerifyReport {
+        target: "T1".to_string(),
+        overall: CheckOutcome::Pending,
+        checks: outcomes
+            .iter()
+            .enumerate()
+            .map(|(i, o)| CheckResult {
+                index: i,
+                kind: CheckKind::Command,
+                outcome: *o,
+                failures: Vec::new(),
+            })
+            .collect(),
+    };
+
+    use CheckOutcome::*;
+    assert_eq!(report(&[Pass, Pass]).verdict(), Pass);
+    assert_eq!(report(&[Pass, Fail]).verdict(), Fail);
+    assert_eq!(report(&[Pass, Unsupported]).verdict(), Unsupported);
+    assert_eq!(report(&[Pass, Pending]).verdict(), Pending);
+    // A failure outranks everything: one red check decides the report.
+    assert_eq!(report(&[Fail, Unsupported, Pending]).verdict(), Fail);
+    // Unsupported outranks Pending: "cannot run it" is more actionable.
+    assert_eq!(report(&[Unsupported, Pending]).verdict(), Unsupported);
+}
+
+// --- Running declared checks (🎯T85) ------------------------------------
+
+#[test]
+fn running_command_checks_passes_reds_fails_and_skips_what_it_cannot_run() {
+    // The gate half: a declared check has to be able to redden something,
+    // or it is documentation.
+    use bullseye::ops::{CheckOutcome, ran_verdict, run_command_checks, verify_plan};
+    use bullseye::schema::{Check, CommandCheck, QueryCheck};
+
+    let mut file = load_fixture();
+    let t3 = file.targets.get_mut("T3").unwrap();
+    t3.checks = vec![
+        Check::Command {
+            command: CommandCheck {
+                run: "exit 0".to_string(),
+                cwd: None,
+                expect_exit: None,
+            },
+        },
+        // A guard that must reject: expecting a non-zero status is the
+        // point, not a workaround.
+        Check::Command {
+            command: CommandCheck {
+                run: "exit 3".to_string(),
+                cwd: None,
+                expect_exit: Some(3),
+            },
+        },
+    ];
+    let plan = verify_plan(&file, "T3").unwrap();
+    let ran = run_command_checks(&plan);
+    assert_eq!(ran[0].outcome, CheckOutcome::Pass);
+    assert_eq!(ran[1].outcome, CheckOutcome::Pass, "non-zero expectation honoured");
+    assert_eq!(ran_verdict(&ran), CheckOutcome::Pass);
+
+    // A red command fails, and says what it saw.
+    let t3 = file.targets.get_mut("T3").unwrap();
+    t3.checks = vec![Check::Command {
+        command: CommandCheck {
+            run: "exit 7".to_string(),
+            cwd: None,
+            expect_exit: None,
+        },
+    }];
+    let ran = run_command_checks(&verify_plan(&file, "T3").unwrap());
+    assert_eq!(ran[0].outcome, CheckOutcome::Fail);
+    assert_eq!(ran[0].actual_exit, Some(7));
+    assert!(
+        ran[0].detail.as_deref().unwrap_or("").contains("exited 7"),
+        "the detail should name the status: {:?}",
+        ran[0].detail,
+    );
+    assert_eq!(ran_verdict(&ran), CheckOutcome::Fail);
+
+    // A sawmill check cannot be run here, and that is not a pass.
+    let t3 = file.targets.get_mut("T3").unwrap();
+    t3.checks = vec![Check::Query {
+        query: QueryCheck {
+            kind: "preprocessor_directive".to_string(),
+            pattern: None,
+            exclude_path: None,
+            expect: 0,
+        },
+    }];
+    let ran = run_command_checks(&verify_plan(&file, "T3").unwrap());
+    assert_eq!(ran[0].outcome, CheckOutcome::Unsupported);
+    assert_eq!(
+        ran_verdict(&ran),
+        CheckOutcome::Unsupported,
+        "a target whose only check could not be run is NOT verified",
+    );
+}

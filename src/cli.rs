@@ -156,3 +156,48 @@ pub fn subcommands() -> Vec<&'static str> {
     }
     seen
 }
+
+/// A subcommand that exists only on the CLI, with the reason it has no
+/// MCP tool (🎯T74.12).
+///
+/// [`CLI_ROUTES`] answers "can every MCP tool be reached from the CLI".
+/// This table answers the mirror question the standing sentence "every
+/// capability is on both surfaces" quietly assumed away: which CLI verbs
+/// have no MCP tool, and why that is deliberate rather than drift. An
+/// undeclared CLI-only verb fails `tests/cli_parity_test.rs`, so the next
+/// one cannot be added silently the way `issues-poll` was.
+pub struct CliOnly {
+    /// The subcommand as typed.
+    pub subcommand: &'static str,
+    /// Why it is not an MCP tool. Not decoration — this is the claim the
+    /// test makes a reviewer state.
+    pub reason: &'static str,
+    /// True when the verb is compiled out unless a cargo feature is on.
+    /// Such a verb still answers, but with "rebuild with --features …"
+    /// and a non-zero status, so the parity test cannot demand exit 0
+    /// from a default build.
+    pub feature_gated: bool,
+}
+
+/// Every subcommand deliberately absent from the MCP surface.
+pub const CLI_ONLY: &[CliOnly] = &[
+    CliOnly {
+        subcommand: "issues-poll",
+        reason: "long-running poller behind the optional `github-issues` feature; a build \
+                 without the feature does not have it at all, so it cannot be a stable tool",
+        feature_gated: true,
+    },
+    CliOnly {
+        subcommand: "run-checks",
+        reason: "executes commands declared in bullseye.yaml (🎯T85). The ledger is a \
+                 checked-in file agents write, so running strings from it must be an act \
+                 someone deliberately performs — never something an MCP tool does while \
+                 answering a read. `bullseye_verify` plans; only this verb runs",
+        feature_gated: false,
+    },
+];
+
+/// Whether `subcommand` is declared CLI-only.
+pub fn is_cli_only(subcommand: &str) -> bool {
+    CLI_ONLY.iter().any(|c| c.subcommand == subcommand)
+}
