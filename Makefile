@@ -17,7 +17,11 @@
 #   2. clippy     (a few seconds warm, via rust-cache in CI)
 #   3. tests      (a few seconds warm)
 #   4. dirty tree (warning only — leftover WIP is the normal /cv state)
-bullseye:
+#
+# Steps 1-3 are `gate` — the oracle scripts/hooks/pre-push executes before
+# every push. bullseye is gate plus the advisory dirty-tree report; the dirty
+# tree must never refuse a push, so it lives here and not in gate.
+gate:
 	@log=$$(mktemp); \
 	  if cargo fmt --check >"$$log" 2>&1; then echo "✓ fmt"; \
 	  else echo "✗ fmt"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
@@ -27,6 +31,8 @@ bullseye:
 	@log=$$(mktemp); \
 	  if cargo test --quiet >"$$log" 2>&1; then echo "✓ tests"; \
 	  else echo "✗ tests"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+
+bullseye: gate
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
 	else \
@@ -59,6 +65,12 @@ lint:
 build:
 	cargo build
 
+# Once per clone. A relative core.hooksPath resolves against the worktree the
+# push runs from, so one setting covers every `git worktree`.
+hooks:
+	git config core.hooksPath scripts/hooks
+	@echo "core.hooksPath=$$(git config core.hooksPath)"
+
 # --- release (local; the gate above is the preflight oracle) ----------
 #
 #   make release-dist  — build dist/bullseye-<ver>-{darwin-arm64,linux-*}.tar.gz
@@ -87,4 +99,4 @@ clean:
 	cargo clean
 	rm -rf dist
 
-.PHONY: bullseye test check fmt lint build release release-dist release-tap reachability clean
+.PHONY: gate hooks bullseye test check fmt lint build release release-dist release-tap reachability clean
