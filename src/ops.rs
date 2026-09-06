@@ -859,6 +859,9 @@ impl std::fmt::Display for VerifyError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckTool {
+    /// Nothing this build can dispatch to (🎯T85). The check is
+    /// reported so a caller sees it exists and knows it was not run.
+    Unsupported,
     /// Sawmill's `check_conventions` — runs a named convention.
     CheckConventions,
     /// Sawmill's `query` — runs a structural query.
@@ -903,6 +906,10 @@ pub struct PlannedCheck {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(untagged)]
 pub enum CheckSpec {
+    /// Verbatim payload of a check kind this build does not understand
+    /// (🎯T85). Preserved rather than dropped so a round trip through an
+    /// older binary does not silently delete a newer reader's check.
+    Unknown { unknown: serde_yaml_ng::Value },
     Convention { convention: String },
     Query { query: QueryCheck },
     Invariant { invariant: String },
@@ -953,6 +960,39 @@ pub enum CheckOutcome {
     Pass,
     Fail,
     Pending,
+    /// This build cannot honour the check (🎯T85) — it is a kind added
+    /// by a newer bullseye. Distinct from `Fail`, which means the check
+    /// ran and the product did not satisfy it, and from `Pending`, which
+    /// means it has yet to run. Treat it as "unknown, not checked":
+    /// never as a pass.
+    Unsupported,
+}
+
+impl VerifyReport {
+    /// The overall verdict implied by the individual check outcomes
+    /// (🎯T85).
+    ///
+    /// `Pass` requires that every check passed. One `Fail` fails the
+    /// report. Otherwise the report is undecided: `Unsupported` beats
+    /// `Pending`, because "this build cannot run it" is a more
+    /// actionable thing to report than "not run yet", and neither may
+    /// ever be rounded up to a pass.
+    pub fn verdict(&self) -> CheckOutcome {
+        if self.checks.iter().any(|c| c.outcome == CheckOutcome::Fail) {
+            return CheckOutcome::Fail;
+        }
+        if self
+            .checks
+            .iter()
+            .any(|c| c.outcome == CheckOutcome::Unsupported)
+        {
+            return CheckOutcome::Unsupported;
+        }
+        if self.checks.iter().any(|c| c.outcome == CheckOutcome::Pending) {
+            return CheckOutcome::Pending;
+        }
+        CheckOutcome::Pass
+    }
 }
 
 /// Result entry for a single check within a [`VerifyReport`].
@@ -979,6 +1019,8 @@ pub enum CheckKind {
     Query,
     Invariant,
     Command,
+    /// A kind this build does not understand (🎯T85).
+    Unknown,
 }
 
 /// A single check failure with file/line-level detail, as required by
@@ -1042,6 +1084,16 @@ pub fn verify_plan(file: &TargetsFile, target_id: &str) -> Result<VerifyPlan, Ve
                     CheckKind::Query,
                 )
             }
+            Check::Unknown(raw) => (
+                CheckTool::Unsupported,
+                "unsupported check kind — this bullseye build cannot run it; \
+                 upgrade before treating this target as checked"
+                    .to_string(),
+                CheckSpec::Unknown {
+                    unknown: raw.clone(),
+                },
+                CheckKind::Unknown,
+            ),
             Check::Command { command: c } => {
                 let mut desc = format!("run {:?}", c.run);
                 if let Some(dir) = &c.cwd {
@@ -1073,8 +1125,15 @@ pub fn verify_plan(file: &TargetsFile, target_id: &str) -> Result<VerifyPlan, Ve
         });
         template_checks.push(CheckResult {
             index: idx,
+            // An unsupported check starts life already decided (🎯T85):
+            // this build cannot run it, so leaving it `Pending` would
+            // invite a caller to fill in a pass it never earned.
+            outcome: if kind == CheckKind::Unknown {
+                CheckOutcome::Unsupported
+            } else {
+                CheckOutcome::Pending
+            },
             kind,
-            outcome: CheckOutcome::Pending,
             failures: Vec::new(),
         });
     }
@@ -1089,4 +1148,141 @@ pub fn verify_plan(file: &TargetsFile, target_id: &str) -> Result<VerifyPlan, Ve
             checks: template_checks,
         },
     })
+}
+
+// --- Running declared command checks (🎯T85) ------------------------------
+
+/// Wall-clock bound for one declared command check.
+///
+/// Generous because the commands people declare are test suites and
+/// builds, not `git rev-parse`. It exists so a wedged check reports a
+/// timeout instead of hanging the gate forever — the same reasoning as
+/// every other bounded spawn in this crate.
+pub const COMMAND_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
+
+/// Outcome of running one planned check.
+#[derive(Debug, Clone)]
+pub struct RanCheck {
+    /// Index into the plan's `checks` list.
+    pub index: usize,
+    /// What was run, or why nothing was.
+    pub description: String,
+    /// Exit status the check required.
+    pub expected_exit: Option<i32>,
+    /// Exit status observed, when the command ran to completion.
+    pub actual_exit: Option<i32>,
+    /// Verdict for this check.
+    pub outcome: CheckOutcome,
+    /// Explanation for anything other than a clean pass.
+    pub detail: Option<String>,
+}
+
+/// Run every `command` check in a plan and report what happened
+/// (🎯T85).
+///
+/// **This is not on the MCP surface, and that is deliberate.** A
+/// `bullseye.yaml` is a checked-in file that agents write, so a server
+/// that executed strings from it on an ordinary tool call would let
+/// anyone who can land a commit run code on every machine that later
+/// read the ledger. Execution therefore lives behind an explicit CLI
+/// verb a human or agent has to type, with each command printed before
+/// it runs — the same trust model as `make test`, where forming the
+/// intent to execute is a separate act from reading the repo.
+///
+/// Checks this build cannot run — sawmill kinds, which need the sawmill
+/// MCP server, and unknown kinds from a newer bullseye — are reported
+/// as [`CheckOutcome::Unsupported`]. They are never counted as passes,
+/// so a caller cannot mistake "nothing ran it" for "it holds".
+pub fn run_command_checks(plan: &VerifyPlan) -> Vec<RanCheck> {
+    plan.checks
+        .iter()
+        .map(|check| match &check.spec {
+            CheckSpec::Command { command } => run_one_command(check.index, command),
+            CheckSpec::Unknown { .. } => RanCheck {
+                index: check.index,
+                description: check.description.clone(),
+                expected_exit: None,
+                actual_exit: None,
+                outcome: CheckOutcome::Unsupported,
+                detail: Some(
+                    "unknown check kind — this build does not understand it; upgrade bullseye \
+                     before treating this target as checked"
+                        .to_string(),
+                ),
+            },
+            _ => RanCheck {
+                index: check.index,
+                description: check.description.clone(),
+                expected_exit: None,
+                actual_exit: None,
+                outcome: CheckOutcome::Unsupported,
+                detail: Some(
+                    "sawmill check — run it via the sawmill MCP server; bullseye cannot call \
+                     another MCP server"
+                        .to_string(),
+                ),
+            },
+        })
+        .collect()
+}
+
+fn run_one_command(index: usize, command: &CommandCheck) -> RanCheck {
+    let want = command.required_exit();
+    let described = format!("{:?} expect_exit={want}", command.run);
+
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c").arg(&command.run);
+    if let Some(dir) = &command.cwd {
+        cmd.current_dir(dir);
+    }
+
+    match crate::bounded::bounded_output(&mut cmd, COMMAND_CHECK_TIMEOUT) {
+        Ok(out) => {
+            // A signal-killed child has no code. That is not the
+            // expected status by any reading, so it fails rather than
+            // silently comparing `None` to the requirement.
+            let got = out.status.code();
+            let outcome = if got == Some(want) {
+                CheckOutcome::Pass
+            } else {
+                CheckOutcome::Fail
+            };
+            let detail = (outcome == CheckOutcome::Fail).then(|| match got {
+                Some(code) => format!("exited {code}, expected {want}"),
+                None => "terminated by signal with no exit code".to_string(),
+            });
+            RanCheck {
+                index,
+                description: described,
+                expected_exit: Some(want),
+                actual_exit: got,
+                outcome,
+                detail,
+            }
+        }
+        Err(e) => RanCheck {
+            index,
+            description: described,
+            expected_exit: Some(want),
+            actual_exit: None,
+            outcome: CheckOutcome::Fail,
+            detail: Some(format!("could not run: {e}")),
+        },
+    }
+}
+
+/// The verdict a set of run checks implies. Same rule as
+/// [`VerifyReport::verdict`]: any failure fails, an unsupported check
+/// leaves the result undecided, and only an all-pass set passes.
+pub fn ran_verdict(ran: &[RanCheck]) -> CheckOutcome {
+    if ran.is_empty() {
+        return CheckOutcome::Pending;
+    }
+    if ran.iter().any(|r| r.outcome == CheckOutcome::Fail) {
+        return CheckOutcome::Fail;
+    }
+    if ran.iter().any(|r| r.outcome == CheckOutcome::Unsupported) {
+        return CheckOutcome::Unsupported;
+    }
+    CheckOutcome::Pass
 }

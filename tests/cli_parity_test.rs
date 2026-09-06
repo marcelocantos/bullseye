@@ -528,3 +528,45 @@ fn cli_split_creates_children_from_a_yaml_list() {
         "stdin-provided child was not written"
     );
 }
+
+/// Every subcommand the binary routes is either backed by an MCP tool or
+/// declared CLI-only with a reason (🎯T74.12).
+///
+/// The repo's standing claim is "every capability is on both surfaces".
+/// It was false for `issues-poll` and nothing caught it, because
+/// `CLI_ROUTES` only checks the MCP→CLI direction. This closes the other
+/// one: a new CLI verb with no MCP tool must say why in
+/// `bullseye::cli::CLI_ONLY`, or fail here.
+#[test]
+fn every_cli_only_subcommand_is_declared_with_a_reason() {
+    for entry in bullseye::cli::CLI_ONLY {
+        assert!(
+            !entry.reason.trim().is_empty(),
+            "CLI-only subcommand `{}` must state why it has no MCP tool",
+            entry.subcommand,
+        );
+        assert!(
+            !bullseye::cli::subcommands().contains(&entry.subcommand),
+            "`{}` is declared CLI-only but CLI_ROUTES also routes an MCP tool to it — \
+             one of the two is wrong",
+            entry.subcommand,
+        );
+        let (code, out) = run(&[entry.subcommand, "--help"]);
+        if entry.feature_gated {
+            // Compiled out in a default build, so it cannot exit 0. What
+            // it must not do is look like a typo: the answer has to name
+            // the feature, not report an unknown subcommand.
+            assert!(
+                out.contains("--features"),
+                "feature-gated `{}` must explain how to enable it; got:\n{out}",
+                entry.subcommand,
+            );
+        } else {
+            assert_eq!(
+                code, 0,
+                "declared CLI-only subcommand `{}` must actually exist; got:\n{out}",
+                entry.subcommand,
+            );
+        }
+    }
+}

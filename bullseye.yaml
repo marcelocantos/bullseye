@@ -2885,6 +2885,36 @@ targets:
     origin: fleet V-coverage survey 2026-09-06
     discovered: 2026-09-06
     achieved: 2026-09-06
+  T85:
+    name: A newer check kind degrades in an older reader instead of making the whole ledger unreadable, and an unrunnable check is never reported as passing
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    attestation: 'Both declared checks pass. Old-binary evidence measured: 0.52.0 (33dc9ac) fails to parse a ledger with an unknown kind; this build loads all targets, reports the check as unsupported, preserves it across a write, and exits 2 rather than 0 when a target''s only check cannot be run. 404 tests pass, clippy clean.'
+    acceptance:
+    - A ledger containing a check kind this build does not understand still loads every target, including targets with no checks and targets using known kinds.
+    - The unknown check's payload survives a write by a build that cannot interpret it, so a round trip through an older reader does not silently delete it.
+    - An unrunnable check plans as Unsupported, not Pending, and no verdict rule rounds Unsupported or Pending up to a pass. A target whose only check could not be run exits non-zero.
+    - 'Declared command checks can actually be run and can redden a gate: an explicit CLI verb runs them, prints each command first, and exits 0 only when every check passed.'
+    - Command execution stays off the MCP surface, and every CLI-only verb is declared with the reason it has no MCP tool.
+    checks:
+    - command:
+        run: cargo test --test unknown_check_tolerance_test
+    - command:
+        run: cargo test --test cli_parity_test
+    context: |-
+      The 🎯T84 command kind shipped a trap. Check is an untagged serde enum, so one unrecognised kind failed the parse of the ENTIRE file: bullseye 0.52.0 (33dc9ac) reading a two-target ledger whose first target carried a command check reported 'data did not match any variant of untagged enum Check' and loaded nothing, including the target that had no checks at all. A tool whose new field bricks older readers is a trap for exactly the fleet that has to migrate.
+
+      WHAT IS FIXED, AND WHAT CANNOT BE. A Check::Unknown catch-all now absorbs kinds this build does not know, last in the untagged order so it cannot shadow the real ones. From this commit on, a future kind degrades: the ledger loads, the unknown check is reported, its payload survives a write, and it can never be counted as a pass. What no change here can reach is binaries already released. 0.52.0 has three variants and no catch-all, so a ledger with a command check stays unreadable to it. The migration order is therefore: upgrade every consumer first, then adopt the kind.
+
+      THE COST, ACCEPTED DELIBERATELY. A typo in a known kind ('quer:' for 'query:') now parses as Unknown rather than erroring. That trade is only safe because an Unknown check can never pass — it plans as Unsupported and run-checks exits 2 on it. A loud 'cannot honour this' is the safe failure; silence would not be.
+
+      RUNNING CHECKS. 'bullseye run-checks --id T' runs declared command checks and exits 0 only if all passed, 1 on a red one, 2 when something could not be run here. 2 is deliberately not 0: 'not checked' must never read as 'checked'. It is CLI-only on purpose. bullseye.yaml is a checked-in file agents write, so executing strings from it must be an act someone deliberately performs, never something an MCP tool does while answering a read. bullseye_verify still only plans.
+
+      Adding a second CLI-only verb would have deepened the drift 🎯T74.12 names, so this also adds the CLI_ONLY table that target asks for, declaring both run-checks and the previously undeclared issues-poll with the reason each has no MCP tool, tested like CLI_ROUTES.
+    origin: team-lead review of the 🎯T84 command check kind, 2026-09-06
+    discovered: 2026-09-06
+    achieved: 2026-09-06
   T9:
     name: agents-guide documents parallelised bullseye Makefile convention
     status: achieved

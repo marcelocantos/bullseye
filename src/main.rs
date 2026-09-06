@@ -150,6 +150,7 @@ async fn main() -> SdkResult<()> {
             "commit" => cli_exit(cli_commit(&rest[1..])),
             "apply" => cli_exit(cli_apply(&rest[1..])),
             "plan-checks" => cli_exit(cli_plan_checks(&rest[1..])),
+            "run-checks" => process::exit(cli_run_checks(&rest[1..])),
             "convergence" => cli_exit(cli_convergence(&rest[1..])),
             "portfolio" => cli_exit(cli_portfolio(&rest[1..])),
             "import" => cli_exit(cli_import(&rest[1..])),
@@ -622,6 +623,97 @@ fn cli_plan_checks(args: &[String]) -> Result<String, String> {
         cwd: default_cwd(args),
         id,
     }))
+}
+
+/// Run a target's declared command checks and exit non-zero if any is
+/// red (🎯T85) — the verb that turns a declared check into a gate.
+///
+/// CLI-only on purpose. `bullseye.yaml` is a checked-in file agents
+/// write, so executing strings from it must be an act a human or agent
+/// deliberately performs, never something an MCP tool does while
+/// answering a read. Each command is printed before it runs.
+///
+/// Exit codes: 0 all checks passed; 1 at least one failed; 2 nothing
+/// failed but something could not be run here (a sawmill kind, or a kind
+/// this build does not understand). 2 is deliberately not 0 — "not
+/// checked" must never read as "checked".
+fn cli_run_checks(args: &[String]) -> i32 {
+    if has_flag(args, "--help") {
+        println!(
+            "bullseye run-checks --id ID [--cwd DIR]\n\
+             \n\
+             Runs the target's declared `command` checks and reports each\n\
+             outcome. Exit 0 = all passed, 1 = a check failed, 2 = a check\n\
+             could not be run here (sawmill kind, or an unknown kind from a\n\
+             newer bullseye).\n"
+        );
+        return 0;
+    }
+    let Some(id) = flag_value(args, "--id") else {
+        eprintln!("run-checks requires --id");
+        return 2;
+    };
+    let cwd = default_cwd(args);
+    let path = match bullseye::store::discover_anywhere(std::path::Path::new(&cwd)) {
+        Some(p) => p,
+        None => {
+            eprintln!("no bullseye.yaml found from {cwd}");
+            return 2;
+        }
+    };
+    let file = match bullseye::store::load(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    let plan = match bullseye::ops::verify_plan(&file, &id) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+
+    println!("Running checks for 🎯{} \"{}\"", plan.target_id, plan.target_name);
+    for check in &plan.checks {
+        println!("  {}. {}", check.index + 1, check.description);
+    }
+    println!();
+
+    let ran = bullseye::ops::run_command_checks(&plan);
+    for r in &ran {
+        let mark = match r.outcome {
+            bullseye::ops::CheckOutcome::Pass => "PASS",
+            bullseye::ops::CheckOutcome::Fail => "FAIL",
+            bullseye::ops::CheckOutcome::Unsupported => "SKIP",
+            bullseye::ops::CheckOutcome::Pending => "....",
+        };
+        print!("{mark}  {}. {}", r.index + 1, r.description);
+        match &r.detail {
+            Some(d) => println!(" — {d}"),
+            None => println!(),
+        }
+    }
+
+    match bullseye::ops::ran_verdict(&ran) {
+        bullseye::ops::CheckOutcome::Pass => {
+            println!("\nAll {} check(s) passed.", ran.len());
+            0
+        }
+        bullseye::ops::CheckOutcome::Fail => {
+            println!("\nFAILED.");
+            1
+        }
+        _ => {
+            println!(
+                "\nNOT VERIFIED — one or more checks could not be run here. \
+                 This is not a pass."
+            );
+            2
+        }
+    }
 }
 
 /// `--momentum T1=1.5,T2=0.5` → the wire shape the tools take.

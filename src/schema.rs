@@ -616,6 +616,28 @@ pub enum Check {
         /// The command to run and the exit status it must produce.
         command: CommandCheck,
     },
+    /// A check this build does not understand — a kind added by a newer
+    /// bullseye (🎯T85).
+    ///
+    /// This variant must stay LAST: serde tries untagged variants in
+    /// order, so an earlier catch-all would swallow the real kinds.
+    ///
+    /// **Why it exists.** Without it, one unknown check kind anywhere in
+    /// a ledger fails the parse of the *entire file*, so every unrelated
+    /// target becomes unreadable. That happened for real: a 0.52.0
+    /// binary reading a ledger with a `command:` check reported
+    /// `data did not match any variant of untagged enum Check` and
+    /// loaded nothing. A tool whose new field bricks older readers is a
+    /// trap for exactly the fleet that has to migrate.
+    ///
+    /// The cost is that a *typo* in a known kind (`quer:` for `query:`)
+    /// now parses as Unknown instead of erroring. That trade is only
+    /// safe because an Unknown check can never pass: it plans as
+    /// [`CheckKind::Unknown`] with outcome
+    /// [`CheckOutcome::Unsupported`], and verification refuses to call
+    /// the target checked. Silence would be the dangerous option; a
+    /// loud "cannot honour this" is not.
+    Unknown(serde_yaml_ng::Value),
 }
 
 /// Parameters for a `command`-kind check (🎯T83).

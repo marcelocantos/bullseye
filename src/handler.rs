@@ -1748,6 +1748,7 @@ fn handle_verify(t: crate::tools::VerifyTool) -> ToolResult {
     for check in &plan.checks {
         let via = match check.tool {
             ops::CheckTool::Shell => "shell".to_string(),
+            ops::CheckTool::Unsupported => "UNSUPPORTED".to_string(),
             other => format!("sawmill tool `{}`", check_tool_name(other)),
         };
         out.push_str(&format!("{}. {via} — {}\n", check.index + 1, check.description));
@@ -1766,6 +1767,7 @@ fn check_tool_name(tool: ops::CheckTool) -> &'static str {
         ops::CheckTool::Query => "query",
         ops::CheckTool::CheckInvariants => "check_invariants",
         ops::CheckTool::Shell => "shell",
+        ops::CheckTool::Unsupported => "unsupported",
     }
 }
 
