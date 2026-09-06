@@ -176,6 +176,37 @@ pub struct Momentum {
 /// requires the *downstream* target's value, which lives in a
 /// different repo that may not have been scanned yet during pass 1.
 pub fn discover_repos(root: &Path, max_depth: usize, momentum: &[Momentum]) -> PortfolioScan {
+    discover_repos_reporting(root, max_depth, momentum, &mut |_| {})
+}
+
+/// One repo's worth of scan progress, reported as the walk finds it.
+///
+/// The walk discovers ledgers as it goes, so there is no denominator to
+/// report against: `repos_seen` counts up and the caller renders it
+/// without a total. That is deliberate — pre-counting the repos would
+/// mean walking the tree twice to make a progress bar prettier.
+#[derive(Debug, Clone)]
+pub struct ScanProgress {
+    /// Repos with a ledger seen so far, this one included.
+    pub repos_seen: usize,
+    /// The repo just loaded, as `org/repo`.
+    pub repo: String,
+}
+
+/// [`discover_repos`], reporting each repo to `on_repo` as it is loaded.
+///
+/// A caller that can forward progress to its own client (the MCP
+/// server, via `notifications/progress`) uses this; a caller that
+/// cannot (the CLI, the bench) uses [`discover_repos`]. The scan is
+/// fast on today's workspaces, but a tool call that emits nothing is
+/// indistinguishable from a hung one — the client's idle timer cannot
+/// tell the difference, and aborts.
+pub fn discover_repos_reporting(
+    root: &Path,
+    max_depth: usize,
+    momentum: &[Momentum],
+    on_repo: &mut dyn FnMut(ScanProgress),
+) -> PortfolioScan {
     let mut scan = PortfolioScan::default();
     let mut dirs = vec![(root.to_path_buf(), 0usize)];
 
@@ -197,10 +228,22 @@ pub fn discover_repos(root: &Path, max_depth: usize, momentum: &[Momentum]) -> P
     while let Some((dir, depth)) = dirs.pop() {
         let targets_path = dir.join("bullseye.yaml");
         if targets_path.is_file() {
-            match summarize_repo_raw(&dir, &targets_path, &momentum_map) {
-                Ok(summary) => raw_repos.push(RawRepo { summary }),
-                Err(warning) => scan.warnings.push(warning),
-            }
+            let name = match summarize_repo_raw(&dir, &targets_path, &momentum_map) {
+                Ok(summary) => {
+                    let name = summary.repo.clone();
+                    raw_repos.push(RawRepo { summary });
+                    name
+                }
+                Err(warning) => {
+                    let name = warning.repo.clone();
+                    scan.warnings.push(warning);
+                    name
+                }
+            };
+            on_repo(ScanProgress {
+                repos_seen: raw_repos.len() + scan.warnings.len(),
+                repo: name,
+            });
             continue;
         }
 
@@ -810,6 +853,36 @@ mod tests {
         assert!(out.contains("… 35 more frontier targets"));
         // Edge elision is counted, not silently dropped.
         assert!(out.contains("… 90 more cross-repo edges elided"));
+    }
+
+    #[test]
+    fn scan_reports_every_repo_once() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let names = ["alpha", "beta", "gamma"];
+        for name in names {
+            let dir = tmp.path().join("github.com/org").join(name);
+            std::fs::create_dir_all(&dir).expect("repo dir");
+            std::fs::write(
+                dir.join("bullseye.yaml"),
+                "schema_version: 1\ntargets: {}\n",
+            )
+            .expect("write ledger");
+        }
+        let mut seen = Vec::new();
+        let scan = discover_repos_reporting(tmp.path(), 5, &[], &mut |p| {
+            seen.push((p.repos_seen, p.repo));
+        });
+        assert_eq!(scan.repos.len() + scan.warnings.len(), names.len());
+        assert_eq!(seen.len(), names.len());
+        // The counter is the running total, so it walks 1..=n whatever
+        // order the directory walk happens to take.
+        assert_eq!(
+            seen.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            (1..=names.len()).collect::<Vec<_>>()
+        );
+        let mut reported: Vec<&str> = seen.iter().map(|(_, r)| r.as_str()).collect();
+        reported.sort_unstable();
+        assert_eq!(reported, vec!["org/alpha", "org/beta", "org/gamma"]);
     }
 
     #[test]

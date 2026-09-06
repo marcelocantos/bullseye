@@ -61,3 +61,21 @@ Pinned by `format_portfolio_response_stays_under_ceiling`, which fails at
 there. Bullseye is now far below the threshold, but any tool that grows
 its response past it will hit the same silent hang, in any MCP server
 behind that bridge.
+
+## Progress reporting
+
+`bullseye_portfolio` now emits `notifications/progress` every ten repos
+while it scans, when the caller supplies a `progressToken`. Verified
+against the running HTTP server with a listener on the notification
+stream: 16 notifications (`scanned 10 repos — …` … `scanned 160 repos —
+…`) alongside a result returned in 0.54 s.
+
+This is a survivability fix, not the performance fix. The client aborts
+a call that emits nothing for long enough, and it cannot distinguish a
+slow scan from a wedged server; progress removes that failure mode for
+any future workspace where the scan is genuinely slow. It would **not**
+have rescued the 1800 s call — `mcpbridge` does not open the server's
+notification stream at all (the server logs `transport stream does not
+exists or is closed` for every notification sent through it), so the
+notifications reach a direct HTTP client but not one behind the bridge.
+Both are bridge bugs, and both belong upstream in `mcpbridge`.

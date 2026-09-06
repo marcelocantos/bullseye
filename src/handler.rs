@@ -10,7 +10,8 @@ use rust_mcp_sdk::McpServer;
 use rust_mcp_sdk::mcp_server::ServerHandler;
 use rust_mcp_sdk::schema::schema_utils::CallToolError;
 use rust_mcp_sdk::schema::{
-    CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, RpcError,
+    CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams,
+    ProgressNotificationParams, ProgressToken, RpcError,
 };
 
 use crate::api;
@@ -46,8 +47,10 @@ impl ServerHandler for TargetHandler {
     async fn handle_call_tool_request(
         &self,
         params: CallToolRequestParams,
-        _runtime: Arc<dyn McpServer>,
+        runtime: Arc<dyn McpServer>,
     ) -> Result<CallToolResult, CallToolError> {
+        // Lifted before `params` is consumed by the tool decode.
+        let progress_token = params.meta.as_ref().and_then(|m| m.progress_token.clone());
         let tool: TargetTools = TargetTools::try_from(params)?;
 
         match tool {
@@ -72,7 +75,9 @@ impl ServerHandler for TargetHandler {
             TargetTools::ImportTool(t) => handle_import(t),
             TargetTools::ResolveTool(t) => handle_resolve(t),
             TargetTools::StartupContextTool(t) => handle_startup_context(t),
-            TargetTools::PortfolioTool(t) => handle_portfolio(t),
+            TargetTools::PortfolioTool(t) => {
+                handle_portfolio_reporting(t, progress_token, runtime).await
+            }
             TargetTools::SummaryTool(t) => handle_summary(t),
             TargetTools::VerifyTool(t) => handle_verify(t),
             TargetTools::ConvergenceTool(t) => handle_convergence(t),
@@ -1593,7 +1598,83 @@ pub fn handle_resolve(t: crate::tools::ResolveTool) -> ToolResult {
     }
 }
 
+/// How many repos the scan gets through between progress notifications.
+///
+/// One notification per repo would be ~150 messages for a workspace the
+/// size of the owner's, most of them arriving inside a single
+/// millisecond — noise on the wire that tells the caller nothing extra.
+/// Every tenth repo is frequent enough to keep the client's idle timer
+/// alive on a slow scan and cheap enough to be free on a fast one.
+const PROGRESS_EVERY_REPOS: usize = 10;
+
+/// `bullseye_portfolio` with `notifications/progress` while it scans.
+///
+/// A tool call that emits nothing for long enough is aborted by the
+/// client as hung — it has no way to distinguish a slow scan from a
+/// wedged server. The scan itself is fast (tens of ms over ~150 repos),
+/// but "fast on this machine, on this tree, today" is not a property
+/// the protocol can rely on, and the client's idle timer is the thing
+/// that actually decides. When the caller supplies a progress token,
+/// the scan runs on a blocking thread and reports each batch of repos
+/// back through the async side.
+///
+/// Without a token there is nowhere to send progress, so this is the
+/// plain synchronous call.
+async fn handle_portfolio_reporting(
+    t: crate::tools::PortfolioTool,
+    progress_token: Option<ProgressToken>,
+    runtime: Arc<dyn McpServer>,
+) -> ToolResult {
+    let Some(token) = progress_token else {
+        return handle_portfolio(t);
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<portfolio::ScanProgress>();
+    // `CallToolError` wraps a non-`Send` boxed error, so the blocking
+    // task hands back the message and it is re-wrapped here. `tool_err`
+    // re-reads the `code=` prefix, so coded errors survive the round trip.
+    let scan = tokio::task::spawn_blocking(move || {
+        handle_portfolio_with(t, &mut |p| {
+            if p.repos_seen % PROGRESS_EVERY_REPOS == 0 {
+                // A closed receiver means the caller went away; the
+                // scan still finishes and its result is still returned.
+                let _ = tx.send(p);
+            }
+        })
+        .map_err(|e| e.to_string())
+    });
+
+    while let Some(p) = rx.recv().await {
+        // A client that is not listening on the notification stream
+        // makes this fail; the scan is unaffected and still answers.
+        let _ = runtime
+            .notify_progress(ProgressNotificationParams {
+                progress_token: token.clone(),
+                progress: p.repos_seen as f64,
+                // The walk finds repos as it goes; there is no
+                // denominator until it is done.
+                total: None,
+                message: Some(format!("scanned {} repos — {}", p.repos_seen, p.repo)),
+                meta: None,
+            })
+            .await;
+    }
+
+    match scan.await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(message)) => Err(tool_err(message)),
+        Err(e) => Err(tool_err(format!("portfolio scan panicked: {e}"))),
+    }
+}
+
 pub fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
+    handle_portfolio_with(t, &mut |_| {})
+}
+
+fn handle_portfolio_with(
+    t: crate::tools::PortfolioTool,
+    on_repo: &mut dyn FnMut(portfolio::ScanProgress),
+) -> ToolResult {
     // Default root is the user's workspace (`~/work`). Callers
     // wanting to scan external-mode repos pass the external shadow
     // root explicitly (e.g. `~/.local/share/bullseye`).
@@ -1619,7 +1700,7 @@ pub fn handle_portfolio(t: crate::tools::PortfolioTool) -> ToolResult {
             multiplier: m.multiplier,
         })
         .collect();
-    let scan = portfolio::discover_repos(&root, max_depth, &momentum);
+    let scan = portfolio::discover_repos_reporting(&root, max_depth, &momentum, on_repo);
     text_result(portfolio::format_portfolio(&scan))
 }
 
