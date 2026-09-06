@@ -337,17 +337,25 @@ pub fn direct_parent_id(id: &str) -> Option<&str> {
 
 /// Live keys that are direct dotted children of `parent` (`T4.1` and
 /// `T4.2` of `T4`; not `T4.1.1`).
+///
+/// A dotted family is contiguous in the `BTreeMap`'s key order —
+/// every `T4.…` key sorts between `T4.` and `T4/` (the byte after `.`)
+/// — so a range walk from the prefix visits the family and nothing
+/// else: O(log N + family) instead of a scan of every key in the
+/// ledger. Validation calls this once per active target, which made
+/// the scan quadratic on large ledgers.
 pub fn direct_dotted_children<'a>(file: &'a TargetsFile, parent: &str) -> Vec<&'a str> {
     let prefix = format!("{parent}.");
     file.targets
-        .keys()
-        .filter_map(|k| {
-            let suffix = k.strip_prefix(prefix.as_str())?;
-            if suffix.contains('.') || suffix.parse::<u32>().is_err() {
-                None
-            } else {
-                Some(k.as_str())
-            }
+        .range::<str, _>((
+            std::ops::Bound::Excluded(prefix.as_str()),
+            std::ops::Bound::Unbounded,
+        ))
+        .map(|(k, _)| k.as_str())
+        .take_while(|k| k.starts_with(prefix.as_str()))
+        .filter(|k| {
+            let suffix = &k[prefix.len()..];
+            !suffix.contains('.') && suffix.parse::<u32>().is_ok()
         })
         .collect()
 }
