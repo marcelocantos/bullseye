@@ -459,6 +459,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
             value: t.value,
             cost: t.cost,
             acceptance: t.acceptance,
+            checks: t.checks,
             context: t.context,
             status: t.status,
             depends_on: t.depends_on,
@@ -488,6 +489,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                 value: None,
                 cost: None,
                 acceptance: None,
+                checks: None,
                 context: None,
                 status: None,
                 depends_on: None,
@@ -912,12 +914,17 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
     // A key beginning with `_` asks the engine to allocate; an explicit
     // id addresses that target directly.
     let key = t.id.clone().unwrap_or_else(|| "_new".to_string());
+    let checks = match parse_checks_param(t.checks.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return coded_err(api::ErrorCode::InvalidArgs, e),
+    };
     let frag = crate::apply::Fragment {
         name: t.name,
         status: t.status,
         value: t.value,
         cost: t.cost,
         acceptance: t.acceptance,
+        checks,
         context: t.context,
         tags: t.tags,
         depends_on: t.depends_on,
@@ -928,6 +935,28 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         ..Default::default()
     };
     commit_sugar(&t.cwd, key, frag, "track")
+}
+
+/// Parse the `checks` tool parameter (🎯T83).
+///
+/// Taken as a string rather than a typed list because MCP tool schemas
+/// are flat, and a check is a tagged union. YAML is accepted, which
+/// makes JSON work too — every JSON document is valid YAML — so callers
+/// can paste either the ledger form or a JSON literal.
+///
+/// An empty string clears the list, matching how the other
+/// list-replacing fields behave.
+fn parse_checks_param(raw: Option<&str>) -> Result<Option<Vec<crate::schema::Check>>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    if raw.trim().is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    serde_yaml_ng::from_str::<Vec<crate::schema::Check>>(raw).map(Some).map_err(|e| {
+        format!(
+            "`checks` must be a YAML or JSON list of check objects \
+             (e.g. [{{command: {{run: \"cargo test --workspace\"}}}}]): {e}"
+        )
+    })
 }
 
 pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
@@ -1705,9 +1734,10 @@ fn handle_verify(t: crate::tools::VerifyTool) -> ToolResult {
 
     let mut out = format!(
         "# Verification plan for 🎯{} \"{}\"\nFile: {}\n\n\
-         Bullseye cannot call sawmill directly. Execute each planned check via the \
-         sawmill MCP server in order, then populate the report template with outcomes \
-         and file/line-level failures.\n\n\
+         Bullseye executes nothing. Run each planned check yourself in order — \
+         sawmill checks via the sawmill MCP server, `shell` checks by running the \
+         command — then populate the report template with outcomes and \
+         file/line-level failures.\n\n\
          ## Planned checks ({} total)\n\n",
         plan.target_id,
         plan.target_name,
@@ -1716,12 +1746,11 @@ fn handle_verify(t: crate::tools::VerifyTool) -> ToolResult {
     );
 
     for check in &plan.checks {
-        out.push_str(&format!(
-            "{}. sawmill tool `{}` — {}\n",
-            check.index + 1,
-            sawmill_tool_name(check.tool),
-            check.description,
-        ));
+        let via = match check.tool {
+            ops::CheckTool::Shell => "shell".to_string(),
+            other => format!("sawmill tool `{}`", check_tool_name(other)),
+        };
+        out.push_str(&format!("{}. {via} — {}\n", check.index + 1, check.description));
     }
 
     out.push_str("\n## Plan and report template (JSON)\n\n```json\n");
@@ -1731,11 +1760,12 @@ fn handle_verify(t: crate::tools::VerifyTool) -> ToolResult {
     text_result(out)
 }
 
-fn sawmill_tool_name(tool: ops::SawmillTool) -> &'static str {
+fn check_tool_name(tool: ops::CheckTool) -> &'static str {
     match tool {
-        ops::SawmillTool::CheckConventions => "check_conventions",
-        ops::SawmillTool::Query => "query",
-        ops::SawmillTool::CheckInvariants => "check_invariants",
+        ops::CheckTool::CheckConventions => "check_conventions",
+        ops::CheckTool::Query => "query",
+        ops::CheckTool::CheckInvariants => "check_invariants",
+        ops::CheckTool::Shell => "shell",
     }
 }
 
@@ -1958,6 +1988,7 @@ targets:
             value: None,
             cost: None,
             acceptance: None,
+            checks: None,
             context: None,
             status: None,
             depends_on: None,

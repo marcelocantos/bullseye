@@ -603,6 +603,64 @@ pub enum Check {
         /// Name of the sawmill invariant to run.
         invariant: String,
     },
+    /// Run a command and assert its exit status (🎯T83).
+    ///
+    /// The other three kinds are sawmill structural queries, which
+    /// adjudicate *shape*: no `#ifdef` outside `platform/`, no
+    /// deprecated API left. That is a real slice but a narrow one. The
+    /// 2026-09-06 fleet survey found V-coverage at 0 of 995 active
+    /// targets, and named the cause: 218 acceptance clauses assert
+    /// something like "`go test ./...` passes", and the schema had no
+    /// way to say it. This kind closes that gap.
+    Command {
+        /// The command to run and the exit status it must produce.
+        command: CommandCheck,
+    },
+}
+
+/// Parameters for a `command`-kind check (🎯T83).
+///
+/// ```yaml
+/// checks:
+///   - command:
+///       run: cargo test --workspace
+///       expect_exit: 0
+/// ```
+///
+/// **Bullseye never runs this.** Like the sawmill kinds, a command check
+/// is *planned* and handed to the caller, which executes it and reports
+/// the outcome back. Two reasons, and the second is the load-bearing
+/// one:
+///
+/// 1. It preserves the constraint the sawmill kinds already honour —
+///    the server plans, the orchestrating layer executes.
+/// 2. `bullseye.yaml` is a checked-in file that agents write. A server
+///    that shelled out to strings from it would turn every ledger into
+///    an arbitrary-code-execution vector, reachable by anyone who can
+///    land a commit. Planning keeps a human or agent in the loop with
+///    the command in plain sight before it runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandCheck {
+    /// The command line to run, as the caller's shell would see it
+    /// (e.g. `cargo test --workspace`, `make check`, `go test ./...`).
+    pub run: String,
+    /// Directory to run it in, relative to the repo root. Defaults to
+    /// the repo root when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Exit status the command must produce to pass. Defaults to 0,
+    /// which is what almost every check wants; set it when asserting
+    /// that something *fails*, e.g. a guard script that must reject a
+    /// bad input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_exit: Option<i32>,
+}
+
+impl CommandCheck {
+    /// The exit status this check requires, applying the default.
+    pub fn required_exit(&self) -> i32 {
+        self.expect_exit.unwrap_or(0)
+    }
 }
 
 /// Parameters for a `query`-kind check. Mirrors the fields sawmill's

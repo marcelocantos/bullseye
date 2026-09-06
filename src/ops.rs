@@ -4,7 +4,7 @@
 use chrono::Local;
 
 use crate::api::{CodedError, ErrorCode};
-use crate::schema::{Check, QueryCheck, Status, TargetsFile};
+use crate::schema::{Check, CommandCheck, QueryCheck, Status, TargetsFile};
 
 /// Result of a revert operation.
 #[derive(Debug)]
@@ -850,22 +850,25 @@ impl std::fmt::Display for VerifyError {
     }
 }
 
-/// The sawmill tool a single planned check should dispatch to.
+/// What a single planned check should dispatch to.
 ///
-/// These are the *names* of sawmill MCP tools the agent should call.
-/// Bullseye does not invoke sawmill itself — MCP servers cannot call
-/// each other, so this field tells the orchestrating layer (agent or
-/// `/cv` skill) exactly which tool to run. Kept as an enum so callers
-/// can match on it rather than parsing a free-form string.
+/// Bullseye executes none of these. MCP servers cannot call each other,
+/// so this field tells the orchestrating layer (agent or `/cv` skill)
+/// exactly what to run. Kept as an enum so callers can match on it
+/// rather than parsing a free-form string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SawmillTool {
+pub enum CheckTool {
     /// Sawmill's `check_conventions` — runs a named convention.
     CheckConventions,
     /// Sawmill's `query` — runs a structural query.
     Query,
     /// Sawmill's `check_invariants` — phase 2, sawmill 🎯T19.
     CheckInvariants,
+    /// Not an MCP tool: the caller's own shell (🎯T83). Bullseye plans
+    /// the command and never runs it — see [`schema::CommandCheck`] for
+    /// why that boundary is load-bearing rather than incidental.
+    Shell,
 }
 
 /// One planned check: a sawmill tool to invoke and the arguments to
@@ -877,8 +880,8 @@ pub struct PlannedCheck {
     /// the agent key results back by position without relying on
     /// check contents for identity.
     pub index: usize,
-    /// Which sawmill tool to invoke.
-    pub tool: SawmillTool,
+    /// What to invoke: a sawmill tool, or the caller's shell.
+    pub tool: CheckTool,
     /// Human-readable summary of what this check does (for logs and
     /// the fallback text report). Structured fields live in `spec`.
     pub description: String,
@@ -888,6 +891,7 @@ pub struct PlannedCheck {
     /// - `check_conventions` → `{ "convention": "<name>" }`
     /// - `query` → `{ "kind": ..., "pattern": ..., "exclude_path": ..., "expect": N }`
     /// - `check_invariants` → `{ "invariant": "<name>" }`
+    /// - `shell` → `{ "run": "<command>", "cwd": ..., "expect_exit": N }`
     pub spec: CheckSpec,
 }
 
@@ -902,6 +906,7 @@ pub enum CheckSpec {
     Convention { convention: String },
     Query { query: QueryCheck },
     Invariant { invariant: String },
+    Command { command: CommandCheck },
 }
 
 /// Structured verification plan returned by [`verify_plan`]. The
@@ -973,6 +978,7 @@ pub enum CheckKind {
     Convention,
     Query,
     Invariant,
+    Command,
 }
 
 /// A single check failure with file/line-level detail, as required by
@@ -1013,7 +1019,7 @@ pub fn verify_plan(file: &TargetsFile, target_id: &str) -> Result<VerifyPlan, Ve
     for (idx, check) in target.checks.iter().enumerate() {
         let (tool, description, spec, kind) = match check {
             Check::Convention { convention } => (
-                SawmillTool::CheckConventions,
+                CheckTool::CheckConventions,
                 format!("check_conventions convention={convention}"),
                 CheckSpec::Convention {
                     convention: convention.clone(),
@@ -1030,14 +1036,27 @@ pub fn verify_plan(file: &TargetsFile, target_id: &str) -> Result<VerifyPlan, Ve
                 }
                 desc.push_str(&format!(" expect={}", q.expect));
                 (
-                    SawmillTool::Query,
+                    CheckTool::Query,
                     desc,
                     CheckSpec::Query { query: q.clone() },
                     CheckKind::Query,
                 )
             }
+            Check::Command { command: c } => {
+                let mut desc = format!("run {:?}", c.run);
+                if let Some(dir) = &c.cwd {
+                    desc.push_str(&format!(" in {dir}"));
+                }
+                desc.push_str(&format!(" expect_exit={}", c.required_exit()));
+                (
+                    CheckTool::Shell,
+                    desc,
+                    CheckSpec::Command { command: c.clone() },
+                    CheckKind::Command,
+                )
+            }
             Check::Invariant { invariant } => (
-                SawmillTool::CheckInvariants,
+                CheckTool::CheckInvariants,
                 format!("check_invariants invariant={invariant}"),
                 CheckSpec::Invariant {
                     invariant: invariant.clone(),

@@ -481,6 +481,7 @@ const COMMIT_FLAGS: &[(&str, bool)] = &[
     ("--value", true),
     ("--cost", true),
     ("--acceptance", true),
+    ("--checks", true),
     ("--context", true),
     ("--status", true),
     ("--depends-on", true),
@@ -505,6 +506,8 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
         return Ok("bullseye commit --op OP [--cwd DIR] [fields]\n\
              ops: track|block|split|achieve|defer|reopen|assign|unassign|postpone|wake|rehash\n\
              track:  --name NAME --acceptance A [--acceptance A2] [--id ID] [--child-of P]\n\
+             \x20      [--checks YAML]  (executable checks, e.g.\n\
+             \x20      '[{command: {run: cargo test --workspace}}]')\n\
              block:  --id ID --blocks T1[,T2]\n\
              achieve: --id ID --attestation TEXT [--actual-cost N]\n\
              defer/reopen/rehash: --id ID --reason TEXT (rehash: reason only)\n\
@@ -579,6 +582,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
         } else {
             Some(acceptance)
         },
+        checks: flag_value(args, "--checks"),
         context: flag_value(args, "--context"),
         status: flag_value(args, "--status"),
         depends_on: flag_value(args, "--depends-on").map(|s| {

@@ -2356,6 +2356,9 @@ targets:
     acceptance:
     - Deleting the `issues-poll` arm fails a help/dispatch test.
     - 'ENT-012 in docs/audits/entropy-audit-2026-08-22.md is closed: the evidence cited there no longer reproduces on the shipped path'
+    checks:
+    - command:
+        run: cargo test --test cli_parity_test
     context: 'Entropy-audit ENT-012 (P3). Status: observed fact. The standing sentence “every capability is on both surfaces” is true for MCP tools, false for this CLI-only feature. Drift is silent. Remediation: Either add `issues-poll` to a CLI-only route table tested like `CLI_ROUTES`, or document it as CLI/env-only in `STABILITY.md`. Blast: Event-path operators. Report: docs/audits/entropy-audit-2026-08-22.md.'
     tags:
     - entropy-audit
@@ -2447,6 +2450,9 @@ targets:
     - '`make bullseye` compiles the `github-issues` feature (clippy and/or test with `--features github-issues`), so a compile break or a ureq API change reddens the gate rather than surfacing only when someone rebuilds with the feature.'
     - Or the feature is documented as unsupported in STABILITY.md and README until that holds — an explicit choice, not silence.
     - HTTP behaviour against a live Master remains declared residue; a hermetic fixture server would close it but is not required here.
+    checks:
+    - command:
+        run: cargo check --features github-issues
     context: |
       Entropy-audit ENT-003 (P2). Status: observed fact. A compile break, ureq API change, or background-poller hang in the event path will not redden the gate. `github-issues` is a non-default feature (`github-issues = ["dep:ureq"]`), so default builds omit it and the failure shows up only when someone rebuilds with `--features github-issues` or sets `BULLSEYE_ISSUEPIPE_*`. Blast: Event-path consumers (🎯T33/T35); `issues-poll` CLI; MCP background spawn. Report: docs/audits/entropy-audit-2026-08-22.md.
 
@@ -2806,6 +2812,11 @@ targets:
     - If normalising a field across the whole ledger is genuinely intended, it happens only under an explicit opt-in op (e.g. a `rehash`/`normalise` operation), never as a side effect of a single-target patch.
     - The result header's `changed:` list names every target the write actually modified. Today it reports only the target the caller named, which is false whenever normalisation touches others.
     - A regression test loads a ledger containing a non-achieved target with an `achieved:` date, patches a different target, and asserts the first target's record is byte-identical.
+    checks:
+    - command:
+        run: cargo test --workspace
+    - command:
+        run: cargo test --test core_test write_isolation
     context: |-
       **Reproduced 2026-09-06** during the `house-notice` burst (fleet-wide NOTICE rename, `~/think` 🎯T2). Patching `acceptance` on a single target in `squz/yourworld2`'s ledger silently stripped the `achieved:` date from 13 other, untouched targets.
 
@@ -2840,6 +2851,40 @@ targets:
     origin: owner
     discovered: 2026-09-13
     achieved: 2026-09-13
+  T84:
+    name: A target's acceptance can be adjudicated by running a command, not only by a sawmill structural query
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    attestation: 'Delivered on burst/fix. 393 tests pass (was 390). Four real command checks declared on T82, T74.3 and T74.12 all executed green against the product; reverting the T82 fix turned its two red at exit 101 and restoring turned them green, so the checks adjudicate the product. Residue: nothing consumes results yet, and an older binary cannot parse a ledger carrying this kind.'
+    acceptance:
+    - 'checks: accepts a command kind carrying a command line, an optional working directory, and an expected exit status defaulting to 0; a non-zero expectation is expressible so a guard that must reject bad input can be checked.'
+    - 'Bullseye never runs the command: plan_checks names shell as the tool and hands it to the caller, the contract the sawmill kinds already honour. A test plans a command that would leave a filesystem trace and asserts the trace is absent.'
+    - The kind survives a bullseye.yaml round trip unchanged, and an absent expect_exit is not written back as noise.
+    - checks is writable through the tools and the CLI; before this no code path could set it.
+    - At least three targets in this ledger carry real command checks, executed green against the product and red against a deliberately broken one.
+    checks:
+    - command:
+        run: cargo test --test core_test verify_plan
+    context: |-
+      Filed and delivered 2026-09-06 in the burst house-notice track, on branch burst/fix.
+
+      WHY. The fleet V-coverage survey (~/think/burst-2026-09/reports/vcoverage.md, 2026-09-06) measured executable checks at 0 of 995 active targets across 58 ledgers — not two repos, zero. It located the cause in the schema rather than in authoring discipline: `checks:` accepted convention, query and invariant, all three sawmill structural queries. Those adjudicate shape (no #ifdef outside platform/, no deprecated API left), which is real but narrow. Meanwhile 218 acceptance clauses fleet-wide assert that a command passes. None of it was expressible.
+
+      THE EXECUTION BOUNDARY IS DELIBERATE. Bullseye plans the command and never runs it. MCP servers cannot call each other, which is why plan_checks already exists in this shape. The sharper reason is that bullseye.yaml is a checked-in file agents write: a server that shelled out to strings from it would turn every ledger into an arbitrary-code-execution vector reachable by anyone who can land a commit. Planning keeps the command in plain sight before it runs. The test bullseye_never_executes_a_command_check asserts this rather than trusting it.
+
+      THE UNREACHABLE-FIELD HALF. Adding the kind alone would have changed nothing: no tool or CLI path could write `checks`, so the only way to declare one was to hand-edit the ledger, which its own banner forbids. That is the other half of why coverage was zero, and it is fixed here.
+
+      EVIDENCE. Three targets in this ledger carry checks — T82 (cargo test --workspace, plus its own regression module), T74.3 (cargo check --features github-issues, the compile its acceptance is about), T74.12 (cargo test --test cli_parity_test, the surface-parity oracle it names). All four planned checks ran green. Reverting the T82 fix turned both of its checks red at exit 101, and restoring it turned them green again, so the checks adjudicate the product rather than themselves.
+
+      RESIDUE 1: nothing consumes the results yet. A caller runs the plan and fills in the report template by hand. Wiring the loop into /cv or a standing gate is the next step; until then these checks are an available oracle, not an enforced one.
+
+      RESIDUE 2: forward compatibility. Check is an untagged serde enum, so a bullseye binary older than this commit fails to PARSE a whole ledger containing a command check — "data did not match any variant of untagged enum Check" — rather than degrading. This was hit for real while filing this target: the installed MCP binary refused the ledger. Any repo adopting command checks must have every consumer upgraded first. That is the same delivery-gap shape T68's reachability oracle was built for.
+
+      RESIDUE 3: three targets in one repo is a demonstration, not fleet coverage.
+    origin: fleet V-coverage survey 2026-09-06
+    discovered: 2026-09-06
+    achieved: 2026-09-06
   T9:
     name: agents-guide documents parallelised bullseye Makefile convention
     status: achieved

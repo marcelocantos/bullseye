@@ -522,6 +522,7 @@ pub fn t64_commit(cwd: &str, op: &str) -> bullseye::tools::CommitTool {
         value: None,
         cost: None,
         acceptance: None,
+        checks: None,
         context: None,
         status: None,
         depends_on: None,
