@@ -36,21 +36,21 @@ items:
   # ============================== CORRECTNESS =============================
   - id: correctness.tests
     dim: correctness
-    desc: cargo test runs on every push/PR (ci.yml `check` job)
+    desc: cargo test runs in the local gate (`make bullseye`), the whole definition of green
     state: enforced
     cadence: continuous
     enforce: blocking
     tier: 1
-    evidence: {ci_step: {workflow: ci.yml, name: Test}}
+    evidence: {file: {path: Makefile, matches: 'cargo test'}}
 
   - id: correctness.release-multitarget
     dim: correctness
-    desc: Release builds (and tests, except aarch64-linux) across darwin-arm64, linux-amd64, linux-arm64
+    desc: Release builds all three triples — darwin-arm64 natively, the linux pair via cargo-zigbuild
     state: present
     cadence: per-release
     enforce: warning
     tier: 2
-    evidence: {ci_job: release.yml#build}
+    evidence: {file: {path: scripts/release-package.sh, matches: 'aarch64-unknown-linux-gnu'}}
 
   - id: correctness.miri
     dim: correctness
@@ -107,12 +107,15 @@ items:
   - id: security.actions-perms
     dim: security
     desc: GitHub Actions default token permissions scoped to least privilege
-    state: planned
+    state: skipped
     cadence: once-must-hold
     enforce: warning
     tier: 3
-    reason: No top-level `permissions:` block in the workflows; inherits repo default.
-    evidence: {absent: {ci_step: {workflow: ci.yml, name: permissions}}}
+    reason: >-
+      No GitHub Actions at all since 22bf362 — the gate and the publish path both
+      run on the dev Mac, so there is no Actions token to scope. Revisit if a
+      workflow is ever reintroduced.
+    evidence: {absent: {file: {path: .github/workflows}}}
 
   - id: security.signed-releases
     dim: security
@@ -121,27 +124,27 @@ items:
     cadence: per-release
     enforce: informational
     tier: 3
-    reason: release.yml uploads assets via `gh release`; no signing/attestation step yet.
-    evidence: {absent: {ci_step: {workflow: release.yml, name: Sign}}}
+    reason: scripts/release-publish.sh uploads assets via `gh release`; no signing/attestation step yet.
+    evidence: {absent: {file: {path: scripts/release-publish.sh, matches: 'cosign|sigstore|attest'}}}
 
   # ============================== CODE QUALITY ============================
   - id: quality.format
     dim: quality
-    desc: Sources are rustfmt-clean, enforced in CI (cargo fmt --check)
+    desc: Sources are rustfmt-clean, enforced by the local gate (cargo fmt --check)
     state: enforced
     cadence: continuous
     enforce: blocking
     tier: 2
-    evidence: {ci_step: {workflow: ci.yml, name: Check formatting}}
+    evidence: {file: {path: Makefile, matches: 'cargo fmt --check'}}
 
   - id: quality.lint
     dim: quality
-    desc: clippy clean with warnings denied (cargo clippy -- -D warnings)
+    desc: clippy clean with warnings denied, enforced by the local gate (cargo clippy -- -D warnings)
     state: enforced
     cadence: continuous
     enforce: blocking
     tier: 2
-    evidence: {ci_step: {workflow: ci.yml, name: Clippy}}
+    evidence: {file: {path: Makefile, matches: 'cargo clippy .*-D warnings'}}
 
   # =========================== DEPENDENCY HEALTH ==========================
   - id: deps.freshness
@@ -166,23 +169,23 @@ items:
         test "$(grep -m1 -E '^version' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
         = "$(git describe --tags --abbrev=0 | tr -d v)"
 
-  - id: release.ci-built
+  - id: release.dist-built
     dim: release
-    desc: Release binaries are built by CI across all target triples, never locally
+    desc: Release tarballs for every target triple come from one tracked script, never an ad-hoc build
     state: present
     cadence: per-release
     enforce: warning
     tier: 2
-    evidence: {ci_job: release.yml#build}
+    evidence: {file: {path: scripts/release-package.sh, matches: 'SHA256SUMS|sha256'}}
 
   - id: release.homebrew
     dim: release
-    desc: Published to the Homebrew tap on release
+    desc: Published to the Homebrew tap on release (tapper push, from the dev Mac)
     state: present
     cadence: per-release
     enforce: informational
     tier: 2
-    evidence: {ci_job: release.yml#homebrew}
+    evidence: {file: {path: tapper.yaml, matches: 'name: homebrew-tap'}}
 
   - id: release.changelog
     dim: release
@@ -273,12 +276,12 @@ items:
   # ============================ DOCUMENTATION ============================
   - id: docs.rustdoc
     dim: docs
-    desc: cargo doc builds cleanly in CI (no broken intra-doc links)
+    desc: cargo doc builds cleanly in the gate (no broken intra-doc links)
     state: planned
     cadence: continuous
     enforce: informational
     tier: 3
-    reason: Docs are not built in CI yet.
+    reason: The gate does not build docs, and there is no CI to build them in.
     evidence: {absent: {ci_step: {workflow: ci.yml, name: Docs}}}
 
   - id: docs.todo
