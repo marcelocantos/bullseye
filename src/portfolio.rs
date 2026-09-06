@@ -26,6 +26,30 @@ pub struct CrossRepoEdgeRef {
 /// cross-repo enablers above equally-valued local-only targets.
 const ENABLER_FRACTION: f64 = 0.25;
 
+/// How many top-ranked repos are rendered with per-target WSJF
+/// reasoning. Everything below the cut still appears, as one ranked
+/// line per repo, so nothing is hidden — only the reasoning is
+/// elided.
+///
+/// The cut exists because the portfolio response is a payload, not a
+/// screen: over the owner's `~/work` (133 repos, 1716 frontier
+/// targets) the unbounded form rendered 205 KB, which is more than the
+/// MCP stdio bridge relays and far more than a caller can read. Twenty
+/// is the depth a cross-repo prioritisation decision actually uses —
+/// the WSJF ordering means repo #21 is by construction not the answer
+/// to "what should I work on".
+const DETAILED_REPOS: usize = 20;
+
+/// Frontier targets shown per detailed repo. The list is already WSJF
+/// ordered, so the head is the recommendation and the tail is context
+/// the caller can fetch per-repo with `bullseye_query`.
+const TARGETS_PER_REPO: usize = 5;
+
+/// Cross-repo edge lines rendered before the section is summarised.
+/// Edges are the smallest section in practice; the bound is here so a
+/// pathological ledger cannot reintroduce an unbounded response.
+const MAX_CROSS_EDGE_LINES: usize = 60;
+
 /// A frontier target within a portfolio summary. Carries the bits
 /// `format_portfolio` needs to render with priority boosts and WSJF
 /// reasoning.
@@ -490,7 +514,8 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
 
     if !with_frontier.is_empty() {
         out.push_str("## Ready for work (ranked by WSJF)\n\n");
-        for (rank, repo) in with_frontier.iter().enumerate() {
+        let (detailed, rest) = with_frontier.split_at(DETAILED_REPOS.min(with_frontier.len()));
+        for (rank, repo) in detailed.iter().enumerate() {
             out.push_str(&format!(
                 "**#{rank} {repo_name}** — WSJF {score:.2}, {active} active, {frontier} frontier\n",
                 rank = rank + 1,
@@ -501,7 +526,8 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
             ));
 
             // Per-repo reasoning: top contributing targets.
-            for ft in &repo.frontier_targets {
+            let shown = TARGETS_PER_REPO.min(repo.frontier_targets.len());
+            for ft in &repo.frontier_targets[..shown] {
                 let mut annotations = Vec::new();
                 if ft.cross_enables_count > 0 {
                     annotations.push(format!("enables {} cross-repo", ft.cross_enables_count));
@@ -533,6 +559,30 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
                     annotation = annotation_str,
                 ));
             }
+            let hidden = repo.frontier_targets.len() - shown;
+            if hidden > 0 {
+                out.push_str(&format!(
+                    "  … {hidden} more frontier targets — `bullseye query --view frontier` in {}\n",
+                    repo.path.display(),
+                ));
+            }
+            out.push('\n');
+        }
+        if !rest.is_empty() {
+            out.push_str(&format!(
+                "### Ranked below the top {DETAILED_REPOS} ({} repos, one line each)\n\n",
+                rest.len(),
+            ));
+            for (offset, repo) in rest.iter().enumerate() {
+                out.push_str(&format!(
+                    "#{rank} {repo_name} — WSJF {score:.2}, {active} active, {frontier} frontier\n",
+                    rank = DETAILED_REPOS + offset + 1,
+                    repo_name = repo.repo,
+                    score = repo.wsjf_score,
+                    active = repo.active,
+                    frontier = repo.frontier,
+                ));
+            }
             out.push('\n');
         }
     }
@@ -544,9 +594,17 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
         .collect();
     if !repos_with_cross.is_empty() {
         out.push_str("## Cross-repo edges\n\n");
+        let total_edges: usize = repos_with_cross
+            .iter()
+            .map(|r| r.cross_depends.len() + r.cross_enables.len())
+            .sum();
+        let mut lines_left = MAX_CROSS_EDGE_LINES;
         for repo in &repos_with_cross {
+            if lines_left == 0 {
+                break;
+            }
             out.push_str(&format!("**{}**\n", repo.repo));
-            for edge_ref in &repo.cross_depends {
+            for edge_ref in repo.cross_depends.iter().take(lines_left) {
                 out.push_str(&format!(
                     "  🎯{src} depends on {ref_} @ {repo}",
                     src = edge_ref.source_target,
@@ -558,7 +616,8 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
                 }
                 out.push('\n');
             }
-            for edge_ref in &repo.cross_enables {
+            lines_left = lines_left.saturating_sub(repo.cross_depends.len());
+            for edge_ref in repo.cross_enables.iter().take(lines_left) {
                 out.push_str(&format!(
                     "  🎯{src} enables {ref_} @ {repo}",
                     src = edge_ref.source_target,
@@ -570,7 +629,12 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
                 }
                 out.push('\n');
             }
+            lines_left = lines_left.saturating_sub(repo.cross_enables.len());
             out.push('\n');
+        }
+        let elided = total_edges - (MAX_CROSS_EDGE_LINES - lines_left);
+        if elided > 0 {
+            out.push_str(&format!("… {elided} more cross-repo edges elided\n\n"));
         }
     }
 
@@ -674,6 +738,78 @@ mod tests {
     fn repo_name_fallback() {
         let p = Path::new("/some/random/path");
         assert_eq!(repo_name_from_path(p), "random/path");
+    }
+
+    /// Ceiling the formatted response must stay under, in bytes.
+    ///
+    /// Derived from the failure it exists to prevent: the MCP stdio
+    /// bridge relayed a 55 KB portfolio response and hung indefinitely
+    /// on the next size up, so a caller that scans a large workspace
+    /// must land well under that. 64 KB is the boundary; 32 KB is the
+    /// bound with room for a workspace twice the owner's.
+    const RESPONSE_CEILING_BYTES: usize = 32 * 1024;
+
+    /// A portfolio the size of a large workspace: 150 repos, 40
+    /// frontier targets each, every repo carrying cross-repo edges.
+    fn big_scan() -> PortfolioScan {
+        let repos = (0..150)
+            .map(|i| {
+                let targets: Vec<PortfolioFrontierTarget> = (0..40)
+                    .map(|j| {
+                        pft(
+                            &format!("T{j}"),
+                            "a frontier target with a reasonably long name",
+                            (40 - j) as f64,
+                        )
+                    })
+                    .collect();
+                RepoSummary {
+                    repo: format!("org/repo-with-a-longish-name-{i}"),
+                    path: PathBuf::from(format!("/work/github.com/org/repo-{i}")),
+                    active: 60,
+                    frontier: targets.len(),
+                    achieved: 100,
+                    wsjf_score: (150 - i) as f64,
+                    frontier_targets: targets,
+                    cross_depends: vec![CrossRepoEdgeRef {
+                        source_target: "T1".to_string(),
+                        edge: CrossEdge {
+                            repo: format!("org/repo-{}", i + 1),
+                            target: Some("T2".to_string()),
+                            capability: None,
+                            note: Some("a note of some length".to_string()),
+                        },
+                    }],
+                    cross_enables: Vec::new(),
+                }
+            })
+            .collect();
+        PortfolioScan {
+            repos,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn format_portfolio_response_stays_under_ceiling() {
+        let out = format_portfolio(&big_scan());
+        assert!(
+            out.len() < RESPONSE_CEILING_BYTES,
+            "portfolio response was {} bytes, ceiling is {RESPONSE_CEILING_BYTES}",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn format_portfolio_accounts_for_everything_it_elides() {
+        let out = format_portfolio(&big_scan());
+        // Every repo is still ranked, detailed or not.
+        assert!(out.contains("### Ranked below the top 20 (130 repos, one line each)"));
+        assert!(out.contains("org/repo-with-a-longish-name-149"));
+        // Detailed repos say how many targets they did not show.
+        assert!(out.contains("… 35 more frontier targets"));
+        // Edge elision is counted, not silently dropped.
+        assert!(out.contains("… 90 more cross-repo edges elided"));
     }
 
     #[test]
