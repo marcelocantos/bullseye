@@ -214,6 +214,7 @@ fn mutation_does_not_create_yaml_only_git_commit() {
         value: None,
         cost: None,
         acceptance: Some(vec!["a".into()]),
+        checks: None,
         context: None,
         status: None,
         depends_on: None,

@@ -30,7 +30,7 @@ use serde::Deserialize;
 
 use crate::api::ErrorCode;
 use crate::ops;
-use crate::schema::{OwnedBy, Status, Target, TargetsFile};
+use crate::schema::{Check, OwnedBy, Status, Target, TargetsFile};
 
 /// Every field a fragment may carry, and therefore every field an
 /// agent can reach through `apply`.
@@ -54,6 +54,9 @@ pub struct Fragment {
     pub actual_cost: Option<f64>,
     /// How to verify the desired state is achieved. Replaces the list.
     pub acceptance: Option<Vec<String>>,
+    /// Executable checks. Replaces the list (🎯T83). Acceptance is prose
+    /// a human adjudicates; this is what a machine can run unattended.
+    pub checks: Option<Vec<Check>>,
     /// Why this target matters, how it was discovered.
     pub context: Option<String>,
     /// Freeform tags. Replaces the list.
@@ -133,6 +136,10 @@ pub const FIELD_HELP: &[FieldHelp] = &[
     FieldHelp {
         name: "acceptance",
         blurb: "verification criteria (replaces the list)",
+    },
+    FieldHelp {
+        name: "checks",
+        blurb: "executable checks (replaces the list)",
     },
     FieldHelp {
         name: "context",
@@ -233,6 +240,7 @@ pub const POLICY: &[Obligation] = &[
 pub const UNOBLIGED_FIELDS: &[&str] = &[
     "name",
     "acceptance",
+    "checks",
     "context",
     "tags",
     "value",
@@ -620,7 +628,7 @@ pub fn apply(
                     .then(|| frag.attestation.clone())
                     .flatten(),
                 acceptance,
-                checks: Vec::new(),
+                checks: frag.checks.clone().unwrap_or_default(),
                 context: frag.context.clone().unwrap_or_default(),
                 gates: Vec::new(),
                 depends_on: frag.depends_on.clone().unwrap_or_default(),
@@ -647,6 +655,7 @@ pub fn apply(
                 || frag.value.is_some()
                 || frag.cost.is_some()
                 || frag.acceptance.is_some()
+                || frag.checks.is_some()
                 || frag.context.is_some()
                 || frag.tags.is_some()
                 || frag.origin.is_some()
@@ -676,6 +685,9 @@ pub fn apply(
             }
             if let Some(v) = &frag.acceptance {
                 target.acceptance = v.clone();
+            }
+            if let Some(v) = &frag.checks {
+                target.checks = v.clone();
             }
             if let Some(v) = &frag.context {
                 target.context = v.clone();

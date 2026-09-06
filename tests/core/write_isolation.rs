@@ -380,6 +380,7 @@ targets:
         value: None,
         cost: None,
         acceptance: None,
+        checks: None,
         context: None,
         status: None,
         depends_on: None,

@@ -146,6 +146,14 @@ pub struct CommitTool {
     #[serde(default)]
     pub acceptance: Option<Vec<String>>,
 
+    /// Executable checks as YAML or JSON (🎯T83), e.g.
+    /// `[{command: {run: "cargo test --workspace"}}]`. Replaces the
+    /// list. Acceptance is prose a human adjudicates; `checks` is what a
+    /// machine can run unattended. Bullseye never executes them — it
+    /// plans them for you via `bullseye_plan_checks`.
+    #[serde(default)]
+    pub checks: Option<String>,
+
     /// Context prose.
     #[serde(default)]
     pub context: Option<String>,
@@ -347,6 +355,13 @@ pub struct PutTool {
     /// Acceptance criteria — how to verify the target is achieved. Required on create.
     #[serde(default)]
     pub acceptance: Option<Vec<String>>,
+
+    /// Executable checks as YAML or JSON (🎯T83), e.g.
+    /// `[{command: {run: "cargo test --workspace"}}]`. Replaces the
+    /// list. Acceptance is prose a human adjudicates; `checks` is what a
+    /// machine can run unattended. Bullseye never executes them.
+    #[serde(default)]
+    pub checks: Option<String>,
 
     /// Why this target matters.
     #[serde(default)]
@@ -959,7 +974,7 @@ pub struct SyncPrioritiesTool {
         beginning with `_` allocates an ID, reported back in the `ids:` header (never \
         predict the next ID by scanning the file). Optional top-level `base: sha256:…` is \
         a CAS token: a mismatch is code=conflict, meaning the ledger moved under you. \
-        Patchable fields: name, status, value, cost, actual_cost, acceptance, context, \
+        Patchable fields: name, status, value, cost, actual_cost, acceptance, checks, context, \
         tags, depends_on, blocks, origin, child_of, attestation, reason, owner, \
         postponed_until, postpone_predicate, `clear` (a list of fields to reset to empty — \
         omitting a field means leave it alone, so `clear` is how a field becomes nothing), \
