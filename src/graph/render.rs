@@ -7,6 +7,7 @@
 //! or validation logic belongs here.
 
 use std::collections::{BTreeMap, HashSet};
+use std::ops::Bound;
 
 use crate::schema::{Status, TargetsFile};
 
@@ -267,24 +268,21 @@ pub fn summary(
                 target.name, target.status, target.value, target.cost,
             ));
         } else {
-            // Count achieved children (from all targets, not just active).
-            let total_children = all_targets
-                .keys()
-                .filter(|cid| {
-                    cid.starts_with(*id)
-                        && cid.len() > id.len()
-                        && cid.as_bytes().get(id.len()) == Some(&b'.')
-                })
-                .count();
-            let achieved_children = all_targets
-                .iter()
-                .filter(|(cid, t)| {
-                    cid.starts_with(*id)
-                        && cid.len() > id.len()
-                        && cid.as_bytes().get(id.len()) == Some(&b'.')
-                        && t.status == Status::Achieved
-                })
-                .count();
+            // Count achieved descendants (every `<id>.…` key, all
+            // statuses). The family is contiguous in key order, so a
+            // range walk from the prefix visits exactly the family;
+            // two full-key scans per top-level target made this section
+            // quadratic on large ledgers.
+            let prefix = format!("{id}.");
+            let (total_children, achieved_children) = all_targets
+                .range::<str, _>((Bound::Excluded(prefix.as_str()), Bound::Unbounded))
+                .take_while(|(cid, _)| cid.starts_with(prefix.as_str()))
+                .fold((0usize, 0usize), |(total, achieved), (_, t)| {
+                    (
+                        total + 1,
+                        achieved + usize::from(t.status == Status::Achieved),
+                    )
+                });
 
             out.push_str(&format!(
                 "🎯{id} {} [{:?}]  ({achieved_children}/{total_children} achieved)\n",
