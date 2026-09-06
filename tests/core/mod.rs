@@ -25,3 +25,4 @@ mod store;
 mod subdivide;
 mod tool_schema;
 mod verify_plan;
+mod write_isolation;

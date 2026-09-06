@@ -971,7 +971,13 @@ fn revert_clears_attestation() {
     let t1 = &file.targets["T1"];
     assert_eq!(t1.status, Status::Converging);
     assert!(t1.attestation.is_none(), "attestation must clear on revert");
-    assert!(t1.achieved.is_none());
+    // 🎯T82: the date does NOT clear. The attestation claims present
+    // verification and must go; the date records that T1 was achieved on
+    // a particular day, which stays true after the reopen.
+    assert!(
+        t1.achieved.is_some(),
+        "the achievement date is history and survives revert",
+    );
 
     config::set_external_root_override(None);
 }

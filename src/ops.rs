@@ -76,13 +76,18 @@ pub fn revert(
     }
 
     target.status = Status::Converging;
-    // Drop every field the new status forbids (🎯T64) — the achieved
-    // date and the achieved-only attestation (🎯T58, so a later
-    // re-achieve must supply a fresh one), plus anything else the
-    // schema scopes to a status this target has just left. Hand-listing
-    // the fields here is what let `set_aside_reason` survive a
-    // set_aside → reopen → achieve walk and permanently invalidate the
-    // target; `schema::STATUS_SCOPED_FIELDS` now owns the list.
+    // Drop every field the new status forbids (🎯T64) — the achieved-only
+    // attestation (🎯T58, so a later re-achieve must supply a fresh one),
+    // plus anything else the schema scopes to a status this target has
+    // just left. Hand-listing the fields here is what let
+    // `set_aside_reason` survive a set_aside → reopen → achieve walk and
+    // permanently invalidate the target; `schema::STATUS_SCOPED_FIELDS`
+    // now owns the list.
+    //
+    // The `achieved` date is deliberately NOT among them (🎯T82). It
+    // records when this target was last delivered, which is exactly the
+    // history a reopen needs to preserve; the appended `Reverted ...`
+    // context line below says the delivery did not hold.
     target.clear_illegal_status_scoped_fields();
 
     let trimmed = reason.trim();

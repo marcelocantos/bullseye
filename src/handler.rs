@@ -2073,7 +2073,19 @@ targets:
         handle_revert(tool).expect("revert should succeed");
         let t1 = load_target(&cwd, "T1");
         assert_eq!(t1.status, Status::Converging);
-        assert!(t1.achieved.is_none(), "achieved date should be cleared");
+        // 🎯T82: the achieved date is history, not status, so it survives
+        // the reopen — it records that this target *was* delivered, which
+        // is precisely what a reader of a reopened target needs to know.
+        // The attestation does not survive: it claims present
+        // verification, and a re-achieve must supply a fresh one (🎯T58).
+        assert!(
+            t1.achieved.is_some(),
+            "the previous achievement date should be preserved",
+        );
+        assert!(
+            t1.attestation.is_none(),
+            "attestation should be cleared on reopen",
+        );
         assert!(
             t1.context.contains("Reverted ") && t1.context.contains("regression detected"),
             "context should record the reason: {:?}",

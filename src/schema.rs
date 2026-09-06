@@ -268,7 +268,14 @@ pub struct Target {
     /// Date the target was discovered.
     pub discovered: NaiveDate,
 
-    /// Date the target was achieved (filled on retirement).
+    /// Date the target was **most recently** achieved (filled on
+    /// retirement).
+    ///
+    /// This is provenance, not status (🎯T82). It survives a reopen, so
+    /// a target that was delivered and later regressed still carries the
+    /// date it was delivered — read alongside the `Reverted <date>:
+    /// <reason>` line `revert` appends to `context`. Ask `status`, never
+    /// this field, whether a target is achieved *now*.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub achieved: Option<NaiveDate>,
 
@@ -470,13 +477,22 @@ pub const STATUS_SCOPED_FIELDS: &[StatusScopedField] = &[
         present: |t| t.attestation.is_some(),
         clear: |t| t.attestation = None,
     },
-    StatusScopedField {
-        name: "achieved",
-        legal_where: "status achieved",
-        legal_on: |s| s == Status::Achieved,
-        present: |t| t.achieved.is_some(),
-        clear: |t| t.achieved = None,
-    },
+    // NOTE (🎯T82): `achieved` is deliberately absent from this table.
+    // It is not a status attribute — it is a historical fact: the date
+    // this target was most recently achieved. `status` alone answers
+    // "is it achieved now", and nothing in the codebase infers
+    // achievement from the date (`TargetsFile::achieved()` filters
+    // strictly on `Status::Achieved`).
+    //
+    // Listing it here made every reopen erase the only record that the
+    // target had ever been delivered, and — because healing runs
+    // ledger-wide at load — made any unrelated write erase it in bulk.
+    // On the yourworld2 ledger a single one-word acceptance patch
+    // stripped thirteen such dates while reporting `changed: T57`.
+    //
+    // `attestation` stays in the table on purpose: it asserts a target
+    // is *currently* verified, so reopening must clear it and force a
+    // re-achieve to supply a fresh one (🎯T58).
     StatusScopedField {
         name: "owned_by",
         legal_where: "active targets",

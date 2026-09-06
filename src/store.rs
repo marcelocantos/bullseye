@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,8 @@ use crate::config::{Location, external_root};
 use sha2::{Digest, Sha256};
 
 use crate::schema::{
-    CURRENT_SCHEMA_VERSION, TargetsFile, heal_status_scoped_residue, migrate_gates_to_depends_on,
+    CURRENT_SCHEMA_VERSION, Target, TargetsFile, heal_status_scoped_residue,
+    migrate_gates_to_depends_on,
 };
 
 /// Maximum time we'll wait for another bullseye process to release the
@@ -370,7 +371,11 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
 /// This is the inner implementation shared by [`load`] and the cache-miss
 /// path. Callers should prefer [`load`] which adds mtime-based caching on
 /// top.
-fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
+/// Parse without the 🎯T64 self-heal, so callers that must distinguish
+/// "what the file says" from "what the file means" can see the residue.
+/// Only [`with_locked_mutation`] needs this; everything else wants
+/// [`parse_file`].
+fn parse_file_unhealed(path: &Path) -> Result<TargetsFile, LoadError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
     let mut file: TargetsFile = serde_yaml_ng::from_str(&content)
@@ -388,11 +393,21 @@ fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
         file.schema_version = Some(CURRENT_SCHEMA_VERSION);
     }
     migrate_gates_to_depends_on(&mut file);
+    Ok(file)
+}
+
+fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
+    let mut file = parse_file_unhealed(path)?;
     // 🎯T64: a file that already carries status-scoped residue (from an
     // older binary or a hand edit) heals here rather than staying
-    // permanently invalid. Same contract as the gates migration above:
-    // every in-memory `TargetsFile` the rest of the codebase sees is
-    // already normalised, and the next save persists the repair.
+    // permanently invalid, so every in-memory `TargetsFile` the rest of
+    // the codebase sees is already normalised.
+    //
+    // Persisting that repair is a separate question (🎯T82). A read
+    // never writes, and `with_locked_mutation` writes back only the
+    // targets its caller actually touched, so an unrelated patch cannot
+    // launder a ledger-wide rewrite into itself. `bullseye_commit
+    // op=rehash` exists to persist the repair deliberately.
     heal_status_scoped_residue(&mut file);
     Ok(file)
 }
@@ -767,7 +782,27 @@ where
     let _lock = acquire_lock(path)?;
 
     // --- Critical section: flock held. ---
+    // Two views of the same bytes: `raw` is what the file literally
+    // says, `file` is that healed into schema-legal shape (🎯T64). The
+    // mutation runs on the healed view — every op is entitled to assume
+    // a normalised ledger — but the healing itself is not this write's
+    // business to persist (🎯T82).
+    let raw = parse_file_unhealed(path).map_err(MutationError::Load)?;
     let mut file = parse_file(path).map_err(MutationError::Load)?;
+    let healed_ids: Vec<String> = raw
+        .targets
+        .iter()
+        .filter(|(id, raw_target)| {
+            file.targets
+                .get(*id)
+                .is_some_and(|healed| healed != *raw_target)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    let healed_snapshot: BTreeMap<String, Target> = healed_ids
+        .iter()
+        .filter_map(|id| file.targets.get(id).map(|t| (id.clone(), t.clone())))
+        .collect();
     let stamp_before = file_stamp(path);
 
     let output = f(&mut file).map_err(|e| MutationError::Apply(e.into()))?;
@@ -777,6 +812,18 @@ where
         return Err(MutationError::Conflict {
             path: path.to_path_buf(),
         });
+    }
+
+    // Restore the pre-heal record of every target the mutation left
+    // exactly as healing found it. A target the closure genuinely edited
+    // keeps its edit — including the healing, since the caller took
+    // responsibility for that record. The rest go back to what the file
+    // said, so patching one target cannot silently rewrite others.
+    for (id, healed) in &healed_snapshot {
+        let untouched = file.targets.get(id).is_some_and(|now| now == healed);
+        if untouched && let Some(original) = raw.targets.get(id) {
+            file.targets.insert(id.clone(), original.clone());
+        }
     }
 
     save(path, &file).map_err(MutationError::Save)?;
