@@ -20,6 +20,10 @@ sqlite = ["dep:rusqlite"]
 # Default build stays free of the HTTP client dep.
 github-issues = ["dep:ureq"]
 
+[[bench]]
+name = "hot_paths"
+harness = false
+
 [dependencies]
 async-trait = "0.1.89"
 chrono = { version = "0.4.44", features = ["serde"] }

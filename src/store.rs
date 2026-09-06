@@ -369,8 +369,9 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
 ///
 /// This is the inner implementation shared by [`load`] and the cache-miss
 /// path. Callers should prefer [`load`] which adds mtime-based caching on
-/// top.
-fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
+/// top. Public so the bench harness can measure the parse itself rather
+/// than a cache hit (`benches/hot_paths.rs`).
+pub fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
     let mut file: TargetsFile = serde_yaml_ng::from_str(&content)
