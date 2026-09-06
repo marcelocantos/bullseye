@@ -126,13 +126,34 @@ so the flock + CAS + `content_hash` machinery stays load-bearing.
 ## Delivery
 
 Committed to master. Work lands as ordinary commits on `master` — no
-pull requests, no merge commits, no CI gate.
+pull requests, no merge commits, no CI gate. GitHub Actions was removed
+on purpose (22bf362, 2026-08-26); do not re-add a workflow.
 
-`make bullseye` is the gate, and it is the whole definition of green:
+`make gate` is the gate, and it is the whole definition of green:
 `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, and the
 test suite. Nothing about "green" is expressible only on a server, so
 it can always be reproduced on the machine in front of you. Each step
 prints its diagnostic on failure rather than a bare exit code.
+`make bullseye` is `gate` plus an advisory dirty-tree report; the dirty
+tree is a warning, never a refusal.
+
+**The enforcement point is `scripts/hooks/pre-push`, not a convention.**
+With no CI, a gate nobody runs is no gate at all, so the hook runs it:
+it executes `make gate` and refuses the push on a non-zero exit. Wire it
+once per clone:
+
+```bash
+make hooks     # git config core.hooksPath scripts/hooks
+```
+
+A relative `core.hooksPath` resolves against the worktree the push runs
+from, so one setting covers every `git worktree`. That setting also makes
+git read *only* `scripts/hooks`, so anything in `.git/hooks` is disabled;
+the hook chains `git lfs pre-push` on the saved stdin ref list so a future
+`git lfs track` cannot break uploads unnoticed.
+
+`git push --no-verify` is the owner's emergency bypass. Agents must not
+use it.
 
 ## Release
 
