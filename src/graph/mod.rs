@@ -20,8 +20,9 @@ mod render;
 mod validate;
 
 pub use frontier::{
-    FrontierTarget, REPO_SCOPE_BANNER, RankedFrontier, TolerantFrontier, frontier, frontier_on,
-    frontier_tolerant, is_postponed, owned_elsewhere, rank_frontier, unblocking_fanout,
+    FrontierTarget, REPO_SCOPE_BANNER, RankedFrontier, TolerantFrontier, fanout_index, frontier,
+    frontier_on, frontier_tolerant, is_postponed, owned_elsewhere, rank_frontier,
+    unblocking_fanout,
 };
 pub use mermaid::{
     MermaidExpand, MermaidOpts, MermaidScope, mermaid, mermaid_with_opts, select_mermaid_nodes,

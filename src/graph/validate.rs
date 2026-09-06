@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::ops;
 use crate::schema::{Status, Target, TargetsFile};
 
-use super::frontier::{frontier_on, is_postponed, unblocking_fanout};
+use super::frontier::{fanout_index, frontier_on, is_postponed};
 
 /// Validate the targets file. Returns the union of structural errors
 /// and stylistic warnings — used by `bullseye_validate` so the report
@@ -105,12 +105,18 @@ pub fn graph_hygiene_warnings(file: &TargetsFile) -> Vec<String> {
     // Tunnel-ish: active target whose every path to a terminal is blocked by
     // many active deps — simpler: active with depends_on all active (not on
     // frontier) and no active target depends on it (work leaf buried).
+    //
+    // Both lookups below are per active target, so they are indexed
+    // once here: membership in the frontier, and unblocking fanout.
+    // Scanning the frontier list and the edge list per target made
+    // this loop quadratic on large ledgers.
+    let front_ids: HashSet<&str> = front.iter().map(|f| f.id.as_str()).collect();
+    let fanout = fanout_index(file);
     for (id, t) in &active {
         if t.owned_by.is_some() || is_postponed(t, today) {
             continue;
         }
-        let on_front = front.iter().any(|f| f.id == *id);
-        if on_front {
+        if front_ids.contains(*id) {
             continue;
         }
         // Buried active node: not frontier, still active.
@@ -119,8 +125,7 @@ pub fn graph_hygiene_warnings(file: &TargetsFile) -> Vec<String> {
                 .get(d.as_str())
                 .is_some_and(|x| !x.status.is_terminal())
         });
-        let fanout = unblocking_fanout(file, id);
-        if has_active_dep && fanout == 0 {
+        if has_active_dep && !fanout.contains_key(*id) {
             warnings.push(format!(
                 "{id}: graph hygiene: active leaf blocked by unfinished deps and \
                  unblocks nothing — possible tunnel/dead branch; advisory only"

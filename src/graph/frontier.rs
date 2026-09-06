@@ -6,7 +6,7 @@
 //! blocking oracle and `graph/render.rs` for the text that presents the
 //! frontier to agents.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::schema::{Status, TargetsFile};
 
@@ -134,11 +134,33 @@ pub fn owned_elsewhere(file: &TargetsFile) -> Vec<(&str, &crate::schema::Target)
 /// `depends_on` — the "unblocking fanout" score used as the primary
 /// signal in repo-level frontier ordering. Higher means finishing
 /// this target unblocks more downstream work.
+///
+/// One target's answer costs a pass over every edge. Anything that
+/// needs the score for many targets should build [`fanout_index`]
+/// once instead of calling this in a loop.
 pub fn unblocking_fanout(file: &TargetsFile, id: &str) -> usize {
-    file.active()
+    file.targets
         .values()
-        .filter(|t| t.depends_on.iter().any(|d| d == id))
+        .filter(|t| t.is_active() && t.depends_on.iter().any(|d| d == id))
         .count()
+}
+
+/// Unblocking fanout for every target that has any, in one pass over
+/// the edges. Absent keys have fanout 0.
+///
+/// [`unblocking_fanout`] answers for one target by walking every edge
+/// in the ledger; [`rank_frontier`] and the hygiene warnings used to
+/// call it once per target, which is a full edge scan (and, before
+/// this index, a fresh `active()` map allocation) per target —
+/// quadratic in ledger size. The index costs a single pass.
+pub fn fanout_index(file: &TargetsFile) -> HashMap<&str, usize> {
+    let mut index = HashMap::new();
+    for t in file.targets.values().filter(|t| t.is_active()) {
+        for dep in &t.depends_on {
+            *index.entry(dep.as_str()).or_insert(0) += 1;
+        }
+    }
+    index
 }
 
 /// A frontier computed over the healthy part of a graph that may carry
@@ -241,11 +263,12 @@ pub fn rank_frontier<'a>(
     file: &TargetsFile,
     frontier_targets: &'a [FrontierTarget],
 ) -> Vec<RankedFrontier<'a>> {
+    let fanout = fanout_index(file);
     let mut ranked: Vec<RankedFrontier<'a>> = frontier_targets
         .iter()
         .map(|ft| RankedFrontier {
             target: ft,
-            fanout: unblocking_fanout(file, &ft.id),
+            fanout: fanout.get(ft.id.as_str()).copied().unwrap_or(0),
         })
         .collect();
 
