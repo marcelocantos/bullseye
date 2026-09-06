@@ -34,10 +34,22 @@ while read -r local_ref local_sha remote_ref remote_sha || [[ -n "${local_ref:-}
 	echo "pre-push: $local_ref -> $remote/${remote_ref#refs/heads/} (${local_sha:0:7})"
 done < "$refs"
 
+# Git exports GIT_DIR, GIT_INDEX_FILE and friends into its hooks, and they are
+# inherited by everything the gate runs. Any test that shells out to git
+# against a scratch repo then operates on THIS repository instead — observed
+# once as `git init` flipping the real checkout to core.bare=true. Strip them
+# before doing anything, including resolving the worktree root: with GIT_DIR
+# pointing at the common dir, --show-toplevel can name the wrong worktree.
+nogit() {
+	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \
+		-u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+		-u GIT_QUARANTINE_PATH -u GIT_PUSH_CERT_NONCE -u GIT_REFLOG_ACTION "$@"
+}
+
 if [[ "$updates" -gt 0 ]]; then
-	cd "$(git rev-parse --show-toplevel)"
+	cd "$(nogit git rev-parse --show-toplevel)"
 	echo "pre-push: running make gate"
-	if ! make gate; then
+	if ! nogit make gate; then
 		echo "" >&2
 		echo "pre-push: make gate FAILED — push to $remote refused." >&2
 		echo "pre-push: fix the failure and push again. --no-verify is the owner's bypass, not an agent's." >&2
