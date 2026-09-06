@@ -16,7 +16,8 @@
 #   1. fmt check (sub-second)
 #   2. clippy     (a few seconds warm, via rust-cache in CI)
 #   3. tests      (a few seconds warm)
-#   4. dirty tree (warning only — leftover WIP is the normal /cv state)
+#   4. perf ratchet (~15s warm — see docs/perf/baseline.md)
+#   5. dirty tree (warning only — leftover WIP is the normal /cv state)
 bullseye:
 	@log=$$(mktemp); \
 	  if cargo fmt --check >"$$log" 2>&1; then echo "✓ fmt"; \
@@ -27,6 +28,9 @@ bullseye:
 	@log=$$(mktemp); \
 	  if cargo test --quiet >"$$log" 2>&1; then echo "✓ tests"; \
 	  else echo "✗ tests"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+	@log=$$(mktemp); \
+	  if cargo bench --quiet --bench hot_paths -- --ratchet >"$$log" 2>&1; then echo "✓ perf ratchet"; \
+	  else echo "✗ perf ratchet"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
 	else \
@@ -48,7 +52,15 @@ bullseye:
 test:
 	cargo test
 
-check: fmt lint test
+check: fmt lint test perf
+
+# Hot-path perf ratchet. Fails when a locked row in docs/perf/baseline.md
+# moves by more than the tolerance in EITHER direction: slower is a
+# regression, faster means the baseline is stale and must be re-locked
+# in the same commit as the speed-up. Also fails on a measured row with
+# no locked baseline, so a new hot path cannot drift unwatched.
+perf:
+	cargo bench --bench hot_paths -- --ratchet
 
 fmt:
 	cargo fmt
@@ -87,4 +99,4 @@ clean:
 	cargo clean
 	rm -rf dist
 
-.PHONY: bullseye test check fmt lint build release release-dist release-tap reachability clean
+.PHONY: bullseye test check perf fmt lint build release release-dist release-tap reachability clean
