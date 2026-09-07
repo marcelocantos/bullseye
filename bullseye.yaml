@@ -2930,7 +2930,7 @@ targets:
     - command:
         run: cargo test --test unknown_check_tolerance_test
     - command:
-        run: cargo run --quiet -- run-checks --all --cwd .
+        run: cargo test --test cli_parity_test
     context: |-
       🎯T84 and 🎯T85 left two gaps. The rollout rule lived only in a report, and a rule that lives in a report gets violated. And nothing ran a declared check, so checks: was documentation.
 

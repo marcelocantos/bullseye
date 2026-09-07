@@ -658,6 +658,17 @@ fn cli_run_checks(args: &[String]) -> i32 {
         );
         return 0;
     }
+    if bullseye::ops::already_inside_a_check_run() {
+        eprintln!(
+            "refusing to run checks from inside a check run (🎯T86).\n\
+             \n\
+             A declared check invoked bullseye's own check runner, which would \
+             recurse without bound — every level spawning the next until the \
+             timeout. Declare the underlying command the gate would run (a test \
+             binary, a make target) rather than the gate itself."
+        );
+        return 2;
+    }
     if has_flag(args, "--all") {
         return cli_run_checks_all(args);
     }

@@ -86,6 +86,14 @@ fn run(dir: &std::path::Path, args: &[&str]) -> (i32, String) {
         .args(args)
         .arg("--cwd")
         .arg(dir)
+        // Clear the re-entry marker (🎯T86). `run-checks` sets it on every
+        // command it spawns, so when this suite is itself run BY a declared
+        // check — which it is, since 🎯T86 declares `cargo test` — the
+        // binary under test would inherit it and refuse. Found the hard
+        // way: the gate went red on `cargo test --workspace` while the
+        // same command passed when typed by hand. A test that behaves
+        // differently depending on who invoked it is not a test.
+        .env_remove(bullseye::ops::CHECK_RUNNER_MARKER)
         .output()
         .expect("binary runs");
     let text = format!(
@@ -389,4 +397,94 @@ targets:
         "the version check must run BEFORE deserialization, or the \
          actionable message is buried by a serde error:\n{out}",
     );
+}
+
+#[test]
+fn a_check_that_invokes_the_checker_is_refused_rather_than_recursing() {
+    // Found by writing it (🎯T86). Declaring `run-checks --all` as a
+    // target's own check is the obvious thing to reach for, and it makes
+    // the runner spawn itself without bound — each level starting the
+    // next until the timeout, with real processes piling up.
+    //
+    // A depth limit would be the wrong fix: the recursion is not useful
+    // at any depth. Refusing at first re-entry, with a message naming
+    // what to declare instead, is.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("bullseye.yaml"),
+        r#"
+schema_version: 6
+targets:
+  T1:
+    name: Declares the gate as its own check
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - it works
+    origin: manual
+    discovered: 2026-09-07
+    checks:
+    - command:
+        run: "true"
+"#,
+    )
+    .unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .args(["run-checks", "--all", "--cwd"])
+        .arg(tmp.path())
+        .env(bullseye::ops::CHECK_RUNNER_MARKER, "1")
+        .output()
+        .expect("binary runs");
+
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "re-entry must refuse, not run:\n{text}",
+    );
+    assert!(
+        text.contains("refusing to run checks from inside a check run"),
+        "and must say why:\n{text}",
+    );
+    assert!(
+        text.contains("recurse"),
+        "and name the failure it is preventing:\n{text}",
+    );
+}
+
+#[test]
+fn a_normal_check_run_is_unaffected_by_the_guard() {
+    // The guard must not fire on the ordinary path — it keys on being
+    // spawned BY a check, not on running one.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("bullseye.yaml"),
+        r#"
+schema_version: 6
+targets:
+  T1:
+    name: An ordinary checked target
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - it works
+    origin: manual
+    discovered: 2026-09-07
+    checks:
+    - command:
+        run: "true"
+"#,
+    )
+    .unwrap();
+
+    let (code, out) = run(tmp.path(), &["run-checks", "--all"]);
+    assert_eq!(code, 0, "an ordinary run must still work:\n{out}");
+    assert!(out.contains("PASS"), "{out}");
 }

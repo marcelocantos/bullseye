@@ -1240,12 +1240,31 @@ pub fn run_command_checks(plan: &VerifyPlan) -> Vec<RanCheck> {
         .collect()
 }
 
+/// Environment marker set while a declared check is running (🎯T86).
+///
+/// A ledger can declare a check that invokes bullseye's own gate — it is
+/// the obvious thing to write, and I wrote it by accident on 🎯T86's own
+/// target. `run-checks` then runs a command that runs `run-checks`,
+/// unbounded, each level spawning the next until the timeout. The
+/// processes are real and the machine feels it.
+///
+/// A depth counter would be worse than a refusal: the recursion is never
+/// meaningful at any depth, so the honest answer is to stop at the first
+/// re-entry and say why.
+pub const CHECK_RUNNER_MARKER: &str = "BULLSEYE_RUNNING_CHECKS";
+
+/// Whether this process was itself spawned by a declared check.
+pub fn already_inside_a_check_run() -> bool {
+    std::env::var_os(CHECK_RUNNER_MARKER).is_some()
+}
+
 fn run_one_command(index: usize, command: &CommandCheck) -> RanCheck {
     let want = command.required_exit();
     let described = format!("{:?} expect_exit={want}", command.run);
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&command.run);
+    cmd.env(CHECK_RUNNER_MARKER, "1");
     if let Some(dir) = &command.cwd {
         cmd.current_dir(dir);
     }
