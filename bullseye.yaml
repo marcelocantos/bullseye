@@ -2839,6 +2839,10 @@ targets:
       **The set corroborates the mechanism.** All 13 are identified except T36, which is set_aside. Not one is achieved. The write stripped dates from precisely those targets whose status disagreed with holding one, and left every genuinely achieved target alone.
 
       **A correction to the "silently" claim, which sharpens what needs fixing.** The author of 1ffdb95 DID observe the loss: their report records that the write "rehashed it and dropped a stale achieved: date from 13 targets", lists the same 13, and verifies no achieved target lost its date. They judged the dates stale and moved on. So the damage was visible to a diligent reader afterwards. What was not visible was the tool's own summary, which reported only the two targets it had been asked to change. The defect is therefore precisely the `changed:` line lying, plus the loss being destructive rather than recoverable — not that the tool concealed the write. That is a narrower and more accurate statement of the bug than this target's original wording, and it is the half the fix addresses.
+
+      **Why the loss reads as benign, which is the impact argument.** From ci-finish, who verified the second occurrence independently, in their words: the bug "hit only the targets whose history was most easily mistaken for never having happened", and that is "why the agent that made 1ffdb95 saw the drop, called the dates stale and moved on — the loss looks benign right up until you ask when something was first delivered."
+
+      That is the sharpest statement of the impact. A reopened or set-aside target with no date is indistinguishable from one that was never delivered, so the field the bug destroyed is exactly the field whose absence is hardest to notice and whose loss is least recoverable from anything else in the ledger. An achieved target losing its date would have been obvious; these were not.
     origin: reproduced during ~/think 🎯T2 fleet NOTICE rename, burst-2026-09 house-notice track
     discovered: 2026-09-06
     achieved: 2026-09-15
