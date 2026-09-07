@@ -2831,6 +2831,14 @@ targets:
       `marcelocantos/bullseye`'s own ledger has no non-achieved target carrying an `achieved:` date, so it is not currently exposed.
 
       Whether an `achieved:` date on a non-achieved target *should* persist is a real design question. The bug is not the normalisation policy — it is that the policy executes silently, ledger-wide, as a side effect of an unrelated single-target patch, and is not reflected in `changed:`.
+
+      **SECOND OCCURRENCE, 2026-09-07, in the same burst.** After this target was filed and fixed, another worker reproduced the bug live: squz/yourworld2 burst/ci-gate branched off clean master and commit 1ffdb95, whose subject is "File 🎯T79 and 🎯T80", dropped the achieved date from the same 13 targets. 48 achieved lines to 35. They were running the still-installed old binary, which is why installing the fix is a numbered step in ~/think/burst-2026-09/MERGE-ORDER.md rather than a footnote. Restored in 2a567db.
+
+      Two independent observers reached the identical set of 13, with no extras and none missing, and confirmed no date was altered rather than dropped and no target removed.
+
+      **The set corroborates the mechanism.** All 13 are identified except T36, which is set_aside. Not one is achieved. The write stripped dates from precisely those targets whose status disagreed with holding one, and left every genuinely achieved target alone.
+
+      **A correction to the "silently" claim, which sharpens what needs fixing.** The author of 1ffdb95 DID observe the loss: their report records that the write "rehashed it and dropped a stale achieved: date from 13 targets", lists the same 13, and verifies no achieved target lost its date. They judged the dates stale and moved on. So the damage was visible to a diligent reader afterwards. What was not visible was the tool's own summary, which reported only the two targets it had been asked to change. The defect is therefore precisely the `changed:` line lying, plus the loss being destructive rather than recoverable — not that the tool concealed the write. That is a narrower and more accurate statement of the bug than this target's original wording, and it is the half the fix addresses.
     origin: reproduced during ~/think 🎯T2 fleet NOTICE rename, burst-2026-09 house-notice track
     discovered: 2026-09-06
     achieved: 2026-09-15
