@@ -1207,11 +1207,11 @@ pub struct RanCheck {
 /// MCP server, and unknown kinds from a newer bullseye — are reported
 /// as [`CheckOutcome::Unsupported`]. They are never counted as passes,
 /// so a caller cannot mistake "nothing ran it" for "it holds".
-pub fn run_command_checks(plan: &VerifyPlan) -> Vec<RanCheck> {
+pub fn run_command_checks(plan: &VerifyPlan, base_dir: &std::path::Path) -> Vec<RanCheck> {
     plan.checks
         .iter()
         .map(|check| match &check.spec {
-            CheckSpec::Command { command } => run_one_command(check.index, command),
+            CheckSpec::Command { command } => run_one_command(check.index, command, base_dir),
             CheckSpec::Unknown { .. } => RanCheck {
                 index: check.index,
                 description: check.description.clone(),
@@ -1258,16 +1258,31 @@ pub fn already_inside_a_check_run() -> bool {
     std::env::var_os(CHECK_RUNNER_MARKER).is_some()
 }
 
-fn run_one_command(index: usize, command: &CommandCheck) -> RanCheck {
+/// Directory a check runs in: its own declared `cwd` if it has one,
+/// otherwise the ledger's repo root — never the caller's shell cwd.
+///
+/// A check is a claim about a repo, not about wherever someone happened
+/// to be standing. Inheriting the caller's directory made `run-checks`
+/// adjudicate an unrelated tree and report the result with full
+/// confidence: run from one directory a repo's checks reported "exited
+/// 2, expected 0"; run from inside the worktree the same checks passed.
+/// A confidently wrong check is worse than no check, which is the whole
+/// reason this feature exists.
+fn check_dir(command: &CommandCheck, base_dir: &std::path::Path) -> std::path::PathBuf {
+    match &command.cwd {
+        Some(d) => base_dir.join(d),
+        None => base_dir.to_path_buf(),
+    }
+}
+
+fn run_one_command(index: usize, command: &CommandCheck, base_dir: &std::path::Path) -> RanCheck {
     let want = command.required_exit();
     let described = format!("{:?} expect_exit={want}", command.run);
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&command.run);
     cmd.env(CHECK_RUNNER_MARKER, "1");
-    if let Some(dir) = &command.cwd {
-        cmd.current_dir(dir);
-    }
+    cmd.current_dir(check_dir(command, base_dir));
 
     match crate::bounded::bounded_output(&mut cmd, COMMAND_CHECK_TIMEOUT) {
         Ok(out) => {

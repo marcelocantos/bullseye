@@ -462,7 +462,7 @@ fn running_command_checks_passes_reds_fails_and_skips_what_it_cannot_run() {
         },
     ];
     let plan = verify_plan(&file, "T3").unwrap();
-    let ran = run_command_checks(&plan);
+    let ran = run_command_checks(&plan, std::path::Path::new("."));
     assert_eq!(ran[0].outcome, CheckOutcome::Pass);
     assert_eq!(
         ran[1].outcome,
@@ -480,7 +480,10 @@ fn running_command_checks_passes_reds_fails_and_skips_what_it_cannot_run() {
             expect_exit: None,
         },
     }];
-    let ran = run_command_checks(&verify_plan(&file, "T3").unwrap());
+    let ran = run_command_checks(
+        &verify_plan(&file, "T3").unwrap(),
+        std::path::Path::new("."),
+    );
     assert_eq!(ran[0].outcome, CheckOutcome::Fail);
     assert_eq!(ran[0].actual_exit, Some(7));
     assert!(
@@ -500,7 +503,10 @@ fn running_command_checks_passes_reds_fails_and_skips_what_it_cannot_run() {
             expect: 0,
         },
     }];
-    let ran = run_command_checks(&verify_plan(&file, "T3").unwrap());
+    let ran = run_command_checks(
+        &verify_plan(&file, "T3").unwrap(),
+        std::path::Path::new("."),
+    );
     assert_eq!(ran[0].outcome, CheckOutcome::Unsupported);
     assert_eq!(
         ran_verdict(&ran),

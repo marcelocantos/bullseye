@@ -315,6 +315,17 @@ pub struct ApplyRequest {
     /// Explicit removals. Never inferred from a fragment's absence.
     #[serde(default)]
     pub remove: Vec<String>,
+    /// Acknowledge the one-way rollout cost of introducing this ledger's
+    /// first `command` check (🎯T86).
+    ///
+    /// Lives here, on the single write verb, rather than on one command.
+    /// It was originally checked in the `commit op=track` handler, which
+    /// left `bullseye_apply` as an unguarded route — and fragment files
+    /// routed through it stamped three ledgers at schema_version 6 with
+    /// no prompt at all. A one-way door with a guard on one of its two
+    /// doors is not guarded.
+    #[serde(default)]
+    pub adopt_command_checks: bool,
 }
 
 /// True when this map key asks the server to allocate an ID.
@@ -469,11 +480,54 @@ fn check_obligations(
 /// `historical` is the set of every target ID ever assigned in git
 /// history, used so an allocated or explicit ID cannot collide with
 /// one that exists on another branch (🎯T28).
+/// Would this request introduce the ledger's first `command` check?
+///
+/// False once the ledger already has one: the compatibility cost is paid
+/// and re-asking would only train people to pass the flag.
+fn introduces_first_command_check(file: &TargetsFile, req: &ApplyRequest) -> bool {
+    let already =
+        crate::schema::required_schema_version(file) >= crate::schema::COMMAND_CHECK_SCHEMA_VERSION;
+    if already {
+        return false;
+    }
+    req.targets.values().any(|f| {
+        f.checks
+            .as_ref()
+            .is_some_and(|cs| cs.iter().any(|c| matches!(c, Check::Command { .. })))
+    })
+}
+
 pub fn apply(
     file: &mut TargetsFile,
     req: &ApplyRequest,
     historical: &HashSet<String>,
 ) -> Result<ApplyReport, ApplyError> {
+    // Rollout gate before anything is touched (🎯T86). Adopting the
+    // `command` kind stamps the ledger schema_version 6, after which
+    // every older bullseye refuses to read the WHOLE file — other
+    // agents' servers, other checkouts, CI, at once — and no fix reaches
+    // an installed binary. Refusal is the default so the one-way door
+    // cannot be walked through by accident.
+    if introduces_first_command_check(file, req) && !req.adopt_command_checks {
+        return Err(ApplyError::new(
+            ErrorCode::Validation,
+            format!(
+                "refusing to add the first `command` check to this ledger.\n\
+                 \n\
+                 This is a one-way door. The file will be stamped schema_version {v}, \
+                 and EVERY bullseye older than that kind will then refuse to read the \
+                 whole file — not just the checked target. That includes other agents' \
+                 MCP servers, other checkouts, and CI, all at once. No fix reaches a \
+                 binary already installed.\n\
+                 \n\
+                 Before adopting: upgrade every consumer of this ledger, then re-run \
+                 with the adoption acknowledged (`--adopt-command-checks` on the CLI, \
+                 `adopt_command_checks: true` on a tool call, or that key in an apply \
+                 fragment).",
+                v = crate::schema::COMMAND_CHECK_SCHEMA_VERSION,
+            ),
+        ));
+    }
     // CAS first: refuse before touching anything if the caller was
     // reasoning about a different version of the file.
     if let Some(base) = &req.base {
@@ -893,6 +947,7 @@ targets:
             reason: None,
             targets,
             remove: Vec::new(),
+            adopt_command_checks: false,
         }
     }
 

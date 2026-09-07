@@ -708,7 +708,8 @@ fn cli_run_checks(args: &[String]) -> i32 {
     }
     println!();
 
-    let ran = bullseye::ops::run_command_checks(&plan);
+    let repo_root = path.parent().unwrap_or(std::path::Path::new("."));
+    let ran = bullseye::ops::run_command_checks(&plan, repo_root);
     for r in &ran {
         let mark = match r.outcome {
             bullseye::ops::CheckOutcome::Pass => "PASS",
@@ -779,6 +780,7 @@ fn cli_run_checks_all(args: &[String]) -> i32 {
         return 0;
     }
 
+    let repo_root = path.parent().unwrap_or(std::path::Path::new("."));
     let (mut passed, mut failed, mut skipped) = (0usize, 0usize, 0usize);
     for id in &with_checks {
         let plan = match bullseye::ops::verify_plan(&file, id) {
@@ -789,7 +791,7 @@ fn cli_run_checks_all(args: &[String]) -> i32 {
                 continue;
             }
         };
-        for r in bullseye::ops::run_command_checks(&plan) {
+        for r in bullseye::ops::run_command_checks(&plan, repo_root) {
             let mark = match r.outcome {
                 bullseye::ops::CheckOutcome::Pass => {
                     passed += 1;
