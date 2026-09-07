@@ -154,6 +154,14 @@ pub struct CommitTool {
     #[serde(default)]
     pub checks: Option<String>,
 
+    /// Acknowledge the one-way rollout cost of the first `command`
+    /// check in this ledger (🎯T86). Without it, adding one is refused.
+    /// Set it only after every consumer of this ledger — other agents'
+    /// MCP servers, other checkouts, CI — runs a bullseye new enough to
+    /// understand the kind.
+    #[serde(default)]
+    pub adopt_command_checks: bool,
+
     /// Context prose.
     #[serde(default)]
     pub context: Option<String>,
@@ -362,6 +370,14 @@ pub struct PutTool {
     /// machine can run unattended. Bullseye never executes them.
     #[serde(default)]
     pub checks: Option<String>,
+
+    /// Acknowledge the one-way rollout cost of the first `command`
+    /// check in this ledger (🎯T86). Without it, adding one is refused.
+    /// Set it only after every consumer of this ledger — other agents'
+    /// MCP servers, other checkouts, CI — runs a bullseye new enough to
+    /// understand the kind.
+    #[serde(default)]
+    pub adopt_command_checks: bool,
 
     /// Why this target matters.
     #[serde(default)]

@@ -27,6 +27,14 @@ bullseye:
 	@log=$$(mktemp); \
 	  if cargo test --quiet >"$$log" 2>&1; then echo "✓ tests"; \
 	  else echo "✗ tests"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+# Bullseye eats its own cooking (🎯T86): the checks targets declare in this
+# ledger are run by this gate, so a declared check that goes red reddens the
+# gate. Without this step `checks:` is documentation. Uses the just-built
+# debug binary, not an installed one — the gate must adjudicate this tree.
+	@log=$$(mktemp); \
+	  if cargo run --quiet -- run-checks --all --cwd . >"$$log" 2>&1; then \
+	    echo "✓ declared checks"; grep -E '^(Gate passed|No target)' "$$log" || true; \
+	  else echo "✗ declared checks"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
 	else \

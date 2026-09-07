@@ -114,10 +114,7 @@ fn writing_one_target_does_not_strip_another_targets_achieved_date() {
     let after = store::load(&path).unwrap();
     assert_eq!(
         after.targets["T1"].achieved,
-        Some(
-            chrono::NaiveDate::parse_from_str("2026-03-10", "%Y-%m-%d")
-                .unwrap()
-        ),
+        Some(chrono::NaiveDate::parse_from_str("2026-03-10", "%Y-%m-%d").unwrap()),
         "T1's achieved date records when it was previously achieved; \
          a patch to T2 must not consume it",
     );
@@ -208,10 +205,7 @@ fn achieved_date_does_not_make_a_target_count_as_achieved() {
         !file.achieved().contains_key("T1"),
         "T1 has a date but status identified — it is not achieved",
     );
-    assert!(
-        file.active().contains_key("T1"),
-        "T1 is still active work",
-    );
+    assert!(file.active().contains_key("T1"), "T1 is still active work",);
 }
 
 #[test]
@@ -381,6 +375,7 @@ targets:
         cost: None,
         acceptance: None,
         checks: None,
+        adopt_command_checks: false,
         context: None,
         status: None,
         depends_on: None,

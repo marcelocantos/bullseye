@@ -73,12 +73,19 @@ targets:
 }
 
 #[test]
-fn save_stamps_current_schema_version() {
-    use bullseye::schema::CURRENT_SCHEMA_VERSION;
+fn save_stamps_the_lowest_schema_version_that_represents_the_content() {
+    use bullseye::schema::required_schema_version;
     use std::io::Write;
-    // Loading a legacy file and re-saving must produce a file with
-    // the current schema_version on disk, so legacy files self-upgrade
-    // on first contact with a v0.9.0+ bullseye.
+    // Loading a legacy file and re-saving must stamp a schema_version,
+    // so legacy files self-upgrade on first contact.
+    //
+    // 🎯T86 changed WHICH version. It used to be "always the newest",
+    // which meant that the moment a binary learned a new kind, every
+    // ledger it touched became unreadable to every binary in the field —
+    // whether or not it used anything new. The stamp is now derived from
+    // content: a ledger pays the compatibility cost only when it adopts
+    // the feature that requires it. This legacy file adopts nothing, so
+    // it must stay at the older version.
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("bullseye.yaml");
 
@@ -99,9 +106,64 @@ targets:
     store::save(&path, &file).unwrap();
 
     let after = std::fs::read_to_string(&path).unwrap();
+    let want = required_schema_version(&file);
     assert!(
-        after.contains(&format!("schema_version: {CURRENT_SCHEMA_VERSION}")),
-        "expected schema_version stamp; got:\n{after}"
+        after.contains(&format!("schema_version: {want}")),
+        "expected schema_version {want}; got:\n{after}"
+    );
+    assert_eq!(
+        want, 5,
+        "a ledger using no new kind must not be pushed out of reach of \
+         binaries that can still read it",
+    );
+}
+
+#[test]
+fn adopting_a_command_check_raises_the_stamped_schema_version() {
+    // The other half of the content-derived rule (🎯T86). A ledger that
+    // DOES use the command kind must be stamped high enough that an old
+    // binary refuses it with "schema_version too new, upgrade bullseye"
+    // rather than an opaque untagged-enum parse error. The failure is
+    // the same either way; only one of them tells the reader what to do.
+    use bullseye::schema::{
+        COMMAND_CHECK_SCHEMA_VERSION, Check, CommandCheck, required_schema_version,
+    };
+    use std::io::Write;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    let yaml = r#"
+schema_version: 5
+targets:
+  T1:
+    name: Checked by a command
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - it works
+    origin: manual
+    discovered: 2026-04-01
+"#;
+    write!(std::fs::File::create(&path).unwrap(), "{yaml}").unwrap();
+
+    let mut file = store::load(&path).unwrap();
+    assert_eq!(required_schema_version(&file), 5, "before adoption");
+
+    file.targets.get_mut("T1").unwrap().checks = vec![Check::Command {
+        command: CommandCheck {
+            run: "true".to_string(),
+            cwd: None,
+            expect_exit: None,
+        },
+    }];
+    assert_eq!(required_schema_version(&file), COMMAND_CHECK_SCHEMA_VERSION);
+
+    store::save(&path, &file).unwrap();
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        after.contains(&format!("schema_version: {COMMAND_CHECK_SCHEMA_VERSION}")),
+        "an adopting ledger must be stamped at the adopting version:\n{after}"
     );
 }
 
