@@ -2843,6 +2843,12 @@ targets:
       **Why the loss reads as benign, which is the impact argument.** From ci-finish, who verified the second occurrence independently, in their words: the bug "hit only the targets whose history was most easily mistaken for never having happened", and that is "why the agent that made 1ffdb95 saw the drop, called the dates stale and moved on — the loss looks benign right up until you ask when something was first delivered."
 
       That is the sharpest statement of the impact. A reopened or set-aside target with no date is indistinguishable from one that was never delivered, so the field the bug destroyed is exactly the field whose absence is hardest to notice and whose loss is least recoverable from anything else in the ledger. An achieved target losing its date would have been obvious; these were not.
+
+      **A second reading failure, same shape as the first.** While reconciling who had landed the fix on yourworld2, I claimed to have authored a commit I had not. The evidence was in my own transcript: git had printed "nothing to commit, working tree clean", which states plainly that the commit did not happen. The next line, a `git log`, showed a matching subject and sha — another agent's commit, landed seconds earlier. I read the second line as confirming the first had succeeded.
+
+      ci-finish, who reconciled it from the reflogs, put the general point well: that is not a missing check. It is a check that ran, reported correctly, and was read past, which is harder to defend against than an absent one.
+
+      Worth pairing with the tool defect this target fixes, because they are the same failure at two levels. The `changed:` line said two targets when fifteen changed — accurate output would have prevented the loss. My commit output was accurate and I did not read it as what it said. A tool that reports truthfully is necessary and not sufficient; the reader still has to believe the output over the state they expected. The fix here can only address the first half.
     origin: reproduced during ~/think 🎯T2 fleet NOTICE rename, burst-2026-09 house-notice track
     discovered: 2026-09-06
     achieved: 2026-09-15
