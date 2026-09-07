@@ -161,6 +161,15 @@ pub struct CommitTool {
     #[serde(default)]
     pub checks: Option<String>,
 
+    /// Acknowledge the one-way rollout cost of the first `command`
+    /// check in this ledger (🎯T86). Without it, adding one is refused.
+    /// Set it only after every consumer of this ledger — other agents'
+    /// MCP servers, other checkouts, CI — runs a bullseye new enough to
+    /// understand the kind.
+    #[serde(default)]
+    pub adopt_command_checks: bool,
+
+    /// Context prose.
     /// Context prose. Markdown. Downstream renderers interpret HTML.
     /// Cite tags as entities or code spans. Bullseye stores the text
     /// as written and does not escape.
@@ -384,6 +393,15 @@ pub struct PutTool {
     #[serde(default)]
     pub checks: Option<String>,
 
+    /// Acknowledge the one-way rollout cost of the first `command`
+    /// check in this ledger (🎯T86). Without it, adding one is refused.
+    /// Set it only after every consumer of this ledger — other agents'
+    /// MCP servers, other checkouts, CI — runs a bullseye new enough to
+    /// understand the kind.
+    #[serde(default)]
+    pub adopt_command_checks: bool,
+
+    /// Why this target matters.
     /// Why this target matters. Markdown. Downstream renderers interpret
     /// HTML. Cite tags as entities or code spans. Bullseye stores the
     /// text as written and does not escape.

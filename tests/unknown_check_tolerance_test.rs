@@ -185,3 +185,208 @@ fn an_unknown_kind_survives_a_write_by_this_binary() {
          interpret it:\n{raw}",
     );
 }
+
+// --- Adoption is a deliberate act, not a side effect (🎯T86) -------------
+
+const PLAIN_LEDGER: &str = r#"
+schema_version: 5
+targets:
+  T1:
+    name: A target with no checks yet
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - it works
+    origin: manual
+    discovered: 2026-09-06
+"#;
+
+fn plain_ledger_dir() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("bullseye.yaml"), PLAIN_LEDGER).unwrap();
+    tmp
+}
+
+#[test]
+fn adding_the_first_command_check_is_refused_without_acknowledgement() {
+    // A rollout rule that lives only in a report gets violated. The
+    // constraint here is real and unfixable in code — a bullseye older
+    // than the kind cannot read a ledger containing one, at all — so the
+    // default has to be refusal.
+    let tmp = plain_ledger_dir();
+    let (code, out) = run(
+        tmp.path(),
+        &[
+            "commit",
+            "--op",
+            "track",
+            "--id",
+            "T1",
+            "--checks",
+            r#"[{command: {run: "true"}}]"#,
+        ],
+    );
+
+    assert_ne!(code, 0, "adoption must not succeed silently:\n{out}");
+    assert!(
+        out.contains("refusing to add the first `command` check"),
+        "the refusal must name what is happening:\n{out}",
+    );
+    assert!(
+        out.contains("--adopt-command-checks"),
+        "and must say how to proceed deliberately:\n{out}",
+    );
+
+    let raw = std::fs::read_to_string(tmp.path().join("bullseye.yaml")).unwrap();
+    assert!(
+        !raw.contains("command"),
+        "a refused adoption must leave the ledger untouched:\n{raw}",
+    );
+    assert!(
+        raw.contains("schema_version: 5"),
+        "and must not raise the stamp:\n{raw}",
+    );
+}
+
+#[test]
+fn acknowledged_adoption_succeeds_and_raises_the_stamp() {
+    let tmp = plain_ledger_dir();
+    let (code, out) = run(
+        tmp.path(),
+        &[
+            "commit",
+            "--op",
+            "track",
+            "--id",
+            "T1",
+            "--checks",
+            r#"[{command: {run: "true"}}]"#,
+            "--adopt-command-checks",
+        ],
+    );
+
+    assert_eq!(code, 0, "acknowledged adoption should succeed:\n{out}");
+    let raw = std::fs::read_to_string(tmp.path().join("bullseye.yaml")).unwrap();
+    assert!(
+        raw.contains("run: 'true'") || raw.contains("run: true"),
+        "{raw}"
+    );
+    assert!(
+        raw.contains("schema_version: 6"),
+        "an adopting ledger is stamped at the adopting version:\n{raw}",
+    );
+}
+
+#[test]
+fn a_ledger_that_already_adopted_does_not_re_ask() {
+    // The gate is about crossing the line, not about every later write.
+    // Once a ledger is already unreadable to old binaries, a second
+    // prompt buys nothing and would just train people to pass the flag.
+    let tmp = plain_ledger_dir();
+    let (code, _) = run(
+        tmp.path(),
+        &[
+            "commit",
+            "--op",
+            "track",
+            "--id",
+            "T1",
+            "--checks",
+            r#"[{command: {run: "true"}}]"#,
+            "--adopt-command-checks",
+        ],
+    );
+    assert_eq!(code, 0);
+
+    let (code, out) = run(
+        tmp.path(),
+        &[
+            "commit",
+            "--op",
+            "track",
+            "--id",
+            "T1",
+            "--checks",
+            r#"[{command: {run: "false"}}, {command: {run: "true"}}]"#,
+        ],
+    );
+    assert_eq!(code, 0, "a second command check needs no new gate:\n{out}");
+}
+
+#[test]
+fn a_non_command_check_is_never_gated() {
+    // Sawmill kinds are v5-compatible, so nothing about them should
+    // trip a rollout gate.
+    let tmp = plain_ledger_dir();
+    let (code, out) = run(
+        tmp.path(),
+        &[
+            "commit",
+            "--op",
+            "track",
+            "--id",
+            "T1",
+            "--checks",
+            r#"[{invariant: platform-isolation}]"#,
+        ],
+    );
+    assert_eq!(code, 0, "a sawmill check must not be gated:\n{out}");
+    let raw = std::fs::read_to_string(tmp.path().join("bullseye.yaml")).unwrap();
+    assert!(
+        raw.contains("schema_version: 5"),
+        "and must not raise the stamp:\n{raw}",
+    );
+}
+
+#[test]
+fn a_too_new_ledger_says_upgrade_rather_than_naming_an_enum() {
+    // ORDER IS THE WHOLE POINT (🎯T86). A ledger from the future fails
+    // to deserialize either way — its kinds are not in this build's enum
+    // — so if the struct parse runs before the version check, the reader
+    // gets `data did not match any variant of untagged enum Check`
+    // instead of "upgrade bullseye". Both are failures; only one tells
+    // the reader what to do.
+    //
+    // Measured on 0.52.0, which checks the version *after* parsing: it
+    // emits the useless message no matter what version a newer writer
+    // stamps, which is why raising the stamp alone did not fix the
+    // trap. This test pins the order so the next bump is legible.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("bullseye.yaml"),
+        r#"
+schema_version: 7
+targets:
+  T1:
+    name: Uses a kind from two versions ahead
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - it works
+    origin: manual
+    discovered: 2026-09-06
+    checks:
+    - quantum_entanglement:
+        qubits: 12
+"#,
+    )
+    .unwrap();
+
+    let (code, out) = run(tmp.path(), &["query", "--view", "list"]);
+    assert_ne!(code, 0, "a too-new ledger must fail:\n{out}");
+    assert!(
+        out.contains("schema_version 7") && out.contains("only supports up to"),
+        "the error must name the version gap:\n{out}",
+    );
+    assert!(
+        out.to_lowercase().contains("upgrade"),
+        "and must tell the reader what to do:\n{out}",
+    );
+    assert!(
+        !out.contains("did not match any variant"),
+        "the version check must run BEFORE deserialization, or the \
+         actionable message is buried by a serde error:\n{out}",
+    );
+}

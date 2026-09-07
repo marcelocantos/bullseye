@@ -909,11 +909,21 @@ pub enum CheckSpec {
     /// Verbatim payload of a check kind this build does not understand
     /// (🎯T85). Preserved rather than dropped so a round trip through an
     /// older binary does not silently delete a newer reader's check.
-    Unknown { unknown: serde_yaml_ng::Value },
-    Convention { convention: String },
-    Query { query: QueryCheck },
-    Invariant { invariant: String },
-    Command { command: CommandCheck },
+    Unknown {
+        unknown: serde_yaml_ng::Value,
+    },
+    Convention {
+        convention: String,
+    },
+    Query {
+        query: QueryCheck,
+    },
+    Invariant {
+        invariant: String,
+    },
+    Command {
+        command: CommandCheck,
+    },
 }
 
 /// Structured verification plan returned by [`verify_plan`]. The
@@ -988,7 +998,11 @@ impl VerifyReport {
         {
             return CheckOutcome::Unsupported;
         }
-        if self.checks.iter().any(|c| c.outcome == CheckOutcome::Pending) {
+        if self
+            .checks
+            .iter()
+            .any(|c| c.outcome == CheckOutcome::Pending)
+        {
             return CheckOutcome::Pending;
         }
         CheckOutcome::Pass

@@ -56,7 +56,41 @@ use serde::{Deserialize, Serialize};
 ///   same shape as the v3→v4 showcase removal). Older binaries
 ///   reading a v5 file fail at load with a "schema_version too new"
 ///   error.
-pub const CURRENT_SCHEMA_VERSION: u32 = 5;
+/// - **v6** (🎯T86) adds the `command` check kind. A ledger is stamped
+///   v6 only when it actually contains one — see
+///   [`required_schema_version`]. That keeps every ledger that has not
+///   adopted the kind readable by older binaries, while a ledger that
+///   HAS adopted it fails on an old binary with the actionable
+///   "schema_version too new, upgrade bullseye" error instead of an
+///   opaque `data did not match any variant of untagged enum Check`.
+pub const CURRENT_SCHEMA_VERSION: u32 = 6;
+
+/// Schema version at which the `command` check kind was introduced.
+pub const COMMAND_CHECK_SCHEMA_VERSION: u32 = 6;
+
+/// The lowest schema version that can faithfully represent `file`
+/// (🎯T86).
+///
+/// Stamping is content-derived rather than "always the newest" for one
+/// reason: an unconditional bump would make every ledger this binary
+/// touches unreadable to every binary in the field, whether or not it
+/// used anything new. A ledger pays the compatibility cost only when it
+/// actually adopts the feature that requires it.
+pub fn required_schema_version(file: &TargetsFile) -> u32 {
+    let uses_command_check = file
+        .targets
+        .values()
+        .any(|t| t.checks.iter().any(|c| matches!(c, Check::Command { .. })));
+    if uses_command_check {
+        COMMAND_CHECK_SCHEMA_VERSION
+    } else {
+        // Everything else this build writes is v5-compatible. An unknown
+        // kind carried through from a newer writer is deliberately NOT
+        // counted: this build cannot know what version it needs, and
+        // guessing high would strand the ledger further than necessary.
+        5
+    }
+}
 
 /// Top-level targets file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -460,6 +460,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
             cost: t.cost,
             acceptance: t.acceptance,
             checks: t.checks,
+            adopt_command_checks: t.adopt_command_checks,
             context: t.context,
             status: t.status,
             depends_on: t.depends_on,
@@ -490,6 +491,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                 cost: None,
                 acceptance: None,
                 checks: None,
+                adopt_command_checks: false,
                 context: None,
                 status: None,
                 depends_on: None,
@@ -918,6 +920,10 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         Ok(c) => c,
         Err(e) => return coded_err(api::ErrorCode::InvalidArgs, e),
     };
+    if let Some(incoming) = &checks {
+        let path = discover_path(&t.cwd)?;
+        check_command_adoption_allowed(&path, incoming, t.adopt_command_checks)?;
+    }
     let frag = crate::apply::Fragment {
         name: t.name,
         status: t.status,
@@ -951,12 +957,68 @@ fn parse_checks_param(raw: Option<&str>) -> Result<Option<Vec<crate::schema::Che
     if raw.trim().is_empty() {
         return Ok(Some(Vec::new()));
     }
-    serde_yaml_ng::from_str::<Vec<crate::schema::Check>>(raw).map(Some).map_err(|e| {
-        format!(
-            "`checks` must be a YAML or JSON list of check objects \
+    serde_yaml_ng::from_str::<Vec<crate::schema::Check>>(raw)
+        .map(Some)
+        .map_err(|e| {
+            format!(
+                "`checks` must be a YAML or JSON list of check objects \
              (e.g. [{{command: {{run: \"cargo test --workspace\"}}}}]): {e}"
-        )
-    })
+            )
+        })
+}
+
+/// Refuse to adopt a `command` check into a ledger that has not already
+/// adopted one, unless the caller explicitly acknowledges the rollout
+/// constraint (🎯T86).
+///
+/// The constraint is real and unfixable in code: a bullseye older than
+/// the `command` kind cannot read a ledger containing one — not
+/// degraded, not partially, at all. Once a ledger is stamped
+/// schema_version 6 the failure is at least legible ("upgrade
+/// bullseye"), but it is still a failure, and it hits every consumer of
+/// that ledger at once: other agents' MCP servers, other checkouts, CI.
+///
+/// A rollout rule that lives only in a report gets violated. So the
+/// default is refusal, and the acknowledgement is a separate deliberate
+/// act naming what it costs. The failure mode is refusing to adopt,
+/// never silently adopting.
+fn check_command_adoption_allowed(
+    path: &Path,
+    incoming: &[crate::schema::Check],
+    acknowledged: bool,
+) -> Result<(), CallToolError> {
+    let adding_command = incoming
+        .iter()
+        .any(|c| matches!(c, crate::schema::Check::Command { .. }));
+    if !adding_command || acknowledged {
+        return Ok(());
+    }
+    // Already adopted? Then the cost has been paid and the ledger is
+    // already unreadable to old binaries; no second gate.
+    if let Ok(file) = store::load(path)
+        && crate::schema::required_schema_version(&file)
+            >= crate::schema::COMMAND_CHECK_SCHEMA_VERSION
+    {
+        return Ok(());
+    }
+    Err(CallToolError::from_message(api::format_error(
+        api::ErrorCode::Validation,
+        format!(
+            "refusing to add the first `command` check to {path}.\n\
+             \n\
+             This is a one-way door for this ledger. It will be stamped \
+             schema_version {v}, and EVERY bullseye older than that kind will then \
+             refuse to read the whole file — not just the checked target. That \
+             includes other agents' MCP servers, other checkouts, and CI, all at \
+             once. No fix reaches a binary already installed.\n\
+             \n\
+             Before adopting: upgrade every consumer of this ledger, then re-run \
+             with the adoption acknowledged (`--adopt-command-checks` on the CLI, \
+             or `adopt_command_checks: true` on the tool call).",
+            path = path.display(),
+            v = crate::schema::COMMAND_CHECK_SCHEMA_VERSION,
+        ),
+    )))
 }
 
 pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
@@ -1751,7 +1813,11 @@ fn handle_verify(t: crate::tools::VerifyTool) -> ToolResult {
             ops::CheckTool::Unsupported => "UNSUPPORTED".to_string(),
             other => format!("sawmill tool `{}`", check_tool_name(other)),
         };
-        out.push_str(&format!("{}. {via} — {}\n", check.index + 1, check.description));
+        out.push_str(&format!(
+            "{}. {via} — {}\n",
+            check.index + 1,
+            check.description
+        ));
     }
 
     out.push_str("\n## Plan and report template (JSON)\n\n```json\n");
@@ -1991,6 +2057,7 @@ targets:
             cost: None,
             acceptance: None,
             checks: None,
+            adopt_command_checks: false,
             context: None,
             status: None,
             depends_on: None,

@@ -60,7 +60,10 @@ const HASH_LINE_PREFIX: &str = "# content_hash: sha256:";
 /// Canonical YAML body (schema_version stamped, no banner/hash).
 pub fn canonical_body(file: &TargetsFile) -> Result<String, String> {
     let mut stamped = file.clone();
-    stamped.schema_version = Some(CURRENT_SCHEMA_VERSION);
+    // Content-derived, not always-newest (🎯T86): a ledger is stamped at
+    // the lowest version that can represent it, so adopting nothing new
+    // costs nothing in compatibility.
+    stamped.schema_version = Some(crate::schema::required_schema_version(file));
     serde_yaml_ng::to_string(&stamped).map_err(|e| format!("failed to serialize: {e}"))
 }
 
@@ -368,6 +371,32 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
 /// Parse YAML text into a [`TargetsFile`], applying in-memory migrations
 /// but **not** status-scoped self-heal (🎯T82).
 fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
+    // Version check BEFORE full deserialization (🎯T86).
+    //
+    // Order is the whole point. A too-new ledger will also fail to
+    // deserialize — a v7 kind is not in this build's enum — and if the
+    // struct parse runs first the reader gets `data did not match any
+    // variant of untagged enum Check` instead of "upgrade bullseye".
+    // Both are failures; only one tells the reader what to do.
+    //
+    // A cheap partial parse of just the header avoids paying for the
+    // whole document to answer "can I read this at all".
+    #[derive(serde::Deserialize)]
+    struct VersionProbe {
+        #[serde(default)]
+        schema_version: Option<u32>,
+    }
+    if let Ok(probe) = serde_yaml_ng::from_str::<VersionProbe>(content)
+        && let Some(v) = probe.schema_version
+        && v > CURRENT_SCHEMA_VERSION
+    {
+        return Err(LoadError::VersionTooNew {
+            found: v,
+            supported: CURRENT_SCHEMA_VERSION,
+            path: path.to_path_buf(),
+        });
+    }
+
     let mut file: TargetsFile = serde_yaml_ng::from_str(content)
         .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
     if let Some(v) = file.schema_version

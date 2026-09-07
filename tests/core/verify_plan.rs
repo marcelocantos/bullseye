@@ -184,7 +184,9 @@ fn command_check_plans_a_shell_run_with_expected_exit() {
 
     // The description a human reads must carry the command and the bar.
     assert!(
-        plan.checks[0].description.contains("cargo test --workspace")
+        plan.checks[0]
+            .description
+            .contains("cargo test --workspace")
             && plan.checks[0].description.contains("expect_exit=0"),
         "description should name the command and the required exit: {:?}",
         plan.checks[0].description,
@@ -334,7 +336,10 @@ fn an_unknown_check_kind_does_not_poison_the_whole_ledger() {
 
     assert_eq!(file.targets.len(), 3, "every target still loads");
     assert!(matches!(file.targets["T1"].checks[0], Check::Unknown(_)));
-    assert!(matches!(file.targets["T2"].checks[0], Check::Command { .. }));
+    assert!(matches!(
+        file.targets["T2"].checks[0],
+        Check::Command { .. }
+    ));
     assert!(file.targets["T3"].checks.is_empty());
 }
 
@@ -459,7 +464,11 @@ fn running_command_checks_passes_reds_fails_and_skips_what_it_cannot_run() {
     let plan = verify_plan(&file, "T3").unwrap();
     let ran = run_command_checks(&plan);
     assert_eq!(ran[0].outcome, CheckOutcome::Pass);
-    assert_eq!(ran[1].outcome, CheckOutcome::Pass, "non-zero expectation honoured");
+    assert_eq!(
+        ran[1].outcome,
+        CheckOutcome::Pass,
+        "non-zero expectation honoured"
+    );
     assert_eq!(ran_verdict(&ran), CheckOutcome::Pass);
 
     // A red command fails, and says what it saw.

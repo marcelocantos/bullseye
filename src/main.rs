@@ -483,6 +483,8 @@ const COMMIT_FLAGS: &[(&str, bool)] = &[
     ("--cost", true),
     ("--acceptance", true),
     ("--checks", true),
+    ("--adopt-command-checks", false),
+    ("--all", false),
     ("--context", true),
     ("--status", true),
     ("--depends-on", true),
@@ -584,6 +586,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
             Some(acceptance)
         },
         checks: flag_value(args, "--checks"),
+        adopt_command_checks: has_flag(args, "--adopt-command-checks"),
         context: flag_value(args, "--context"),
         status: flag_value(args, "--status"),
         depends_on: flag_value(args, "--depends-on").map(|s| {
@@ -640,17 +643,26 @@ fn cli_plan_checks(args: &[String]) -> Result<String, String> {
 fn cli_run_checks(args: &[String]) -> i32 {
     if has_flag(args, "--help") {
         println!(
-            "bullseye run-checks --id ID [--cwd DIR]\n\
+            "bullseye run-checks (--id ID | --all) [--cwd DIR]\n\
              \n\
-             Runs the target's declared `command` checks and reports each\n\
-             outcome. Exit 0 = all passed, 1 = a check failed, 2 = a check\n\
-             could not be run here (sawmill kind, or an unknown kind from a\n\
-             newer bullseye).\n"
+             --id ID   Run one target's declared checks. Exit 0 = all passed,\n\
+             \x20         1 = a check failed, 2 = a check could not be run here\n\
+             \x20         (sawmill kind, or an unknown kind from a newer bullseye).\n\
+             \x20         2 is deliberately not 0: 'not checked' is not 'checked'.\n\
+             \n\
+             --all     Gate mode. Run every declared command check in the ledger\n\
+             \x20         and exit 1 if any is RED. Checks this build cannot run are\n\
+             \x20         counted and printed, but do not fail the gate — so the\n\
+             \x20         claim is precisely 'no declared command check is red',\n\
+             \x20         never 'everything is verified'.\n"
         );
         return 0;
     }
+    if has_flag(args, "--all") {
+        return cli_run_checks_all(args);
+    }
     let Some(id) = flag_value(args, "--id") else {
-        eprintln!("run-checks requires --id");
+        eprintln!("run-checks requires --id or --all");
         return 2;
     };
     let cwd = default_cwd(args);
@@ -676,7 +688,10 @@ fn cli_run_checks(args: &[String]) -> i32 {
         }
     };
 
-    println!("Running checks for 🎯{} \"{}\"", plan.target_id, plan.target_name);
+    println!(
+        "Running checks for 🎯{} \"{}\"",
+        plan.target_id, plan.target_name
+    );
     for check in &plan.checks {
         println!("  {}. {}", check.index + 1, check.description);
     }
@@ -714,6 +729,96 @@ fn cli_run_checks(args: &[String]) -> i32 {
             2
         }
     }
+}
+
+/// Gate mode: run every declared command check in the ledger (🎯T86).
+///
+/// Fails only on a RED check. Checks this build cannot run — sawmill
+/// kinds, or a kind from a newer bullseye — are counted and printed but
+/// do not fail the gate, because a repo that legitimately mixes kinds
+/// would otherwise be unable to use this at all. The summary states
+/// exactly what was adjudicated so the result cannot be read as a
+/// broader claim than it is.
+fn cli_run_checks_all(args: &[String]) -> i32 {
+    let cwd = default_cwd(args);
+    let path = match bullseye::store::discover_anywhere(std::path::Path::new(&cwd)) {
+        Some(p) => p,
+        None => {
+            eprintln!("no bullseye.yaml found from {cwd}");
+            return 2;
+        }
+    };
+    let file = match bullseye::store::load(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+
+    let with_checks: Vec<&String> = file
+        .targets
+        .iter()
+        .filter(|(_, t)| !t.checks.is_empty())
+        .map(|(id, _)| id)
+        .collect();
+
+    if with_checks.is_empty() {
+        println!("No target declares checks — nothing to run.");
+        return 0;
+    }
+
+    let (mut passed, mut failed, mut skipped) = (0usize, 0usize, 0usize);
+    for id in &with_checks {
+        let plan = match bullseye::ops::verify_plan(&file, id) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{id}: {e}");
+                failed += 1;
+                continue;
+            }
+        };
+        for r in bullseye::ops::run_command_checks(&plan) {
+            let mark = match r.outcome {
+                bullseye::ops::CheckOutcome::Pass => {
+                    passed += 1;
+                    "PASS"
+                }
+                bullseye::ops::CheckOutcome::Fail => {
+                    failed += 1;
+                    "FAIL"
+                }
+                _ => {
+                    skipped += 1;
+                    "SKIP"
+                }
+            };
+            print!("{mark}  🎯{id}  {}", r.description);
+            match &r.detail {
+                Some(d) => println!(" — {d}"),
+                None => println!(),
+            }
+        }
+    }
+
+    println!(
+        "\n{passed} passed, {failed} failed, {skipped} not runnable here \
+         (across {} target(s) declaring checks).",
+        with_checks.len()
+    );
+    if failed > 0 {
+        println!("GATE FAILED — a declared check is red.");
+        return 1;
+    }
+    if skipped > 0 {
+        println!(
+            "Gate passed: no declared command check is red. \
+             {skipped} check(s) were NOT adjudicated here."
+        );
+    } else {
+        println!("Gate passed: every declared check ran and passed.");
+    }
+    0
 }
 
 /// `--momentum T1=1.5,T2=0.5` → the wire shape the tools take.
