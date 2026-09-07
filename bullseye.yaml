@@ -16,7 +16,7 @@
 # only through tools, not these lines.
 # content_hash: sha256:91242f287e006f8f95e178a11594a77e2803a94ad14f220347c2d1a97004d74c
 
-schema_version: 5
+schema_version: 6
 targets:
   T1:
     name: MCP triad integration (targets + sawmill + mnemo)
@@ -2915,6 +2915,38 @@ targets:
     origin: team-lead review of the 🎯T84 command check kind, 2026-09-06
     discovered: 2026-09-06
     achieved: 2026-09-06
+  T86:
+    name: Adopting a ledger feature that older readers cannot understand is a refused-by-default act, and a declared check reddens a real gate
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Adding the first command check to a ledger is refused unless the caller explicitly acknowledges the rollout cost, and the refusal names what breaks and who it breaks for.
+    - A ledger is stamped at the lowest schema version that represents its content, so a repo that adopts nothing new stays readable by binaries in the field.
+    - A too-new ledger produces an actionable 'upgrade bullseye' error rather than a serde message, which requires the version check to run before deserialization.
+    - make bullseye runs every declared command check in this repo's own ledger and fails when one is red.
+    - At least two other cold repos carry real declared checks that have been executed.
+    checks:
+    - command:
+        run: cargo test --test unknown_check_tolerance_test
+    - command:
+        run: cargo run --quiet -- run-checks --all --cwd .
+    context: |-
+      🎯T84 and 🎯T85 left two gaps. The rollout rule lived only in a report, and a rule that lives in a report gets violated. And nothing ran a declared check, so checks: was documentation.
+
+      REFUSAL, NOT DOCUMENTATION. Adding the first command check to a ledger is now refused unless acknowledged. The refusal names the cost: every older bullseye stops reading the whole file, including other agents' MCP servers, other checkouts and CI, and no fix reaches an installed binary. A ledger that already adopted is not re-asked, since a second prompt would only train people to pass the flag.
+
+      STAMPING IS CONTENT-DERIVED. An unconditional bump would strand every ledger this binary touches whether or not it used anything new. required_schema_version returns 6 only for a ledger that actually contains a command check.
+
+      ORDER WAS THE REAL FIX. Raising the stamp alone did nothing: measured against 0.52.0, an adopted ledger still emitted 'data did not match any variant of untagged enum Check', because the struct parse ran first and a too-new ledger fails it either way. The version gate is only legible if reached first. This build fed a v7 ledger now says 'schema_version 7, supports up to 6, upgrade'. 0.52.0 can never say that; the next bump can.
+
+      CHECKS GATE. run-checks --all is wired into make bullseye. Green on five targets here; inserting one 'exit 9' check produced '7 passed, 1 failed / GATE FAILED' exit 1. Gate mode fails only on red, counting but not failing on checks it cannot run, so a repo mixing sawmill and command kinds can still use it; the summary states what was adjudicated so it cannot be read as a broader claim.
+
+      FLEET. ytt and mnemo now carry real checks on three active targets each, on burst/checks branches. ytt is 4 for 4 green. mnemo found real pre-existing gofmt drift on its first run, left red and reported rather than quietly fixed.
+
+      RESIDUE. Neither branch may merge until its consumers are upgraded — mnemo's own MCP server is one of them. Sawmill kinds still cannot be run by bullseye and report unsupported.
+    origin: team-lead review of 🎯T85, 2026-09-06
+    discovered: 2026-09-07
   T9:
     name: agents-guide documents parallelised bullseye Makefile convention
     status: achieved
