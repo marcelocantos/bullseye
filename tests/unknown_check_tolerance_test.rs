@@ -488,3 +488,169 @@ targets:
     assert_eq!(code, 0, "an ordinary run must still work:\n{out}");
     assert!(out.contains("PASS"), "{out}");
 }
+
+// --- Defects found by adoption (🎯T86) -----------------------------------
+
+#[test]
+fn a_check_runs_against_the_ledgers_repo_not_the_callers_shell_cwd() {
+    // FOUND BY ADOPTION. `run-checks --cwd DIR` located the ledger but
+    // never set the spawned command's working directory, so a check
+    // without its own `cwd` ran wherever the caller happened to be
+    // standing. Run from one directory a repo's checks reported "exited
+    // 2, expected 0"; run from inside the worktree the same checks
+    // passed. A check that adjudicates the wrong tree and says so
+    // confidently is worse than no check — which is the whole reason
+    // this feature exists.
+    //
+    // The check below declares no `cwd` of its own and asserts on a file
+    // that exists only in the ledger's directory, so it can only pass if
+    // the command ran there.
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(repo.path().join("marker-file"), "in the repo\n").unwrap();
+    std::fs::write(
+        repo.path().join("bullseye.yaml"),
+        r#"
+schema_version: 6
+targets:
+  T1:
+    name: Adjudicated in its own repo
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - the marker is here
+    origin: manual
+    discovered: 2026-09-07
+    checks:
+    - command:
+        run: test -f marker-file
+"#,
+    )
+    .unwrap();
+
+    // Run from a directory that is NOT the repo. Before the fix the
+    // command inherited this cwd, `test -f marker-file` failed, and the
+    // check reported a confident red.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .args(["run-checks", "--all", "--cwd"])
+        .arg(repo.path())
+        .current_dir(elsewhere.path())
+        .env_remove(bullseye::ops::CHECK_RUNNER_MARKER)
+        .output()
+        .expect("binary runs");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the check must run in the ledger's repo, not the caller's cwd:\n{text}",
+    );
+    assert!(text.contains("PASS"), "{text}");
+}
+
+#[test]
+fn a_checks_own_cwd_is_resolved_against_the_repo_not_the_caller() {
+    // The same defect one level down: a declared relative `cwd` was
+    // joined to whatever the caller's directory was.
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join("sub")).unwrap();
+    std::fs::write(repo.path().join("sub/marker-file"), "in the subdir\n").unwrap();
+    std::fs::write(
+        repo.path().join("bullseye.yaml"),
+        r#"
+schema_version: 6
+targets:
+  T1:
+    name: Adjudicated in a subdirectory
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - the marker is in sub/
+    origin: manual
+    discovered: 2026-09-07
+    checks:
+    - command:
+        run: test -f marker-file
+        cwd: sub
+"#,
+    )
+    .unwrap();
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .args(["run-checks", "--all", "--cwd"])
+        .arg(repo.path())
+        .current_dir(elsewhere.path())
+        .env_remove(bullseye::ops::CHECK_RUNNER_MARKER)
+        .output()
+        .expect("binary runs");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a declared cwd resolves against the repo root:\n{text}",
+    );
+}
+
+#[test]
+fn the_adoption_gate_fires_on_apply_not_just_on_commit() {
+    // FOUND BY ADOPTION. The refusal lived on `commit --op track`, so
+    // `apply` was an unguarded route into the same ledger — and fragment
+    // files routed through it stamped three ledgers at schema_version 6
+    // with no prompt. A one-way door with a guard on one of its two
+    // doors is not guarded. The gate now lives in the apply engine,
+    // which every write goes through.
+    let tmp = plain_ledger_dir();
+    let frag = tmp.path().join("frag.yaml");
+    std::fs::write(
+        &frag,
+        r#"
+targets:
+  T1:
+    checks:
+      - command:
+          run: "true"
+"#,
+    )
+    .unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .args(["apply", "--file"])
+        .arg(&frag)
+        .arg("--cwd")
+        .arg(tmp.path())
+        .env_remove(bullseye::ops::CHECK_RUNNER_MARKER)
+        .output()
+        .expect("binary runs");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "apply must not walk through the one-way door silently:\n{text}",
+    );
+    assert!(
+        text.contains("refusing to add the first `command` check"),
+        "and must give the same refusal as the other route:\n{text}",
+    );
+
+    let raw = std::fs::read_to_string(tmp.path().join("bullseye.yaml")).unwrap();
+    assert!(
+        raw.contains("schema_version: 5") && !raw.contains("command"),
+        "a refused adoption leaves the ledger untouched:\n{raw}",
+    );
+}
