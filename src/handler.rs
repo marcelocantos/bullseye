@@ -994,68 +994,36 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
         }
     };
 
-    enum Outcome {
-        AlreadyAchieved,
-        Retired { name: String, cost: f64 },
-    }
-
-    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, api::CodedError> {
-        let not_found = || {
-            api::CodedError::new(
+    // Already-achieved is a no-op report (agents-guide), not a second
+    // write. Check before apply so a leftover `actual_cost` cannot
+    // trip 🎯T8 immutability on an idempotent retire.
+    let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
+    match file.targets.get(&t.id) {
+        None => {
+            return Err(tool_err(api::format_error(
                 api::ErrorCode::NotFound,
                 format!("target {} not found", t.id),
-            )
-        };
-        let existing = file.targets.get(&t.id).ok_or_else(not_found)?;
-        if existing.status == Status::Achieved {
-            return Ok(Outcome::AlreadyAchieved);
+            )));
         }
-        ops::refuse_active_family(file, &t.id)?;
-        let target = file.targets.get_mut(&t.id).ok_or_else(not_found)?;
-        target.status = Status::Achieved;
-        // Clear what the previous status owned before writing the
-        // achieved-only fields (🎯T64) — e.g. a `set_aside_reason` from
-        // an earlier disposition, which used to survive into the
-        // achievement and make the target permanently invalid.
-        target.clear_illegal_status_scoped_fields();
-        let today = Local::now().date_naive();
-        target.achieved = Some(today);
-        target.attestation = Some(attestation.clone());
-        // Context audit line so the note is visible even when readers
-        // only skim context (dedicated field remains SoT for round-trip).
-        let entry = format!("Achieved {today}: {attestation}");
-        if target.context.is_empty() {
-            target.context = entry;
-        } else {
-            target.context.push_str("\n\n");
-            target.context.push_str(&entry);
+        Some(existing) if existing.status == Status::Achieved => {
+            return text_result(format!("🎯{} is already achieved", t.id));
         }
-        if let Some(actual) = t.actual_cost {
-            target.actual_cost = Some(actual);
-        }
-        Ok(Outcome::Retired {
-            name: target.name.clone(),
-            cost: target.cost,
-        })
-    })
-    .map_err(mutation_tool_err)?;
-
-    match outcome {
-        Outcome::AlreadyAchieved => text_result(format!("🎯{} is already achieved", t.id)),
-        Outcome::Retired { name, cost } => {
-            let mut out = format!("Retired 🎯{} \"{name}\"\nAttestation: {attestation}", t.id);
-            if let Some(actual) = t.actual_cost {
-                out.push_str(&format!("\nCost: estimated {cost}, actual {actual}"));
-            }
-            mutation_text(
-                &path,
-                "achieve",
-                std::slice::from_ref(&t.id),
-                std::slice::from_ref(&t.id),
-                out,
-            )
-        }
+        Some(_) => {}
     }
+
+    // One engine: same fragment as `op=achieve`, so 🎯T79's
+    // refuse_open_dependencies binds here too (Fable F1).
+    commit_sugar(
+        &t.cwd,
+        t.id,
+        crate::apply::Fragment {
+            status: Some("achieved".to_string()),
+            attestation: Some(attestation),
+            actual_cost: t.actual_cost,
+            ..Default::default()
+        },
+        "achieve",
+    )
 }
 
 /// Re-open a previously-retired target (🎯T25). Replaces the v4

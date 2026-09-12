@@ -333,6 +333,15 @@ pub fn is_allocation_slot(key: &str) -> bool {
     key.starts_with('_')
 }
 
+fn append_context_audit(target: &mut Target, entry: String) {
+    if target.context.is_empty() {
+        target.context = entry;
+    } else {
+        target.context.push_str("\n\n");
+        target.context.push_str(&entry);
+    }
+}
+
 fn parse_status(s: &str) -> Result<Status, ApplyError> {
     match s {
         "identified" => Ok(Status::Identified),
@@ -682,7 +691,7 @@ pub fn apply(
                         format!("🎯{id}: `acceptance` is required when creating a target"),
                     )
                 })?;
-            let target = Target {
+            let mut target = Target {
                 name,
                 status: to,
                 value: frag.value.unwrap_or(0.0),
@@ -710,6 +719,11 @@ pub fn apply(
                 postponed_until: frag.postponed_until,
                 postpone_predicate: frag.postpone_predicate.clone(),
             };
+            if to == Status::Achieved
+                && let Some(note) = target.attestation.clone()
+            {
+                append_context_audit(&mut target, format!("Achieved {today}: {note}"));
+            }
             file.targets.insert(id.clone(), target);
             // 🎯T39.1: a dotted create is a family edge, not a prefix.
             ops::attach_dotted_child(file, &id)
@@ -721,12 +735,14 @@ pub fn apply(
             let content_edits = frag.name.is_some()
                 || frag.value.is_some()
                 || frag.cost.is_some()
+                || frag.actual_cost.is_some()
                 || frag.acceptance.is_some()
                 || frag.checks.is_some()
                 || frag.context.is_some()
                 || frag.tags.is_some()
                 || frag.origin.is_some()
-                || frag.depends_on.is_some();
+                || frag.depends_on.is_some()
+                || frag.clear.as_ref().is_some_and(|fields| !fields.is_empty());
             if from == Some(Status::Achieved) && to == Status::Achieved && content_edits {
                 return Err(ApplyError::new(
                     ErrorCode::ImmutableAchieved,
@@ -837,6 +853,9 @@ pub fn apply(
                         if target.achieved.is_none() {
                             target.achieved = Some(today);
                         }
+                        if let Some(note) = frag.attestation.clone() {
+                            append_context_audit(target, format!("Achieved {today}: {note}"));
+                        }
                     }
                     Status::SetAside => {
                         target.set_aside_reason = frag.reason.clone();
@@ -849,13 +868,7 @@ pub fn apply(
                         if let Some(reason) = frag.reason.as_deref().map(str::trim)
                             && !reason.is_empty()
                         {
-                            let entry = format!("Reverted {today}: {reason}");
-                            if target.context.is_empty() {
-                                target.context = entry;
-                            } else {
-                                target.context.push_str("\n\n");
-                                target.context.push_str(&entry);
-                            }
+                            append_context_audit(target, format!("Reverted {today}: {reason}"));
                         }
                     }
                     _ => {}
@@ -1053,6 +1066,12 @@ targets:
             Some("green on deadbeef")
         );
         assert!(file.targets["T1"].achieved.is_some());
+        assert!(
+            file.targets["T1"].context.contains("Achieved ")
+                && file.targets["T1"].context.contains("green on deadbeef"),
+            "achieve must append the skim-friendly audit line: {}",
+            file.targets["T1"].context
+        );
     }
 
     #[test]
@@ -1591,6 +1610,47 @@ targets:
     }
 
     #[test]
+    fn clear_on_achieved_target_is_refused_with_immutable_code() {
+        // Fable F2 / 🎯T8: `clear` is a content edit. The name-only
+        // test above does not cover this hole.
+        let mut file = base_file();
+        file.targets.get_mut("T2").unwrap().context = "historical".into();
+        let err = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    clear: Some(vec!["context".into()]),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert_eq!(err.code, ErrorCode::ImmutableAchieved);
+        assert_eq!(file.targets["T2"].context, "historical");
+    }
+
+    #[test]
+    fn actual_cost_on_achieved_target_is_refused_with_immutable_code() {
+        let mut file = base_file();
+        let err = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    actual_cost: Some(8.0),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert_eq!(err.code, ErrorCode::ImmutableAchieved);
+        assert!(file.targets["T2"].actual_cost.is_none());
+    }
+
+    #[test]
     fn reopen_and_patch_in_one_apply_is_allowed() {
         let mut file = base_file();
         apply(
@@ -1609,6 +1669,32 @@ targets:
         .expect("applies");
         assert_eq!(file.targets["T2"].status, Status::Identified);
         assert_eq!(file.targets["T2"].name, "rewritten");
+    }
+
+    #[test]
+    fn reopen_and_clear_in_one_apply_is_allowed() {
+        let mut file = base_file();
+        file.targets.get_mut("T2").unwrap().context = "historical".into();
+        apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    status: Some("identified".into()),
+                    reason: Some("acceptance was wrong".into()),
+                    clear: Some(vec!["context".into()]),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("applies");
+        assert_eq!(file.targets["T2"].status, Status::Identified);
+        assert!(
+            !file.targets["T2"].context.contains("historical"),
+            "clear must wipe the historical context: {}",
+            file.targets["T2"].context
+        );
     }
 
     // --- Creation and allocation ------------------------------------
