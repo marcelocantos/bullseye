@@ -285,6 +285,8 @@ impl ApplyReport {
         let mut out = self.created.clone();
         out.extend(self.updated.iter().cloned());
         out.extend(self.removed.iter().cloned());
+        // `blocks` mutates the injectee; the structured `changed:` line
+        // has to name it or T82's envelope lies (Fable F4).
         for (_, blocked) in &self.injected {
             out.push(blocked.clone());
         }
@@ -359,6 +361,19 @@ fn parse_status(s: &str) -> Result<Status, ApplyError> {
 
 fn non_empty(v: &Option<String>) -> bool {
     v.as_deref().is_some_and(|s| !s.trim().is_empty())
+}
+
+/// Portfolio scores must be real numbers. `NaN < 0.0` is false and Inf
+/// is non-negative, so a `< 0` check alone lets them through and
+/// poisons WSJF ranking (Fable F7).
+fn refuse_non_finite(id: &str, field: &str, v: f64) -> Result<(), ApplyError> {
+    if v.is_finite() {
+        return Ok(());
+    }
+    Err(ApplyError::new(
+        ErrorCode::Validation,
+        format!("🎯{id}: {field} must be a finite number, got {v}"),
+    ))
 }
 
 /// Normalize and validate achieve attestation (🎯T58).
@@ -691,11 +706,15 @@ pub fn apply(
                         format!("🎯{id}: `acceptance` is required when creating a target"),
                     )
                 })?;
+            let value = frag.value.unwrap_or(0.0);
+            refuse_non_finite(&id, "value", value)?;
+            let cost = frag.cost.unwrap_or(0.0);
+            refuse_non_finite(&id, "cost", cost)?;
             let mut target = Target {
                 name,
                 status: to,
-                value: frag.value.unwrap_or(0.0),
-                cost: frag.cost.unwrap_or(0.0),
+                value,
+                cost,
                 actual_cost: frag.actual_cost,
                 set_aside_reason: (to == Status::SetAside)
                     .then(|| frag.reason.clone())
@@ -726,9 +745,12 @@ pub fn apply(
             }
             file.targets.insert(id.clone(), target);
             // 🎯T39.1: a dotted create is a family edge, not a prefix.
-            ops::attach_dotted_child(file, &id)
+            let parent_mutated = ops::attach_dotted_child(file, &id)
                 .map_err(|e| ApplyError::new(ErrorCode::Validation, e.to_string()))?;
             report.created.push(id.clone());
+            if parent_mutated && let Some(parent_id) = ops::direct_parent_id(&id) {
+                report.updated.push(parent_id.to_string());
+            }
         } else {
             // Achieved targets are historical artifacts: their content
             // is immutable unless this same apply reopens them (🎯T8).
@@ -758,9 +780,11 @@ pub fn apply(
                 target.name = v.clone();
             }
             if let Some(v) = frag.value {
+                refuse_non_finite(&id, "value", v)?;
                 target.value = v;
             }
             if let Some(v) = frag.cost {
+                refuse_non_finite(&id, "cost", v)?;
                 target.cost = v;
             }
             if let Some(v) = frag.actual_cost {
@@ -1906,5 +1930,101 @@ targets:
             "got: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn changed_includes_blocks_injectee() {
+        // Fable F4 / 🎯T82: `changed:` must name every record that
+        // actually moved, including the target `blocks` injected into.
+        let mut file = base_file();
+        let r = apply(
+            &mut file,
+            &one(
+                "T3",
+                Fragment {
+                    name: Some("blocker".into()),
+                    acceptance: Some(vec!["blocks T1".into()]),
+                    blocks: Some(vec!["T1".into()]),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("applies");
+        assert_eq!(r.created, vec!["T3".to_string()]);
+        assert_eq!(file.targets["T1"].depends_on, vec!["T3".to_string()]);
+        assert!(
+            r.changed().contains(&"T1".to_string()),
+            "blocks injectee T1 must appear on changed:; got {:?}",
+            r.changed()
+        );
+    }
+
+    #[test]
+    fn changed_includes_dotted_parent_on_attach() {
+        // Fable F4 / 🎯T39.1: creating T1.1 appends T1.1 to T1 and may
+        // promote T1 Identified→Converging. `changed:` must name T1.
+        let mut file = base_file();
+        let r = apply(
+            &mut file,
+            &one(
+                "T1.1",
+                Fragment {
+                    name: Some("child of the thing".into()),
+                    acceptance: Some(vec!["child works".into()]),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("applies");
+        assert_eq!(r.created, vec!["T1.1".to_string()]);
+        assert_eq!(file.targets["T1"].depends_on, vec!["T1.1".to_string()]);
+        assert_eq!(file.targets["T1"].status, Status::Converging);
+        assert!(
+            r.changed().contains(&"T1".to_string()),
+            "dotted parent T1 must appear on changed:; got {:?}",
+            r.changed()
+        );
+    }
+
+    #[test]
+    fn non_finite_value_and_cost_are_rejected() {
+        // Fable F7: NaN/Inf pass `v < 0.0` and poison portfolio WSJF.
+        for (field, frag) in [
+            (
+                "value",
+                Fragment {
+                    value: Some(f64::NAN),
+                    ..Default::default()
+                },
+            ),
+            (
+                "value",
+                Fragment {
+                    value: Some(f64::INFINITY),
+                    ..Default::default()
+                },
+            ),
+            (
+                "cost",
+                Fragment {
+                    cost: Some(f64::NEG_INFINITY),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut file = base_file();
+            let err = apply(&mut file, &one("T1", frag), &no_history())
+                .expect_err("non-finite score must be refused");
+            assert_eq!(err.code, ErrorCode::Validation, "{field}: {}", err.message);
+            assert!(
+                err.message.contains(field),
+                "{field} error must name the field: {}",
+                err.message
+            );
+            assert_eq!(file.targets["T1"].value, 0.0);
+            assert_eq!(file.targets["T1"].cost, 0.0);
+        }
     }
 }

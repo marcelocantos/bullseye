@@ -56,7 +56,7 @@ fn history_scan_sees_ids_committed_after_the_cache_was_primed() {
     let yaml = dir.path().join("bullseye.yaml");
 
     // Prime: at this point history knows T1 and nothing else.
-    let first = bullseye::id_alloc::historical_ids(&yaml);
+    let first = bullseye::id_alloc::historical_ids(&yaml).expect("history scan");
     assert!(
         first.contains("T1"),
         "seed commit should register T1: {first:?}"
@@ -73,7 +73,7 @@ fn history_scan_sees_ids_committed_after_the_cache_was_primed() {
 
     // Same process, same cache. Before the ref fingerprint this
     // returned the primed snapshot and omitted T2.
-    let second = bullseye::id_alloc::historical_ids(&yaml);
+    let second = bullseye::id_alloc::historical_ids(&yaml).expect("history scan");
     assert!(
         second.contains("T2"),
         "history scan must see refs that moved since the cache was primed, got: {second:?}"
@@ -86,7 +86,7 @@ fn an_unchanged_repo_is_still_served_from_cache() {
     // a stable fingerprint has to keep answering from memory.
     let dir = repo();
     let yaml = dir.path().join("bullseye.yaml");
-    let first = bullseye::id_alloc::historical_ids(&yaml);
-    let second = bullseye::id_alloc::historical_ids(&yaml);
+    let first = bullseye::id_alloc::historical_ids(&yaml).expect("history scan");
+    let second = bullseye::id_alloc::historical_ids(&yaml).expect("history scan");
     assert_eq!(first, second, "identical refs must yield an identical set");
 }

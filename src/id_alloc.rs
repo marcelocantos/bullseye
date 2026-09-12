@@ -27,6 +27,8 @@
 //! human ergonomics — short sequential `T{n}` restored):
 //! - External-mode storage (shadow tree, no git repo): falls back to
 //!   in-memory-only allocation — `historical_ids` returns an empty set.
+//! - A git timeout or other scan failure **refuses** allocation
+//!   (`id_reserved`) rather than guessing from live keys (Fable F6).
 //! - Two machines / clones that allocate without fetching each other can
 //!   still pick the same next `T{n}`; resolve by hand (or later policy
 //!   such as even/odd developer ranges) if it becomes a major issue.
@@ -36,12 +38,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
-use crate::bounded::{GIT_QUERY_TIMEOUT, git_query};
+use crate::bounded::{GIT_QUERY_TIMEOUT, GitQueryError, git_query, git_query_detailed};
 use crate::cache;
 
 /// Process-global cache. Keyed by canonical repo-top path; value is
@@ -78,42 +80,91 @@ fn id_re() -> &'static Regex {
     })
 }
 
+/// Why a historical-ID scan could not produce a trustworthy set.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HistoricalIdsError {
+    /// The path sits in a git repo, but git could not answer (timeout,
+    /// missing binary, non-zero exit that is not "not a repository").
+    /// Allocating from live keys alone would recycle an ID that exists
+    /// only on another ref (🎯T28).
+    ScanFailed { reason: String },
+}
+
+impl std::fmt::Display for HistoricalIdsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ScanFailed { reason } => write!(
+                f,
+                "refusing to allocate a target ID — git history scan failed ({reason}). \
+                 Retry when git can answer; inventing the next T{{n}} from live keys alone \
+                 can recycle an ID that exists only on another ref (🎯T28)."
+            ),
+        }
+    }
+}
+
+impl HistoricalIdsError {
+    pub fn code(&self) -> crate::api::ErrorCode {
+        crate::api::ErrorCode::IdReserved
+    }
+}
+
 /// Every target ID that has ever appeared as a key in `yaml_path`
 /// across every branch and remote the local clone knows about.
 ///
-/// Returns an empty set when:
-/// - `yaml_path` is not inside a git repo (external-mode shadow
-///   storage falls into this case),
-/// - the git invocation fails for any reason (missing binary,
-///   permissions, etc.).
-///
-/// Callers should union this set with the live in-memory target keys
-/// when picking the next free ID — the historical scan deliberately
-/// does **not** include uncommitted in-memory state.
+/// Returns an empty set when `yaml_path` is not inside a git repo
+/// (external-mode shadow storage). Returns [`HistoricalIdsError`] when
+/// the path *is* in a repo but git cannot answer — timeout, missing
+/// binary, or a non-zero exit that is not "not a repository". Callers
+/// that allocate must refuse rather than guess from live keys (🎯T28).
 ///
 /// Memoised per-process keyed by the canonical repo-top path.
-pub fn historical_ids(yaml_path: &Path) -> HashSet<String> {
+pub fn historical_ids(yaml_path: &Path) -> Result<HashSet<String>, HistoricalIdsError> {
+    try_historical_ids_bounded(yaml_path, GIT_QUERY_TIMEOUT)
+}
+
+/// Same scan as [`historical_ids`], with an explicit bound so tests can
+/// drive a short timeout.
+pub fn try_historical_ids_bounded(
+    yaml_path: &Path,
+    timeout: Duration,
+) -> Result<HashSet<String>, HistoricalIdsError> {
+    scan_historical_ids(yaml_path, timeout)
+}
+
+fn scan_failed(reason: impl Into<String>) -> HistoricalIdsError {
+    HistoricalIdsError::ScanFailed {
+        reason: reason.into(),
+    }
+}
+
+fn scan_historical_ids(
+    yaml_path: &Path,
+    timeout: Duration,
+) -> Result<HashSet<String>, HistoricalIdsError> {
     let Some(parent) = yaml_path.parent() else {
-        return HashSet::new();
+        return Ok(HashSet::new());
     };
-    let Some(repo_top) = git_top_level(parent) else {
-        return HashSet::new();
+    let repo_top = match git_top_level_result(parent, timeout) {
+        Ok(p) => p,
+        Err(GitQueryError::NotARepo) => return Ok(HashSet::new()),
+        Err(GitQueryError::Failed(reason)) => return Err(scan_failed(reason)),
     };
 
     // A repo whose refs cannot be read is rescanned every time rather
-    // than served from a snapshot of unknown age.
-    let fingerprint = ref_fingerprint(&repo_top);
+    // than served from a snapshot of unknown age. Fingerprint failure
+    // only disables the cache — it does not invent a free ID.
+    let fingerprint = ref_fingerprint_timed(&repo_top, timeout);
     if let Some(fp) = fingerprint.as_deref()
         && let Some(cached) = cache_get(&repo_top, fp)
     {
-        return cached;
+        return Ok(cached);
     }
 
-    let Some(pathspec) = relative_pathspec(yaml_path, &repo_top) else {
-        return HashSet::new();
-    };
+    let pathspec = relative_pathspec(yaml_path, &repo_top)
+        .ok_or_else(|| scan_failed("could not relativize bullseye.yaml to the repo root"))?;
 
-    let Some(body) = git_query(
+    let body = match git_query_detailed(
         &repo_top,
         &[
             "log",
@@ -124,9 +175,11 @@ pub fn historical_ids(yaml_path: &Path) -> HashSet<String> {
             "--",
             &pathspec,
         ],
-        GIT_QUERY_TIMEOUT,
-    ) else {
-        return HashSet::new();
+        timeout,
+    ) {
+        Ok(body) => body,
+        Err(GitQueryError::NotARepo) => return Ok(HashSet::new()),
+        Err(GitQueryError::Failed(reason)) => return Err(scan_failed(reason)),
     };
 
     let mut ids: HashSet<String> = HashSet::new();
@@ -139,7 +192,7 @@ pub fn historical_ids(yaml_path: &Path) -> HashSet<String> {
     if let Some(fp) = fingerprint {
         cache_put(repo_top, fp, ids.clone());
     }
-    ids
+    Ok(ids)
 }
 
 /// Cheap fingerprint of every ref in the repo.
@@ -149,8 +202,8 @@ pub fn historical_ids(yaml_path: &Path) -> HashSet<String> {
 /// history scan is still valid. Returns `None` when git cannot answer,
 /// which callers treat as "do not trust the cache" rather than as "no
 /// change".
-fn ref_fingerprint(repo_top: &Path) -> Option<String> {
-    let refs = git_query(repo_top, &["rev-parse", "--all"], GIT_QUERY_TIMEOUT)?;
+fn ref_fingerprint_timed(repo_top: &Path, timeout: Duration) -> Option<String> {
+    let refs = git_query(repo_top, &["rev-parse", "--all"], timeout)?;
     let mut hasher = Sha256::new();
     hasher.update(refs.as_bytes());
     Some(format!("{:x}", hasher.finalize()))
@@ -178,13 +231,15 @@ fn relative_pathspec(yaml_path: &Path, repo_top: &Path) -> Option<String> {
     stripped.to_str().map(str::to_string)
 }
 
-fn git_top_level(dir: &Path) -> Option<PathBuf> {
-    let s = git_query(dir, &["rev-parse", "--show-toplevel"], GIT_QUERY_TIMEOUT)?;
+fn git_top_level_result(dir: &Path, timeout: Duration) -> Result<PathBuf, GitQueryError> {
+    let s = git_query_detailed(dir, &["rev-parse", "--show-toplevel"], timeout)?;
     let trimmed = s.trim();
     if trimmed.is_empty() {
-        return None;
+        return Err(GitQueryError::Failed(
+            "git rev-parse --show-toplevel was empty".into(),
+        ));
     }
-    Some(PathBuf::from(trimmed))
+    Ok(PathBuf::from(trimmed))
 }
 
 /// Drop every cached entry. Exposed for integration tests that need

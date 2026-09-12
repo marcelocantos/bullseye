@@ -200,8 +200,8 @@ pub enum SubdivideError {
         index: usize,
         field: &'static str,
     },
-    /// `retire` mode received an empty reason after trimming. The
-    /// reason is optional, but if supplied it must be substantive.
+    /// `retire` mode requires a non-trivial `retire_reason`, stored as
+    /// the parent's attestation (🎯T58). Missing, empty, or trivial.
     EmptyRetireReason,
     /// `tail` parameter supplied in a mode that has no dependent
     /// rewiring (currently `aggregate`). `tail` only applies to
@@ -262,7 +262,9 @@ impl std::fmt::Display for SubdivideError {
             ),
             SubdivideError::EmptyRetireReason => write!(
                 f,
-                "`retire_reason` was supplied but is empty after trimming — omit it or write a real reason"
+                "`retire` mode requires a non-empty `retire_reason` — it is recorded as the \
+                 parent's attestation (🎯T58). Write a short note on how the parent's scope \
+                 was met or why the children replace it."
             ),
             SubdivideError::TailRequiresRetireMode => write!(
                 f,
@@ -384,9 +386,10 @@ impl AttachError {
 /// `file`, append the child to that parent's `depends_on` and promote
 /// Identified → Converging (🎯T39.1).
 ///
-/// Returns whether the parent status changed. No-op (Ok(false)) when
-/// the id is top-level or the parent key is absent. Errors when the
-/// parent exists and is terminal.
+/// Returns whether the parent record was mutated (edge added and/or
+/// Identified→Converging). No-op (`Ok(false)`) when the id is
+/// top-level or the parent key is absent. Errors when the parent
+/// exists and is terminal.
 pub fn attach_dotted_child(file: &mut TargetsFile, child_id: &str) -> Result<bool, AttachError> {
     let Some(parent_id) = direct_parent_id(child_id) else {
         return Ok(false);
@@ -400,15 +403,17 @@ pub fn attach_dotted_child(file: &mut TargetsFile, child_id: &str) -> Result<boo
             status: parent.status,
         });
     }
+    let mut mutated = false;
     if !parent.depends_on.iter().any(|d| d == child_id) {
         parent.depends_on.push(child_id.to_string());
+        mutated = true;
     }
     if parent.status == Status::Identified {
         parent.status = Status::Converging;
         parent.clear_illegal_status_scoped_fields();
-        return Ok(true);
+        mutated = true;
     }
-    Ok(false)
+    Ok(mutated)
 }
 
 /// Active (non-terminal) direct dotted children of `id`.
@@ -627,16 +632,13 @@ pub fn subdivide(
         }
     }
 
-    // Trim and validate the retire reason up front so the failure
-    // path never produces a partial mutation.
-    let trimmed_reason = match (mode, retire_reason) {
-        (SubdivideMode::Retire, Some(r)) => {
-            let t = r.trim();
-            if t.is_empty() {
-                return Err(SubdivideError::EmptyRetireReason);
-            }
-            Some(t.to_string())
-        }
+    // `retire` achieves the parent, so T58 binds: a non-trivial
+    // reason is required and is stored as `attestation`.
+    let trimmed_reason = match mode {
+        SubdivideMode::Retire => Some(
+            crate::apply::normalize_attestation(retire_reason.unwrap_or(""))
+                .map_err(|_| SubdivideError::EmptyRetireReason)?,
+        ),
         _ => None,
     };
 
@@ -800,6 +802,7 @@ pub fn subdivide(
             parent.clear_illegal_status_scoped_fields();
             parent.achieved = Some(today);
             if let Some(reason) = trimmed_reason {
+                parent.attestation = Some(reason.clone());
                 let entry = format!("Subdivided {today}: {reason}");
                 if parent.context.is_empty() {
                     parent.context = entry;

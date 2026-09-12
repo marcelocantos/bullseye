@@ -259,7 +259,7 @@ fn check_no_invalid_control_chars(field: &str, value: &str) -> Result<(), String
     Ok(())
 }
 
-fn check_persisted_string(field: &str, value: &str) -> Result<(), String> {
+pub(crate) fn check_persisted_string(field: &str, value: &str) -> Result<(), String> {
     check_no_envelope_leak(field, value)?;
     check_no_invalid_control_chars(field, value)?;
     Ok(())
@@ -287,7 +287,10 @@ fn check_explicit_target_id(field: &str, id: &str) -> Result<(), String> {
 /// the envelope-leak check. Used by `handle_import`, where the input
 /// is bulk-parsed from markdown and we don't have a per-field handler
 /// signature to validate against.
-fn check_target_no_envelope_leaks(id: &str, target: &crate::schema::Target) -> Result<(), String> {
+pub(crate) fn check_target_no_envelope_leaks(
+    id: &str,
+    target: &crate::schema::Target,
+) -> Result<(), String> {
     check_explicit_target_id("target id", id)?;
     check_persisted_string(&format!("{id}.name"), &target.name)?;
     check_persisted_string(&format!("{id}.context"), &target.context)?;
@@ -1225,7 +1228,10 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
     // 🎯T28: pull historical IDs from git before entering the locked
     // mutation so sub-target auto-assignment sees every slot ever
     // taken across branches, not just the current tree.
-    let historical = id_alloc::historical_ids(&path);
+    let historical = match id_alloc::historical_ids(&path) {
+        Ok(h) => h,
+        Err(e) => return coded_err(e.code(), e.to_string()),
+    };
 
     let result = store::with_locked_mutation(&path, |file| {
         ops::subdivide(
@@ -1829,7 +1835,10 @@ pub fn apply_request_as(cwd: &str, req: crate::apply::ApplyRequest, op: &str) ->
     // Scan git history for every ID ever assigned (🎯T28), outside the
     // lock: the subprocess is expensive on first call and must not be
     // run while holding the file lock.
-    let historical = id_alloc::historical_ids(&path);
+    let historical = match id_alloc::historical_ids(&path) {
+        Ok(h) => h,
+        Err(e) => return coded_err(e.code(), e.to_string()),
+    };
 
     // `apply::apply` already returns `ApplyError` (= `api::CodedError`),
     // and `with_locked_mutation`'s bound accepts it directly, so the

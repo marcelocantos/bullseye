@@ -20,11 +20,23 @@
 //! a `git rev-parse` does not) and so tests can drive a short one instead
 //! of waiting out a production timeout.
 
+use std::cell::Cell;
 use std::io;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
+
+thread_local! {
+    static FORCE_GIT_LOG_TIMEOUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Test hook: the next `git log` on this thread fails as a timeout.
+/// Integration tests use this instead of a PATH shim so parallel
+/// suites cannot pick up a sleeping `git` (Fable F6).
+pub fn force_git_log_timeout_for_tests(on: bool) {
+    FORCE_GIT_LOG_TIMEOUT.with(|c| c.set(on));
+}
 
 /// Wall-clock bound for a read-only git query. Nothing here runs hooks
 /// or touches the network, so seconds are already pathological — but a
@@ -162,22 +174,80 @@ pub fn bounded_output(cmd: &mut Command, timeout: Duration) -> Result<Output, Bo
 /// their existing `None` branch. The kill is logged so a section that
 /// silently went empty is still attributable to a wedged git rather than
 /// to an empty repo.
-pub fn git_query(dir: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+/// Why [`git_query_detailed`] could not return stdout.
+#[derive(Debug)]
+pub enum GitQueryError {
+    /// git exited non-zero because this is not a repository.
+    NotARepo,
+    /// Timeout, spawn failure, or any other git failure.
+    Failed(String),
+}
+
+impl std::fmt::Display for GitQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotARepo => write!(f, "not a git repository"),
+            Self::Failed(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
+/// Run `git -C <dir> <args>` bounded at `timeout`.
+///
+/// Distinguishes "not a repository" (safe to treat as no history) from
+/// a timeout or other failure (callers that allocate IDs must fail
+/// closed — 🎯T28).
+pub fn git_query_detailed(
+    dir: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, GitQueryError> {
+    if args.contains(&"log") && FORCE_GIT_LOG_TIMEOUT.with(Cell::get) {
+        return Err(GitQueryError::Failed(
+            "timed out after 30s and was killed".into(),
+        ));
+    }
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(dir).args(args);
     match bounded_output(&mut cmd, timeout) {
-        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
-        Ok(_) => None,
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if stderr.contains("not a git repository") {
+                Err(GitQueryError::NotARepo)
+            } else {
+                Err(GitQueryError::Failed(format!(
+                    "git {} failed: {}",
+                    args.join(" "),
+                    stderr.trim()
+                )))
+            }
+        }
         Err(e @ BoundedError::TimedOut { .. }) => {
             eprintln!(
                 "bullseye: `git {}` in {} {e}",
                 args.join(" "),
                 dir.display(),
             );
-            None
+            Err(GitQueryError::Failed(e.to_string()))
         }
-        Err(_) => None,
+        Err(e) => Err(GitQueryError::Failed(e.to_string())),
     }
+}
+
+/// Run `git -C <dir> <args>` bounded at `timeout`, returning stdout when
+/// git exits 0 and `None` for every other outcome — not a repo, no git
+/// binary, non-zero exit, or a git that ran past the bound and was
+/// killed.
+///
+/// Callers of this helper all read git to *enrich* a response (unreleased
+/// fixes, superproject detection) and already degrade to a
+/// safe default when git can't answer, so a bound folds naturally into
+/// their existing `None` branch. The kill is logged so a section that
+/// silently went empty is still attributable to a wedged git rather than
+/// to an empty repo. ID allocation uses [`git_query_detailed`] instead.
+pub fn git_query(dir: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+    git_query_detailed(dir, args, timeout).ok()
 }
 
 #[cfg(test)]

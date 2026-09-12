@@ -443,6 +443,31 @@ impl Default for PlanOpts {
     }
 }
 
+/// Refuse GitHub-owned strings that would fail the apply write
+/// boundary (🎯T20 / 🎯T40). A leaked `<invoke ` or a C0 control in a
+/// title, body, or label must not land in `bullseye.yaml`.
+fn check_mirrored_strings(op: &TargetOp) -> Result<(), String> {
+    match op {
+        TargetOp::Create { id, target } => {
+            crate::handler::check_target_no_envelope_leaks(id, target)
+        }
+        TargetOp::UpdateContent {
+            id,
+            name,
+            context,
+            tags,
+        } => {
+            crate::handler::check_persisted_string(&format!("{id}.name"), name)?;
+            crate::handler::check_persisted_string(&format!("{id}.context"), context)?;
+            for (i, tag) in tags.iter().enumerate() {
+                crate::handler::check_persisted_string(&format!("{id}.tags[{i}]"), tag)?;
+            }
+            Ok(())
+        }
+        TargetOp::SetStatus { .. } => Ok(()),
+    }
+}
+
 /// GitHub-owned context blob: the issue body followed by its URL.
 fn mirror_context(issue: &Issue) -> String {
     if issue.body.trim().is_empty() {
@@ -960,8 +985,13 @@ pub fn run_with(
         }
     }
 
-    // Apply target mutations under the store lock.
+    // Apply target mutations under the store lock. Envelope / C0
+    // guards run before the lock so a leaked GitHub string cannot
+    // persist (Fable F8).
     if !p.target_ops.is_empty() {
+        for op in &p.target_ops {
+            check_mirrored_strings(op)?;
+        }
         store::with_locked_mutation(&yaml, |file| {
             apply_target_ops(file, &p.target_ops);
             Ok::<(), String>(())
@@ -1504,6 +1534,124 @@ mod tests {
         let loaded = store::load(&cwd.join("bullseye.yaml")).unwrap();
         assert!(loaded.targets.is_empty());
         assert!(!SyncState::path_for(&cwd).exists());
+    }
+
+    #[test]
+    fn sync_refuses_github_title_with_envelope_marker() {
+        // Fable F8 / 🎯T20: a remote title carrying a tool-call envelope
+        // must not land in bullseye.yaml.
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        std::fs::write(
+            cwd.join("bullseye.yaml"),
+            "schema_version: 5\ntargets: {}\n",
+        )
+        .unwrap();
+
+        let mut iss = issue(7, "Fix the thing", IssueState::Open);
+        iss.title = "Fix <invoke name=\"put\"> leaked".to_string();
+        let client = FakeGh {
+            issues: vec![iss],
+            closed: RefCell::new(vec![]),
+            reopened: RefCell::new(vec![]),
+        };
+        let args = GithubArgs {
+            cwd: cwd.clone(),
+            repo: Some("o/r".to_string()),
+            label: None,
+            assignee: None,
+            pull: true,
+            push: false,
+            dry_run: false,
+        };
+        let err = run_with(&client, &args, date()).expect_err("envelope title must be refused");
+        assert!(
+            err.contains("<invoke") || err.contains("envelope"),
+            "error should name the leaked marker: {err}"
+        );
+        let loaded = store::load(&cwd.join("bullseye.yaml")).unwrap();
+        assert!(
+            loaded.targets.is_empty(),
+            "refused sync must not persist GH7: {:?}",
+            loaded.targets.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sync_refuses_github_body_with_control_char() {
+        // Fable F8 / 🎯T40: C0 controls in a mirrored body are refused.
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        std::fs::write(
+            cwd.join("bullseye.yaml"),
+            "schema_version: 5\ntargets: {}\n",
+        )
+        .unwrap();
+
+        let mut iss = issue(8, "Plain title", IssueState::Open);
+        iss.body = "body with \u{0001} control".to_string();
+        let client = FakeGh {
+            issues: vec![iss],
+            closed: RefCell::new(vec![]),
+            reopened: RefCell::new(vec![]),
+        };
+        let args = GithubArgs {
+            cwd: cwd.clone(),
+            repo: Some("o/r".to_string()),
+            label: None,
+            assignee: None,
+            pull: true,
+            push: false,
+            dry_run: false,
+        };
+        let err = run_with(&client, &args, date()).expect_err("C0 body must be refused");
+        assert!(
+            err.contains("control") || err.contains("U+0001"),
+            "error should name the control character: {err}"
+        );
+        let loaded = store::load(&cwd.join("bullseye.yaml")).unwrap();
+        assert!(
+            loaded.targets.is_empty(),
+            "refused sync must not persist GH8"
+        );
+    }
+
+    #[test]
+    fn sync_refuses_github_label_with_envelope_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        std::fs::write(
+            cwd.join("bullseye.yaml"),
+            "schema_version: 5\ntargets: {}\n",
+        )
+        .unwrap();
+
+        let mut iss = issue(9, "Plain title", IssueState::Open);
+        iss.labels = vec!["bug".into(), "</invoke> leaked".into()];
+        let client = FakeGh {
+            issues: vec![iss],
+            closed: RefCell::new(vec![]),
+            reopened: RefCell::new(vec![]),
+        };
+        let args = GithubArgs {
+            cwd: cwd.clone(),
+            repo: Some("o/r".to_string()),
+            label: None,
+            assignee: None,
+            pull: true,
+            push: false,
+            dry_run: false,
+        };
+        let err = run_with(&client, &args, date()).expect_err("envelope label must be refused");
+        assert!(
+            err.contains("</invoke>") || err.contains("envelope"),
+            "error should name the leaked marker: {err}"
+        );
+        let loaded = store::load(&cwd.join("bullseye.yaml")).unwrap();
+        assert!(
+            loaded.targets.is_empty(),
+            "refused sync must not persist GH9"
+        );
     }
 
     #[test]
