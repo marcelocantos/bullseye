@@ -16,3 +16,7 @@
 
 # Local release artifacts (scripts/release-package.sh).
 dist/
+
+# TLC metadirs and counterexample modules.
+formal/states/
+formal/*_TTrace_*

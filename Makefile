@@ -16,7 +16,8 @@
 #   1. fmt check (sub-second)
 #   2. clippy     (a few seconds warm, via rust-cache in CI)
 #   3. tests      (a few seconds warm)
-#   4. dirty tree (warning only — leftover WIP is the normal /cv state)
+#   4. TLA+       (~13 min: mutants first, then the faithful config)
+#   5. dirty tree (warning only — leftover WIP is the normal /cv state)
 bullseye:
 	@log=$$(mktemp); \
 	  if cargo fmt --check >"$$log" 2>&1; then echo "✓ fmt"; \
@@ -27,6 +28,7 @@ bullseye:
 	@log=$$(mktemp); \
 	  if cargo test --quiet >"$$log" 2>&1; then echo "✓ tests"; \
 	  else echo "✗ tests"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+	@./formal/check
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
 	else \
@@ -47,6 +49,12 @@ bullseye:
 # Convenience aliases for common cargo commands.
 test:
 	cargo test
+
+# TLC on the in-repo Convergence instance (faithful green + three mutants).
+# Wired into `bullseye` (the gate), not into `check` — the cargo alias stays
+# the fast loop; the ~13–22 min liveness check is the standing invariant.
+tla:
+	./formal/check
 
 check: fmt lint test
 
@@ -87,4 +95,4 @@ clean:
 	cargo clean
 	rm -rf dist
 
-.PHONY: bullseye test check fmt lint build release release-dist release-tap reachability clean
+.PHONY: bullseye test check fmt lint tla build release release-dist release-tap reachability clean

@@ -129,10 +129,15 @@ Committed to master. Work lands as ordinary commits on `master` — no
 pull requests, no merge commits, no CI gate.
 
 `make bullseye` is the gate, and it is the whole definition of green:
-`cargo fmt --check`, `cargo clippy --all-targets -D warnings`, and the
-test suite. Nothing about "green" is expressible only on a server, so
-it can always be reproduced on the machine in front of you. Each step
-prints its diagnostic on failure rather than a bare exit code.
+`cargo fmt --check`, `cargo clippy --all-targets -D warnings`, the
+test suite, and TLC on `formal/BullseyeConvergence` (faithful config
+green; EagerRollup, InflatingSplit, and DeleteTarget mutants rejected
+by a named property). The TLA+ step takes about thirteen minutes,
+almost all of it liveness. `make` is an alias for `make bullseye`
+(first target). `make tla` runs only the model check. Nothing about
+"green" is expressible only on a server, so it can always be
+reproduced on the machine in front of you. Each step prints its
+diagnostic on failure rather than a bare exit code.
 
 ## Release
 
