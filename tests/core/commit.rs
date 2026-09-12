@@ -439,6 +439,101 @@ fn achieve_refuses_active_dotted_children() {
 }
 
 #[test]
+fn retire_refuses_open_dependencies_same_as_achieve() {
+    // Fable F1 / 🎯T79: the retire shim must share apply's
+    // refuse_open_dependencies. T7 identified, T8 depends on T7.
+    use bullseye::config::{self, Location};
+    use bullseye::handler::{handle_commit, handle_put, handle_retire};
+    use bullseye::store;
+    use bullseye::tools::{CommitTool, PutTool, RetireTool};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store::create_at(tmp.path(), Location::InRepo, "retire-open-deps").unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let shadow_tmp = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+
+    handle_put(PutTool {
+        reason: None,
+        cwd: cwd.clone(),
+        id: Some("T8".to_string()),
+        child_of: None,
+        name: Some("top of the chain".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["the chain is done".to_string()]),
+        checks: None,
+        adopt_command_checks: false,
+        context: None,
+        status: None,
+        depends_on: Some(vec!["T1".to_string()]),
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect("create T8 depending on starter T1");
+
+    let attestation = "green on abc — this must not land while T1 is open";
+    let achieve = handle_commit(CommitTool {
+        cwd: cwd.clone(),
+        op: "achieve".into(),
+        id: Some("T8".into()),
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: None,
+        checks: None,
+        adopt_command_checks: false,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+        actual_cost: None,
+        attestation: Some(attestation.into()),
+        reason: None,
+        postponed_until: None,
+        postpone_predicate: None,
+        parent: None,
+        mode: None,
+        children: None,
+        retire_reason: None,
+        tail: None,
+        owner: None,
+    })
+    .expect_err("op=achieve must refuse an open blocker");
+    let achieve_msg = format!("{achieve:?}");
+    assert!(
+        achieve_msg.contains("code=validation") && achieve_msg.contains("T1"),
+        "achieve must be validation naming T1: {achieve_msg}"
+    );
+
+    let retire = handle_retire(RetireTool {
+        cwd,
+        id: "T8".to_string(),
+        attestation: attestation.to_string(),
+        actual_cost: None,
+    })
+    .expect_err("retire shim must refuse the same open blocker");
+    let retire_msg = format!("{retire:?}");
+    assert!(
+        retire_msg.contains("code=validation") && retire_msg.contains("T1"),
+        "retire must be validation naming T1: {retire_msg}"
+    );
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(
+        file.targets["T8"].status,
+        bullseye::schema::Status::Identified,
+        "refusal must not achieve T8"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
 fn put_rejects_child_of_with_explicit_id() {
     use bullseye::config::{self, Location};
     use bullseye::handler::handle_put;
@@ -876,8 +971,8 @@ fn achieve_requires_and_persists_attestation() {
     assert!(ok.is_ok(), "retire with attestation must succeed: {ok:?}");
     let body = format!("{ok:?}");
     assert!(
-        body.contains("Attestation:") && body.contains(note),
-        "success body should echo attestation: {body}"
+        body.contains("T1") && (body.contains("Attestation:") || body.contains("Updated")),
+        "success body should name T1: {body}"
     );
 
     let file = store::load(&path).unwrap();

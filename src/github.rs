@@ -683,8 +683,10 @@ pub fn plan(
                 }
             }
             Some(t) => {
-                // Field ownership: refresh GitHub-owned content (open only).
-                if opts.pull && issue.state == IssueState::Open {
+                // Field ownership: refresh GitHub-owned content (open
+                // only). Achieved records are historical: the name the
+                // attestation referred to freezes at retirement (🎯T8).
+                if opts.pull && issue.state == IssueState::Open && t.status != Status::Achieved {
                     let new_ctx = mirror_context(issue);
                     if t.name != issue.title || t.context != new_ctx || t.tags != issue.labels {
                         p.target_ops.push(TargetOp::UpdateContent {
@@ -746,6 +748,9 @@ fn apply_target_ops(file: &mut TargetsFile, ops: &[TargetOp]) -> usize {
                 tags,
             } => {
                 if let Some(t) = file.targets.get_mut(id) {
+                    if t.status == Status::Achieved {
+                        continue;
+                    }
                     t.name = name.clone();
                     t.context = context.clone();
                     t.tags = tags.clone();
@@ -1138,6 +1143,60 @@ mod tests {
                 .any(|o| matches!(o, TargetOp::SetStatus { .. })),
             "status must not change on a content-only edit"
         );
+    }
+
+    #[test]
+    fn sync_does_not_rewrite_content_on_a_locally_achieved_target() {
+        // Fable F3 / 🎯T8: GH-owned fields freeze at retirement. The
+        // issue may still be Open (push not yet run, pull_only, or a
+        // remote title edit after the local achieve).
+        let mut remote = issue(7, "Renamed after local achieve", IssueState::Open);
+        remote.labels = vec!["bug".into(), "p1".into()];
+        let old = issue(7, "Original title", IssueState::Open);
+        let mut targets = BTreeMap::new();
+        targets.insert("GH7".to_string(), mirrored(&old, Status::Achieved));
+        let prior = prior_with(7, Status::Achieved, IssueState::Open);
+
+        let pull_only = PlanOpts {
+            pull: true,
+            push: false,
+            filtered: false,
+        };
+        let p = plan(
+            "o/r",
+            &[remote.clone()],
+            &targets,
+            &prior,
+            date(),
+            pull_only,
+        );
+        assert_eq!(p.updated, 0, "Achieved content must not refresh");
+        assert!(
+            !p.target_ops
+                .iter()
+                .any(|o| matches!(o, TargetOp::UpdateContent { .. })),
+            "UpdateContent must not be queued against an Achieved target: {:?}",
+            p.target_ops
+        );
+
+        // Default (pull+push): still close the issue, still do not
+        // rewrite the historical name the attestation referred to.
+        let p2 = plan(
+            "o/r",
+            &[remote],
+            &targets,
+            &prior,
+            date(),
+            PlanOpts::default(),
+        );
+        assert!(
+            !p2.target_ops
+                .iter()
+                .any(|o| matches!(o, TargetOp::UpdateContent { .. })),
+            "pushing a close must not smuggle a content rewrite: {:?}",
+            p2.target_ops
+        );
+        assert_eq!(p2.pushed, 1);
     }
 
     #[test]
