@@ -433,10 +433,14 @@ pub fn validate_issues(file: &TargetsFile) -> Vec<ValidationIssue> {
         // metadata is optional). Only reject explicitly negative values,
         // which are always a mistake, and non-zero sub-1 values that
         // would produce meaningless WSJF ratios.
-        if t.value < 0.0 {
+        if !t.value.is_finite() {
+            push(format!("value must be a finite number, got {}", t.value));
+        } else if t.value < 0.0 {
             push(format!("value must be non-negative, got {}", t.value));
         }
-        if t.cost < 0.0 {
+        if !t.cost.is_finite() {
+            push(format!("cost must be a finite number, got {}", t.cost));
+        } else if t.cost < 0.0 {
             push(format!("cost must be non-negative, got {}", t.cost));
         }
 
@@ -894,5 +898,34 @@ mod tests {
 
         let w = fake_edge_warnings(&file);
         assert!(w.is_empty(), "unexpected fake-edge warnings: {w:?}");
+    }
+
+    #[test]
+    fn non_finite_value_and_cost_are_blocking_errors() {
+        // Fable F7: `NaN < 0.0` is false; Inf is non-negative. Either
+        // poisons portfolio `value/cost` ranking.
+        for (field, mut t) in [
+            ("value", tgt("nan-value", &[])),
+            ("cost", tgt("inf-cost", &[])),
+        ] {
+            match field {
+                "value" => t.value = f64::NAN,
+                "cost" => t.cost = f64::INFINITY,
+                _ => unreachable!(),
+            }
+            let mut file = TargetsFile {
+                schema_version: Some(5),
+                last_evaluated: None,
+                release_surface: vec![],
+                targets: BTreeMap::new(),
+            };
+            file.targets.insert("T1".into(), t);
+            let errs = validate_blocking(&file);
+            assert!(
+                errs.iter().any(|e| e.contains(field)
+                    && (e.contains("finite") || e.contains("NaN") || e.contains("inf"))),
+                "{field} must be a blocking validate error; got {errs:?}"
+            );
+        }
     }
 }

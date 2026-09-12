@@ -10,7 +10,7 @@ fn id_alloc_historical_ids_sees_other_branch() {
     let tmp = t28_repo_with_branched_id();
     let yaml = tmp.path().join("bullseye.yaml");
 
-    let ids = id_alloc::historical_ids(&yaml);
+    let ids = id_alloc::historical_ids(&yaml).expect("history scan");
     assert!(
         ids.contains("T1"),
         "master's T1 must be in history; got: {ids:?}"
@@ -80,7 +80,7 @@ fn id_alloc_external_mode_falls_back_to_in_memory() {
     let yaml = tmp.path().join("bullseye.yaml");
     std::fs::write(&yaml, "schema_version: 5\ntargets:\n  T1:\n    name: x\n    status: identified\n    value: 0\n    cost: 0\n    acceptance: [a]\n    discovered: 2026-01-01\n").unwrap();
 
-    let ids = id_alloc::historical_ids(&yaml);
+    let ids = id_alloc::historical_ids(&yaml).expect("external mode is empty, not an error");
     assert!(
         ids.is_empty(),
         "no git repo → empty historical set; got: {ids:?}"
@@ -215,7 +215,7 @@ fn id_alloc_memoises_until_refs_move() {
     // one created it. Validity is now keyed on a ref fingerprint, so
     // memoisation survives (see the unchanged-repo case below) while
     // staleness does not.
-    let first = id_alloc::historical_ids(&yaml);
+    let first = id_alloc::historical_ids(&yaml).expect("history scan");
     // Add a new commit that introduces T99 *after* the first scan.
     {
         let mut file = store::load(&yaml).unwrap();
@@ -252,7 +252,7 @@ fn id_alloc_memoises_until_refs_move() {
     t28_git(tmp.path(), &["add", "bullseye.yaml"]);
     t28_git(tmp.path(), &["commit", "-q", "-m", "add T99"]);
 
-    let second = id_alloc::historical_ids(&yaml);
+    let second = id_alloc::historical_ids(&yaml).expect("history scan");
     assert!(
         second.contains("T99"),
         "T99 entered history after the first scan; a moved ref must invalidate the cache"
@@ -264,12 +264,12 @@ fn id_alloc_memoises_until_refs_move() {
 
     // Memoisation still holds when nothing moved: same refs, same set,
     // so the fix did not turn every call into a full history rescan.
-    let repeat = id_alloc::historical_ids(&yaml);
+    let repeat = id_alloc::historical_ids(&yaml).expect("history scan");
     assert_eq!(second, repeat, "an unchanged repo must still be memoised");
 
     // Clearing the cache is still supported for tests.
     bullseye::id_alloc::clear_cache_for_tests();
-    let third = id_alloc::historical_ids(&yaml);
+    let third = id_alloc::historical_ids(&yaml).expect("history scan");
     assert!(
         third.contains("T99"),
         "after cache clear, fresh scan must include T99"
@@ -337,10 +337,39 @@ fn id_alloc_deleted_targets_remain_reserved() {
     t28_git(tmp.path(), &["commit", "-q", "-m", "remove T2"]);
     bullseye::id_alloc::clear_cache_for_tests();
 
-    let ids = id_alloc::historical_ids(&path);
+    let ids = id_alloc::historical_ids(&path).expect("history scan");
     assert!(
         ids.contains("T2"),
         "T2 was added once; even after deletion it must stay reserved. Got: {ids:?}"
+    );
+}
+
+#[test]
+fn historical_ids_fail_closed_on_git_timeout() {
+    // Fable F6 / 🎯T28: a wedged `git log` must refuse allocation, not
+    // invent the next T{n} from live keys alone. The timeout is injected
+    // on this thread only — a PATH shim would poison parallel tests.
+    let _guard = t28_lock();
+    use bullseye::config::Location;
+
+    bullseye::id_alloc::clear_cache_for_tests();
+    let tmp = tempfile::tempdir().unwrap();
+    t28_git_init(tmp.path());
+    let yaml = store::create_at(tmp.path(), Location::InRepo, "t28-timeout").unwrap();
+    t28_git(tmp.path(), &["add", "bullseye.yaml"]);
+    t28_git(tmp.path(), &["commit", "-q", "-m", "init"]);
+    bullseye::id_alloc::clear_cache_for_tests();
+
+    bullseye::bounded::force_git_log_timeout_for_tests(true);
+    let result = std::panic::catch_unwind(|| bullseye::id_alloc::historical_ids(&yaml));
+    bullseye::bounded::force_git_log_timeout_for_tests(false);
+    let err = result
+        .expect("scan must not panic")
+        .expect_err("git log timeout must fail closed, not return an empty set");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("timed out") || msg.contains("scan failed"),
+        "error should name the scan failure: {msg}"
     );
 }
 

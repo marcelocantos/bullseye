@@ -112,13 +112,19 @@ fn subdivide_retire_mode_retires_parent_and_rewires_dependents() {
     let file = store::load(&path).unwrap();
     let t1 = &file.targets["T1"];
 
-    // Parent retired with today's date and audit line in context.
+    // Parent retired with today's date, audit line in context, and a
+    // T58 attestation (Fable F5 — retire_reason is that attestation).
     assert_eq!(t1.status, Status::Achieved);
     assert_eq!(t1.achieved, Some(chrono::Local::now().date_naive()));
     assert!(
         t1.context.contains("Subdivided ") && t1.context.contains("A and B emerged"),
         "retire-mode audit line missing or malformed; context: {:?}",
         t1.context,
+    );
+    assert_eq!(
+        t1.attestation.as_deref(),
+        Some("original scope met; A and B emerged during work"),
+        "retire mode must record retire_reason as attestation"
     );
 
     // Dependents had T1 replaced by the children — original order
@@ -127,6 +133,41 @@ fn subdivide_retire_mode_retires_parent_and_rewires_dependents() {
     assert_eq!(t2.depends_on, vec!["T1.1", "T1.2"]);
     let t3 = &file.targets["T3"];
     assert_eq!(t3.depends_on, vec!["T1.1", "T1.2"]);
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn subdivide_retire_without_reason_is_refused() {
+    // Fable F5 / 🎯T58: mode=retire achieves the parent. POLICY binds
+    // on every achieve path, so a missing retire_reason must refuse
+    // rather than stamp Achieved with no attestation.
+    use bullseye::config;
+    use bullseye::handler::handle_subdivide;
+    use bullseye::tools::SubdivideTool;
+
+    let (tmp, _shadow, cwd) = subdivide_fixture();
+    let path = tmp.path().join("bullseye.yaml");
+
+    let err = handle_subdivide(SubdivideTool {
+        cwd,
+        parent: "T1".to_string(),
+        mode: "retire".to_string(),
+        children: vec![child_spec("Spillover A", &["does A"])],
+        retire_reason: None,
+        tail: None,
+    })
+    .expect_err("retire mode without retire_reason must be refused");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("retire_reason") || msg.contains("attestation"),
+        "error should name retire_reason or attestation: {msg}"
+    );
+
+    let file = store::load(&path).unwrap();
+    assert_eq!(file.targets["T1"].status, Status::Identified);
+    assert!(file.targets["T1"].attestation.is_none());
+    assert!(!file.targets.contains_key("T1.1"));
 
     config::set_external_root_override(None);
 }
@@ -500,7 +541,7 @@ fn subdivide_rejects_tail_id_not_in_children() {
             tags: None,
             depends_on: None,
         }],
-        retire_reason: None,
+        retire_reason: Some("decomposed; tail id is deliberately wrong".to_string()),
         tail: Some(vec!["T99".to_string()]),
     })
     .expect_err("tail ID outside children must be rejected");
