@@ -817,6 +817,10 @@ fn apply_help() -> String {
          Flag form:\n\
          \x20 bullseye apply --id T55 --set value=8 --set cost=5\n\
          \n\
+         Prose fields (name, acceptance, context, attestation) are markdown.\n\
+         Downstream renderers interpret HTML. Cite tags as entities or code\n\
+         spans. Bullseye stores the text as written and does not escape.\n\
+         \n\
          Fields:\n",
     );
     for f in bullseye::apply::FIELD_HELP {

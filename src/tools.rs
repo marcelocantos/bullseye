@@ -111,7 +111,10 @@ pub struct QueryTool {
         On track create, the allocated ID is knowable ONLY from that header (`ids:`) — never \
         predict the next ID by scanning the file (TOCTOU under concurrency). \
         Prefer this over put/retire/set_aside/revert/subdivide for new agents. \
-        User intent overrides the frontier — commit records claims; it does not assign work."
+        User intent overrides the frontier — commit records claims; it does not assign work. \
+        Prose fields (name, acceptance, context, attestation) are markdown. Downstream \
+        renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores \
+        the text as written and does not escape."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct CommitTool {
@@ -130,7 +133,9 @@ pub struct CommitTool {
     #[serde(default)]
     pub child_of: Option<String>,
 
-    /// Desired-state name (track create).
+    /// Desired-state name (track create). Markdown. Downstream
+    /// renderers interpret HTML. Cite tags as entities or code spans.
+    /// Bullseye stores the text as written and does not escape.
     #[serde(default)]
     pub name: Option<String>,
 
@@ -142,11 +147,15 @@ pub struct CommitTool {
     #[serde(default)]
     pub cost: Option<f64>,
 
-    /// Acceptance criteria (track create).
+    /// Acceptance criteria (track create). Markdown. Downstream
+    /// renderers interpret HTML. Cite tags as entities or code spans.
+    /// Bullseye stores the text as written and does not escape.
     #[serde(default)]
     pub acceptance: Option<Vec<String>>,
 
-    /// Context prose.
+    /// Context prose. Markdown. Downstream renderers interpret HTML.
+    /// Cite tags as entities or code spans. Bullseye stores the text
+    /// as written and does not escape.
     #[serde(default)]
     pub context: Option<String>,
 
@@ -177,6 +186,9 @@ pub struct CommitTool {
     /// Short free-text attestation on achieve (🎯T58). Required for
     /// `op=achieve` — how you believe the target is met (SHA, test,
     /// persona oracle, owner smoke, residual). Not formal proof.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written
+    /// and does not escape.
     #[serde(default)]
     pub attestation: Option<String>,
 
@@ -307,7 +319,10 @@ pub struct GetTool {
         Before filing a target whose acceptance reads as multi-phase prose (\"do X, then Y, then check Z\"), \
         check `docs/shapes.md` in this repo for the named graph-shape patterns (diamond, fan-out, chain, \
         choke-point, spike-then-decide, contract-first, migration) and propose the decomposition before \
-        committing to a single node. The mistake to avoid is encoding a subgraph in one node's prose."
+        committing to a single node. The mistake to avoid is encoding a subgraph in one node's prose. \
+        Prose fields (name, acceptance, context, attestation) are markdown. Downstream \
+        renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores \
+        the text as written and does not escape."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct PutTool {
@@ -327,6 +342,9 @@ pub struct PutTool {
     pub child_of: Option<String>,
 
     /// Short assertion describing the desired state. Required on create.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written
+    /// and does not escape.
     #[serde(default)]
     pub name: Option<String>,
 
@@ -345,10 +363,15 @@ pub struct PutTool {
     pub cost: Option<f64>,
 
     /// Acceptance criteria — how to verify the target is achieved. Required on create.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written
+    /// and does not escape.
     #[serde(default)]
     pub acceptance: Option<Vec<String>>,
 
-    /// Why this target matters.
+    /// Why this target matters. Markdown. Downstream renderers interpret
+    /// HTML. Cite tags as entities or code spans. Bullseye stores the
+    /// text as written and does not escape.
     #[serde(default)]
     pub context: Option<String>,
 
@@ -400,6 +423,9 @@ pub struct RetireTool {
     /// (SHA, test name, persona oracle, owner smoke, residual risk).
     /// Required and must be non-empty after trimming. Not formal proof
     /// — a soft API nudge so achievements leave a trace. See 🎯T58.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written
+    /// and does not escape.
     pub attestation: String,
 
     /// Actual cost (Fibonacci scale) for calibration against the estimate.
@@ -742,12 +768,21 @@ pub struct SubdivisionChild {
     pub id: Option<String>,
 
     /// Short assertion describing the child's desired state.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written
+    /// and does not escape.
     pub name: String,
 
     /// Acceptance criteria — how to verify the child is achieved.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written
+    /// and does not escape.
     pub acceptance: Vec<String>,
 
     /// Optional context paragraph carrying the why / discovery story.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written
+    /// and does not escape.
     #[serde(default)]
     pub context: Option<String>,
 
@@ -969,7 +1004,10 @@ pub struct SyncPrioritiesTool {
         an achieved target, and any owner change need reason. \
         Prefer this over bullseye_commit and the put/retire/set_aside/revert/subdivide \
         shims. User intent overrides the frontier — apply records claims; it does not \
-        assign work."
+        assign work. \
+        Prose fields (name, acceptance, context, attestation) are markdown. Downstream \
+        renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores \
+        the text as written and does not escape."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ApplyTool {

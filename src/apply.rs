@@ -42,7 +42,9 @@ use crate::schema::{OwnedBy, Status, Target, TargetsFile};
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Fragment {
-    /// Short assertion describing the desired state.
+    /// Short assertion describing the desired state. Markdown.
+    /// Downstream renderers interpret HTML. Cite tags as entities or
+    /// code spans. Bullseye stores the text as written and does not escape.
     pub name: Option<String>,
     /// `identified` | `converging` | `achieved` | `set_aside`.
     pub status: Option<String>,
@@ -53,8 +55,13 @@ pub struct Fragment {
     /// Actual cost recorded on achievement, for calibration.
     pub actual_cost: Option<f64>,
     /// How to verify the desired state is achieved. Replaces the list.
+    /// Markdown. Downstream renderers interpret HTML. Cite tags as
+    /// entities or code spans. Bullseye stores the text as written and
+    /// does not escape.
     pub acceptance: Option<Vec<String>>,
-    /// Why this target matters, how it was discovered.
+    /// Why this target matters, how it was discovered. Markdown.
+    /// Downstream renderers interpret HTML. Cite tags as entities or
+    /// code spans. Bullseye stores the text as written and does not escape.
     pub context: Option<String>,
     /// Freeform tags. Replaces the list.
     pub tags: Option<Vec<String>>,
@@ -66,7 +73,9 @@ pub struct Fragment {
     pub origin: Option<String>,
     /// Allocate this target as the next child of the named parent.
     pub child_of: Option<String>,
-    /// Evidence for `status → achieved`.
+    /// Evidence for `status → achieved`. Markdown. Downstream renderers
+    /// interpret HTML. Cite tags as entities or code spans. Bullseye
+    /// stores the text as written and does not escape.
     pub attestation: Option<String>,
     /// Evidence for `→ set_aside`, reopen, and owner changes.
     #[serde(alias = "set_aside_reason")]
@@ -112,7 +121,7 @@ pub struct FieldHelp {
 pub const FIELD_HELP: &[FieldHelp] = &[
     FieldHelp {
         name: "name",
-        blurb: "short assertion describing the desired state",
+        blurb: "short assertion of the desired state. Markdown. Downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape",
     },
     FieldHelp {
         name: "status",
@@ -132,11 +141,11 @@ pub const FIELD_HELP: &[FieldHelp] = &[
     },
     FieldHelp {
         name: "acceptance",
-        blurb: "verification criteria (replaces the list)",
+        blurb: "verification criteria (replaces the list). Markdown. Downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape",
     },
     FieldHelp {
         name: "context",
-        blurb: "why this matters, how it was discovered",
+        blurb: "why this matters. Markdown. Downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape",
     },
     FieldHelp {
         name: "tags",
@@ -160,7 +169,7 @@ pub const FIELD_HELP: &[FieldHelp] = &[
     },
     FieldHelp {
         name: "attestation",
-        blurb: "evidence for status → achieved (required)",
+        blurb: "evidence for status → achieved. Markdown. Downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape",
     },
     FieldHelp {
         name: "reason",

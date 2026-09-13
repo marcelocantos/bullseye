@@ -208,6 +208,10 @@ direct dotted children of the parent.
 | `op` | string | Operation name |
 | (op-specific) | — | Same fields as the shim tools (`id`, `name`, `acceptance`, `blocks`, `attestation`, `reason`, `parent`, `children`, `postponed_until`, `postpone_predicate`, …) |
 
+**Prose fields** (`name`, `acceptance`, `context`, `attestation`) are
+markdown. Downstream renderers interpret HTML. Cite tags as entities
+or code spans. Bullseye stores the text as written and does not escape.
+
 Mutation results start with a structured `# result` header (`ok`, `op`,
 `ids`, `changed`, `frontier`, `file`). On create, an `allocated_id_note`
 line reminds callers that new IDs come **only** from `ids:` (🎯T55).
@@ -221,6 +225,18 @@ the predicate).
 **Rehash (🎯T41):** After an **authorized** direct file edit, `op=rehash`
 with non-empty `reason` recomputes `content_hash`. Prefer mutation tools;
 do not hand-edit unless the user explicitly permits.
+
+### bullseye_apply (core)
+
+The single write verb. Applies a partial desired-state fragment (YAML
+or JSON in `fragment`). Fields you omit are left alone; targets you
+omit are never removed. Unknown fields are rejected. Full contract:
+[api-v1-core.md](api-v1-core.md#bullseye_apply-t76). `bullseye apply
+--help` lists every patchable field.
+
+**Prose fields** (`name`, `acceptance`, `context`, `attestation`) are
+markdown. Downstream renderers interpret HTML. Cite tags as entities
+or code spans. Bullseye stores the text as written and does not escape.
 
 ### bullseye_plan_checks (core)
 
@@ -285,16 +301,22 @@ transitions on achieved targets remain allowed.
 | `cwd` | string | required | Working directory |
 | `id` | string | null | Target ID (omit to auto-assign a new top-level ID — see [Target IDs](#target-ids) for the git-history-aware allocation rules). On create, an explicit `id` is rejected if it collides with a slot recorded in git history but absent from the current tree (e.g. deleted, or on another branch). |
 | `child_of` | string | null | Parent ID for auto-assigned child creation. Only valid when `id` is omitted; creates the next free direct child (`T4.N`) and appends it to the parent's `depends_on`. Refuses a terminal parent. |
-| `name` | string | null | Desired state assertion (required on create) |
+| `name` | string | null | Desired state assertion (required on create). Markdown; downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape. |
 | `value` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
 | `cost` | number | `0` on create | Fibonacci scale: 1, 2, 3, 5, 8, 13, 20. **Portfolio-scope input only** — not consumed by repo-level ordering, so optional at repo scope. `0` means "not set". |
-| `acceptance` | string[] | null | How to verify the target is achieved (required on create). This is the verification contract — whether the pass signal comes from CI, a human review, a smoke test, or a design walkthrough is described here in free text. |
-| `context` | string | null | Why this target matters |
+| `acceptance` | string[] | null | How to verify the target is achieved (required on create). Markdown; downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape. This is the verification contract — whether the pass signal comes from CI, a human review, a smoke test, or a design walkthrough is described here in free text. |
+| `context` | string | null | Why this target matters. Markdown; downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape. |
 | `status` | string | `"identified"` on create | `"identified"`, `"converging"`, `"achieved"`. The `set_aside` value is **not** settable here — call `bullseye_set_aside(id, reason)` instead so the rationale is always recorded. |
 | `depends_on` | string[] | null | IDs of targets this one depends on (must be achieved first) |
 | `blocks` | string[] | null | Sugar: append this target's ID to each listed target's `depends_on` — useful when creating a new prerequisite above existing work. Refuses to inject into achieved targets (same rule as content patches). |
 | `origin` | string | `"manual"` on create | How the target was created |
 | `tags` | string[] | null | Freeform tags |
+
+**Prose fields** (`name`, `acceptance`, `context`, and `attestation` on
+achieve) are markdown. Downstream renderers interpret HTML. Cite tags
+as entities or code spans. Bullseye stores the text as written and
+does not escape. The same contract is on `bullseye_apply` / `apply
+--help` (`FIELD_HELP`) and `bullseye_commit`.
 
 ### bullseye_retire
 
@@ -307,7 +329,7 @@ achievements leave a trace of *how you believe the target is met*.
 |-----------|------|---------|-------------|
 | `cwd` | string | required | Working directory |
 | `id` | string | required | Target ID |
-| `attestation` | string | required | Short free-text note on how you believe the target is met (SHA, test name, persona oracle, owner smoke, residual risk). Must be non-empty after trimming. Trivial tokens like `done` / `ok` are rejected. Named `attestation` (not evidence/proof/verify) so agents are not steered into formal-proof theatre. |
+| `attestation` | string | required | Short free-text note on how you believe the target is met (SHA, test name, persona oracle, owner smoke, residual risk). Must be non-empty after trimming. Trivial tokens like `done` / `ok` are rejected. Named `attestation` (not evidence/proof/verify) so agents are not steered into formal-proof theatre. Markdown; downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape. |
 | `actual_cost` | number | null | Actual cost for calibration |
 
 **Behaviour:**
@@ -424,9 +446,9 @@ Each entry in `children` has:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `id` | string | auto-assigned next sub-target slot | Explicit child ID (e.g. `T28` for a top-level slot) |
-| `name` | string | required | Short assertion describing the child's desired state |
-| `acceptance` | array | required (non-empty) | Acceptance criteria for the child |
-| `context` | string | empty | Optional context paragraph |
+| `name` | string | required | Short assertion describing the child's desired state. Markdown; downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape. |
+| `acceptance` | array | required (non-empty) | Acceptance criteria for the child. Markdown; downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape. |
+| `context` | string | empty | Optional context paragraph. Markdown; downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape. |
 | `tags` | array | empty | Optional tags |
 | `depends_on` | array | empty | Optional explicit dependencies in addition to any implicit edges added by the mode |
 

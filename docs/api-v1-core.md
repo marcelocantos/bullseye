@@ -142,6 +142,10 @@ The field list in `apply --help` and in the MCP tool description is
 pinned to the schema by tests, so a capability can never again exist
 while the documentation denies it — the root cause 🎯T76 was filed for.
 
+**Prose fields** (`name`, `acceptance`, `context`, `attestation`) are
+markdown. Downstream renderers interpret HTML. Cite tags as entities
+or code spans. Bullseye stores the text as written and does not escape.
+
 #### Transition policy
 
 Evidence obligations are a data table (`apply::POLICY`), not rules

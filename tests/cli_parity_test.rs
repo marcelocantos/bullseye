@@ -323,6 +323,81 @@ fn apply_help_states_every_evidence_obligation() {
     }
 }
 
+/// Phrases that must stay on every prose-field help surface (🎯T88).
+/// Agents learn that HTML is interpreted here, not from a consumer
+/// persona — so a dropped sentence is a real regression.
+const PROSE_MARKDOWN_CONTRACT: &[&str] = &[
+    "markdown",
+    "interpret HTML",
+    "entities",
+    "code spans",
+    "does not escape",
+];
+
+fn assert_prose_markdown_contract(surface: &str, text: &str) {
+    // Rustdoc / JSON Schema may wrap mid-phrase; collapse whitespace
+    // so `interpret\nHTML` still matches `interpret HTML`.
+    let haystack = text
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for needle in PROSE_MARKDOWN_CONTRACT {
+        assert!(
+            haystack.contains(&needle.to_ascii_lowercase()),
+            "{surface} dropped the markdown/HTML contract (missing `{needle}`):\n{text}"
+        );
+    }
+}
+
+#[test]
+fn prose_fields_document_markdown_html_contract() {
+    for name in ["name", "acceptance", "context", "attestation"] {
+        let blurb = bullseye::apply::FIELD_HELP
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("FIELD_HELP must document `{name}`"))
+            .blurb;
+        assert_prose_markdown_contract(&format!("FIELD_HELP[{name}]"), blurb);
+    }
+
+    let tools = TargetTools::tools();
+    for tool_name in ["bullseye_apply", "bullseye_put", "bullseye_commit"] {
+        let tool = tools
+            .iter()
+            .find(|t| t.name == tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} must be registered"));
+        let description = tool.description.clone().unwrap_or_default();
+        assert_prose_markdown_contract(&format!("{tool_name} description"), &description);
+    }
+
+    for (tool_name, fields) in [
+        ("bullseye_put", &["name", "acceptance", "context"][..]),
+        (
+            "bullseye_commit",
+            &["name", "acceptance", "context", "attestation"][..],
+        ),
+    ] {
+        let tool = tools
+            .iter()
+            .find(|t| t.name == tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} must be registered"));
+        let schema = serde_json::to_value(&tool.input_schema).expect("input_schema");
+        let props = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .unwrap_or_else(|| panic!("{tool_name} schema has no properties: {schema}"));
+        for field in fields {
+            let desc = props
+                .get(*field)
+                .and_then(|p| p.get("description"))
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
+            assert_prose_markdown_contract(&format!("{tool_name}.{field} field description"), desc);
+        }
+    }
+}
+
 #[test]
 fn mcp_apply_description_lists_every_documented_field() {
     let tools = TargetTools::tools();
