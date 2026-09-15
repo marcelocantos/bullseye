@@ -742,16 +742,20 @@ fn handle_rehash(cwd: &str, reason: &str) -> ToolResult {
         );
     }
     check_persisted_string("reason", reason).map_err(tool_err)?;
-    // Load, append audit to a synthetic note? Just rewrite with fresh hash via save.
-    let file = store::load(&path).map_err(|e| tool_err(e.to_string()))?;
+    // Parse without heal, then heal explicitly so `changed:` names every
+    // target whose record is normalised (🎯T82).
+    let raw = store::parse_file_raw(&path).map_err(|e| tool_err(e.to_string()))?;
+    let before = raw.targets.clone();
+    let mut file = raw;
+    crate::schema::heal_status_scoped_residue(&mut file);
+    let changed = store::targets_differing(&before, &file.targets);
     store::save(&path, &file).map_err(tool_err)?;
-    // Append reason to a local audit by reloading and setting nothing — log in body.
     let hash = store::compute_content_hash(&file);
     let front = api::frontier_ids_from_path(&path);
     text_result(api::format_mutation_result(
         "rehash",
         &[],
-        &[],
+        &changed,
         &front,
         &path,
         &format!(

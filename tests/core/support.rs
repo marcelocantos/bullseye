@@ -579,6 +579,59 @@ targets:
     achieved: 2026-08-09
 "#;
 
+/// Ledger with a non-achieved target carrying a stale `achieved:` date
+/// (reopen residue). Used by 🎯T82.
+pub const T82_RESIDUE_YAML: &str = r#"
+schema_version: 5
+targets:
+  T1:
+    name: Reopened target with stale achieved date
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - It works again
+    origin: manual
+    discovered: 2026-08-01
+    achieved: 2026-07-15
+  T2:
+    name: Unrelated patch target
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Original criterion
+    origin: manual
+    discovered: 2026-08-01
+"#;
+
+/// Extract one target's YAML record (two-space key through the line before
+/// the next sibling target key) for byte-identical comparisons.
+pub fn target_record_yaml(content: &str, id: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let header = format!("  {id}:");
+    let start = lines
+        .iter()
+        .position(|l| *l == header)
+        .unwrap_or_else(|| panic!("target {id} not found in:\n{content}"));
+    let mut end = lines.len();
+    for (i, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.len() > 3
+            && line.starts_with("  ")
+            && !line.starts_with("    ")
+            && line.ends_with(':')
+            && line[2..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            end = i;
+            break;
+        }
+    }
+    lines[start..end].join("\n")
+}
+
 pub const T64_ONE_INVALID_YAML: &str = r#"
 schema_version: 5
 targets:

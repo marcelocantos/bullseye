@@ -411,6 +411,66 @@ fn t64_bricked_ledger_self_heals_on_load_and_rehash_persists_it() {
     config::set_external_root_override(None);
 }
 
+/// Patching one target must not rewrite unrelated records. A non-achieved
+/// target with a stale `achieved:` date survives an unrelated write.
+#[test]
+fn t82_unrelated_patch_leaves_other_targets_byte_identical() {
+    use bullseye::config::{self, Location};
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    std::fs::write(&path, T82_RESIDUE_YAML).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let t1_before = target_record_yaml(&before, "T1");
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow.path().to_path_buf()));
+    let _ = Location::InRepo;
+
+    let result = handle_put(PutTool {
+        reason: None,
+        cwd: cwd.clone(),
+        id: Some("T2".into()),
+        child_of: None,
+        name: None,
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["Updated criterion".into()]),
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .expect("patching T2 should succeed");
+    let text = text_from_call_result(result);
+    assert!(
+        text.contains("changed: T2"),
+        "result must name only the patched target, got:\n{text}",
+    );
+    assert!(
+        !text.contains("changed: T1"),
+        "result must not claim T1 changed:\n{text}",
+    );
+
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        target_record_yaml(&after, "T1"),
+        t1_before,
+        "T1 record must be byte-identical after unrelated patch",
+    );
+    assert!(
+        after.contains("achieved: 2026-07-15"),
+        "stale achieved date must survive on disk:\n{after}",
+    );
+
+    config::set_external_root_override(None);
+}
+
 /// One invalid target must not brick unrelated reads: frontier, list,
 /// and target still answer, naming the offender rather than returning
 /// only the error. `validate` is the one view that still reports errors

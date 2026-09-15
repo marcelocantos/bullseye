@@ -365,15 +365,10 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
     save(path, &file)
 }
 
-/// Parse a targets file from disk without any caching.
-///
-/// This is the inner implementation shared by [`load`] and the cache-miss
-/// path. Callers should prefer [`load`] which adds mtime-based caching on
-/// top.
-fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
-    let mut file: TargetsFile = serde_yaml_ng::from_str(&content)
+/// Parse YAML text into a [`TargetsFile`], applying in-memory migrations
+/// but **not** status-scoped self-heal (🎯T82).
+fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
+    let mut file: TargetsFile = serde_yaml_ng::from_str(content)
         .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
     if let Some(v) = file.schema_version
         && v > CURRENT_SCHEMA_VERSION
@@ -388,13 +383,56 @@ fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
         file.schema_version = Some(CURRENT_SCHEMA_VERSION);
     }
     migrate_gates_to_depends_on(&mut file);
+    Ok(file)
+}
+
+/// Parse a targets file from disk without status-scoped self-heal.
+///
+/// Used by [`with_locked_mutation`] so a single-target patch never
+/// rewrites unrelated targets as a side effect (🎯T82). Read paths use
+/// [`parse_file`], which heals in memory for validation/frontier.
+pub(crate) fn parse_file_raw(path: &Path) -> Result<TargetsFile, LoadError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
+    parse_targets_content(&content, path)
+}
+
+/// Parse a targets file from disk without any caching.
+///
+/// This is the inner implementation shared by [`load`] and the cache-miss
+/// path. Callers should prefer [`load`] which adds mtime-based caching on
+/// top.
+fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
+    let mut file = parse_file_raw(path)?;
     // 🎯T64: a file that already carries status-scoped residue (from an
     // older binary or a hand edit) heals here rather than staying
-    // permanently invalid. Same contract as the gates migration above:
-    // every in-memory `TargetsFile` the rest of the codebase sees is
-    // already normalised, and the next save persists the repair.
+    // permanently invalid on read. Healing is in-memory only until an
+    // explicit `op=rehash` persists it (🎯T82).
     heal_status_scoped_residue(&mut file);
     Ok(file)
+}
+
+/// Canonical YAML for one target — stable enough to detect field changes.
+fn serialize_target(target: &crate::schema::Target) -> Result<String, String> {
+    serde_yaml_ng::to_string(target).map_err(|e| format!("failed to serialize target: {e}"))
+}
+
+/// Target IDs whose serialized form differs between `before` and `after`.
+pub(crate) fn targets_differing(
+    before: &std::collections::BTreeMap<String, crate::schema::Target>,
+    after: &std::collections::BTreeMap<String, crate::schema::Target>,
+) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let ids: BTreeSet<String> = before.keys().chain(after.keys()).cloned().collect();
+    ids.into_iter()
+        .filter(|id| match (before.get(id), after.get(id)) {
+            (Some(a), Some(b)) => {
+                serialize_target(a).unwrap_or_default() != serialize_target(b).unwrap_or_default()
+            }
+            (None, Some(_)) | (Some(_), None) => true,
+            (None, None) => false,
+        })
+        .collect()
 }
 
 /// Load and parse a targets file, with mtime-keyed caching.
@@ -767,7 +805,7 @@ where
     let _lock = acquire_lock(path)?;
 
     // --- Critical section: flock held. ---
-    let mut file = parse_file(path).map_err(MutationError::Load)?;
+    let mut file = parse_file_raw(path).map_err(MutationError::Load)?;
     let stamp_before = file_stamp(path);
 
     let output = f(&mut file).map_err(|e| MutationError::Apply(e.into()))?;

@@ -277,6 +277,9 @@ impl ApplyReport {
         let mut out = self.created.clone();
         out.extend(self.updated.iter().cloned());
         out.extend(self.removed.iter().cloned());
+        for (_, blocked) in &self.injected {
+            out.push(blocked.clone());
+        }
         out.sort();
         out.dedup();
         out
@@ -482,6 +485,7 @@ pub fn apply(
 
     let today = Local::now().date_naive();
     let mut report = ApplyReport::default();
+    let targets_before = file.targets.clone();
 
     // Removals run first so a fragment may re-create a removed ID in
     // the same apply.
@@ -791,7 +795,6 @@ pub fn apply(
                     _ => {}
                 }
             }
-            report.updated.push(id.clone());
         }
 
         // `blocks` sugar: inject this target into each listed
@@ -826,6 +829,13 @@ pub fn apply(
             }
         }
     }
+
+    // 🎯T82: `changed:` must reflect every target whose record actually
+    // changed, not merely the IDs named in the request.
+    report.updated = crate::store::targets_differing(&targets_before, &file.targets)
+        .into_iter()
+        .filter(|id| !report.created.contains(id) && !report.removed.contains(id))
+        .collect();
 
     Ok(report)
 }

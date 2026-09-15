@@ -544,14 +544,11 @@ impl Target {
 
 /// Self-heal status-scoped residue already on disk (🎯T64).
 ///
-/// Called from [`crate::store::load`] alongside
-/// [`migrate_gates_to_depends_on`], and for the same reason: a file
-/// written by an older binary (or by a hand edit) can carry state the
-/// current schema rejects, and a ledger that only a hand edit can repair
-/// is a ledger the tools have failed. Healing at load means a bricked
-/// file reads correctly immediately and is repaired on disk by the next
-/// save — including `bullseye_commit op=rehash`, which exists to do
-/// exactly that load-and-save round trip without any other change.
+/// Called from [`crate::store::load`] so reads validate and frontier
+/// compute over a healthy in-memory view. Mutations do **not** call this
+/// ledger-wide (🎯T82): a single-target patch must not rewrite unrelated
+/// records. Persisting the repair is explicit via
+/// `bullseye_commit op=rehash`, which heals then saves.
 ///
 /// Returns one note per cleared field, for callers that want to report
 /// the repair.
