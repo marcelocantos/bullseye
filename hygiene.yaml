@@ -234,12 +234,11 @@ items:
   - id: governance.notice
     dim: governance
     desc: Third-party attribution NOTICE for crate dependencies
-    state: planned
+    state: present
     cadence: per-release
     enforce: warning
     tier: 3
-    reason: No NOTICE for dependency attributions yet; see ~/think 🎯T2 (canonical NOTICE filename).
-    evidence: {absent: {file: {path: NOTICE}}}
+    evidence: {file: {path: NOTICE, matches: 'Third-party notices'}}
 
   - id: governance.security-md
     dim: governance

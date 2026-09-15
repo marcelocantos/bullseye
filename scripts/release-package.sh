@@ -23,7 +23,7 @@ build_one() {
 	cargo "$builder" --release --target "$triple"
 
 	cp "target/${triple}/release/bullseye" "$STAGE/bullseye"
-	tar -czf "$DIST/$asset" -C "$STAGE" bullseye -C "$ROOT" LICENSE README.md
+	tar -czf "$DIST/$asset" -C "$STAGE" bullseye -C "$ROOT" LICENSE NOTICE README.md
 	rm -f "$STAGE/bullseye"
 	echo "wrote dist/$asset"
 }

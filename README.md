@@ -87,14 +87,19 @@ for the full agent guide.
 
 ## MCP client configuration
 
+The server speaks MCP over HTTP at `/mcp`. There is no stdio transport.
+Register the **url**, never the binary as a `command` — a bare `bullseye`
+invocation exits with migration instructions; stdout there would be read
+as protocol noise and hang the client.
+
 Add to `.mcp.json` (project scope) or `~/.claude.json` (user scope):
 
 ```json
 {
   "mcpServers": {
     "bullseye": {
-      "command": "bullseye",
-      "args": []
+      "type": "http",
+      "url": "http://127.0.0.1:18743/mcp"
     }
   }
 }
@@ -103,11 +108,9 @@ Add to `.mcp.json` (project scope) or `~/.claude.json` (user scope):
 Or via the CLI:
 
 ```bash
-claude mcp add --scope user bullseye -- bullseye
-grok mcp add --scope user bullseye -- bullseye
+claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
+grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
 ```
-
-The server speaks MCP over HTTP at `/mcp`. There is no stdio transport.
 
 ## Storage locations
 
