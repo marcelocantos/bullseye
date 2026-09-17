@@ -501,6 +501,8 @@ fn t82_unrelated_patch_leaves_other_targets_byte_identical() {
         value: None,
         cost: None,
         acceptance: Some(vec!["Updated criterion".into()]),
+        checks: None,
+        adopt_command_checks: false,
         context: None,
         status: None,
         depends_on: None,
