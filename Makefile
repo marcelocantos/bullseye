@@ -14,10 +14,15 @@
 #
 # Ordered cheapest-first so fast feedback arrives first:
 #   1. fmt check (sub-second)
-#   2. clippy     (a few seconds warm, via rust-cache in CI)
-#   3. tests      (a few seconds warm)
-#   4. dirty tree (warning only — leftover WIP is the normal /cv state)
-bullseye:
+#   2. clippy     (a few seconds warm)
+#   3. tests
+#   4. declared checks (🎯T86)
+#   5. TLA+       (~13–22 min: mutants first, then the faithful config)
+#   6. dirty tree (warning only — leftover WIP is the normal /cv state)
+#
+# Steps 1–4 are `gate` — the oracle scripts/hooks/pre-push runs before
+# every push. TLC stays on `bullseye` / `tla`, not on the push hook.
+gate:
 	@log=$$(mktemp); \
 	  if cargo fmt --check >"$$log" 2>&1; then echo "✓ fmt"; \
 	  else echo "✗ fmt"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
@@ -35,6 +40,9 @@ bullseye:
 	  if cargo run --quiet -- run-checks --all --cwd . >"$$log" 2>&1; then \
 	    echo "✓ declared checks"; grep -E '^(Gate passed|No target)' "$$log" || true; \
 	  else echo "✗ declared checks"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+
+bullseye: gate
+	@./formal/check
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \
 	else \
@@ -55,6 +63,17 @@ bullseye:
 # Convenience aliases for common cargo commands.
 test:
 	cargo test
+
+# TLC on the in-repo Convergence instance (faithful green + three mutants).
+# Wired into `bullseye` (the standing invariant), not into `gate` / `check`.
+tla:
+	./formal/check
+
+# Once per clone. A relative core.hooksPath resolves against the worktree
+# the push runs from, so one setting covers every `git worktree`.
+hooks:
+	git config core.hooksPath scripts/hooks
+	@echo "core.hooksPath=$$(git config core.hooksPath)"
 
 check: fmt lint test
 
@@ -95,4 +114,4 @@ clean:
 	cargo clean
 	rm -rf dist
 
-.PHONY: bullseye test check fmt lint build release release-dist release-tap reachability clean
+.PHONY: gate hooks tla bullseye test check fmt lint build release release-dist release-tap reachability clean

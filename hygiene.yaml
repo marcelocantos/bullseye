@@ -22,8 +22,8 @@ floors:            # per-dimension held-tier ratchet; below floor => DRIFT
   governance: 2
   build: 2
   docs: 0          # no validated docs hygiene yet (rustdoc-in-CI, TODO sink)
-  perf: 0          # no benchmark suite yet
-  vcs: 0           # no committed git hooks yet
+  perf: 0          # ratchet exists; not a floor until it runs in the gate
+  vcs: 0           # pre-push is present; floor stays 0 until make hooks is fleet-default
   agent: 2
 
 tiers:
@@ -36,21 +36,21 @@ items:
   # ============================== CORRECTNESS =============================
   - id: correctness.tests
     dim: correctness
-    desc: cargo test runs on every push/PR (ci.yml `check` job)
+    desc: cargo test runs in the local gate (`make gate`), the whole definition of green
     state: enforced
     cadence: continuous
     enforce: blocking
     tier: 1
-    evidence: {ci_step: {workflow: ci.yml, name: Test}}
+    evidence: {file: {path: Makefile, matches: 'cargo test'}}
 
   - id: correctness.release-multitarget
     dim: correctness
-    desc: Release builds (and tests, except aarch64-linux) across darwin-arm64, linux-amd64, linux-arm64
+    desc: Release builds all three triples — darwin-arm64 natively, the linux pair via cargo-zigbuild
     state: present
     cadence: per-release
     enforce: warning
     tier: 2
-    evidence: {ci_job: release.yml#build}
+    evidence: {file: {path: scripts/release-package.sh, matches: 'aarch64-unknown-linux-gnu'}}
 
   - id: correctness.miri
     dim: correctness
@@ -107,12 +107,15 @@ items:
   - id: security.actions-perms
     dim: security
     desc: GitHub Actions default token permissions scoped to least privilege
-    state: planned
+    state: skipped
     cadence: once-must-hold
     enforce: warning
     tier: 3
-    reason: No top-level `permissions:` block in the workflows; inherits repo default.
-    evidence: {absent: {ci_step: {workflow: ci.yml, name: permissions}}}
+    reason: >-
+      No GitHub Actions at all since 22bf362 — the gate and the publish path both
+      run on the dev Mac, so there is no Actions token to scope. Revisit if a
+      workflow is ever reintroduced.
+    evidence: {absent: {file: {path: .github/workflows}}}
 
   - id: security.signed-releases
     dim: security
@@ -121,27 +124,27 @@ items:
     cadence: per-release
     enforce: informational
     tier: 3
-    reason: release.yml uploads assets via `gh release`; no signing/attestation step yet.
-    evidence: {absent: {ci_step: {workflow: release.yml, name: Sign}}}
+    reason: scripts/release-publish.sh uploads assets via `gh release`; no signing/attestation step yet.
+    evidence: {absent: {file: {path: scripts/release-publish.sh, matches: 'cosign|sigstore|attest'}}}
 
   # ============================== CODE QUALITY ============================
   - id: quality.format
     dim: quality
-    desc: Sources are rustfmt-clean, enforced in CI (cargo fmt --check)
+    desc: Sources are rustfmt-clean, enforced by the local gate (cargo fmt --check)
     state: enforced
     cadence: continuous
     enforce: blocking
     tier: 2
-    evidence: {ci_step: {workflow: ci.yml, name: Check formatting}}
+    evidence: {file: {path: Makefile, matches: 'cargo fmt --check'}}
 
   - id: quality.lint
     dim: quality
-    desc: clippy clean with warnings denied (cargo clippy -- -D warnings)
+    desc: clippy clean with warnings denied, enforced by the local gate (cargo clippy -- -D warnings)
     state: enforced
     cadence: continuous
     enforce: blocking
     tier: 2
-    evidence: {ci_step: {workflow: ci.yml, name: Clippy}}
+    evidence: {file: {path: Makefile, matches: 'cargo clippy .*-D warnings'}}
 
   # =========================== DEPENDENCY HEALTH ==========================
   - id: deps.freshness
@@ -293,24 +296,22 @@ items:
   # ============================== PERFORMANCE ===========================
   - id: perf.benchmarks
     dim: perf
-    desc: Criterion benchmark suite exists
-    state: planned
+    desc: Hand-rolled hot-path bench with a min-of-N ratchet (not criterion)
+    state: present
     cadence: per-release
     enforce: informational
     tier: 3
-    reason: No benches/ directory; performance is not yet tracked.
-    evidence: {absent: {file: {path: benches}}}
+    evidence: {file: {path: benches/hot_paths.rs, matches: 'ratchet'}}
 
   # ============================== VCS / HISTORY =========================
   - id: vcs.pre-commit-hook
     dim: vcs
-    desc: Committed git hooks (scripts/hooks) gate locally before commit
-    state: planned
+    desc: Committed git hooks (scripts/hooks) run `make gate` on push
+    state: present
     cadence: once-must-hold
     enforce: informational
     tier: 3
-    reason: No scripts/hooks; core.hooksPath is the default .git/hooks.
-    evidence: {absent: {file: {path: scripts/hooks/pre-commit}}}
+    evidence: {file: {path: scripts/hooks/pre-push, matches: 'make gate'}}
 
   # =================== AGENT-READINESS / ONBOARDING ====================
   - id: agent.claude-md

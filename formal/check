@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Gate runner for BullseyeConvergence.
+#
+# Mutants must be rejected by a named universal property; the faithful
+# config must complete with no error. A mutant that goes green, or a
+# faithful run that fails for any other reason, is a gate failure — the
+# check is known to discriminate rather than ageing as a green stamp.
+#
+# Usage: ./check
+# Env: TLA2TOOLS_JAR, TLC_WORKERS (see ./tlc).
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+tlc="$here/tlc"
+spec=BullseyeConvergence
+fail=0
+
+if [[ ! -x "$tlc" ]]; then
+    echo "✗ tla: $tlc is not executable" >&2
+    exit 1
+fi
+
+run_expect_red() {
+    local cfg="$1"
+    local needle="$2"
+    local log rc
+    log="$(mktemp)"
+    set +e
+    "$tlc" "$spec" "$cfg" >"$log" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        echo "✗ tla $cfg (mutant went green — gate cannot fail)"
+        cat "$log"
+        rm -f "$log"
+        return 1
+    fi
+    if ! grep -q "$needle" "$log"; then
+        echo "✗ tla $cfg (expected '$needle')"
+        cat "$log"
+        rm -f "$log"
+        return 1
+    fi
+    echo "✓ tla $cfg (rejected: $needle)"
+    rm -f "$log"
+    return 0
+}
+
+run_expect_green() {
+    local cfg="$1"
+    local log rc
+    log="$(mktemp)"
+    set +e
+    "$tlc" "$spec" "$cfg" >"$log" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -ne 0 ]]; then
+        echo "✗ tla $cfg (expected green, TLC exited $rc)"
+        cat "$log"
+        rm -f "$log"
+        return 1
+    fi
+    if ! grep -q 'Model checking completed. No error has been found.' "$log"; then
+        echo "✗ tla $cfg (no green completion line)"
+        cat "$log"
+        rm -f "$log"
+        return 1
+    fi
+    echo "✓ tla $cfg"
+    grep -E 'TLC2 Version|Model checking completed|states generated|Finished in' "$log" || true
+    rm -f "$log"
+    return 0
+}
+
+# Mutants first: they finish in under a second, so a broken discriminator
+# fails before the ~13 min faithful liveness check.
+run_expect_red BullseyeConvergence-EagerRollup \
+    'Invariant Soundness is violated' || fail=1
+run_expect_red BullseyeConvergence-InflatingSplit \
+    'Action property C!IdempotentReentry is violated' || fail=1
+run_expect_red BullseyeConvergence-DeleteTarget \
+    'Action property C!GoalpostsFixed is violated' || fail=1
+
+if [[ "$fail" -ne 0 ]]; then
+    exit 1
+fi
+
+run_expect_green BullseyeConvergence
