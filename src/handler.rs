@@ -1932,6 +1932,7 @@ targets:
     acceptance:
       - Did the thing
     context: Historical target, should be immutable
+    attestation: green on abc123
     origin: manual
     discovered: 2026-01-01
     achieved: 2026-02-01
@@ -2006,6 +2007,19 @@ targets:
         file.targets.get(id).unwrap().clone()
     }
 
+    fn result_text(result: CallToolResult) -> String {
+        use rust_mcp_sdk::schema::ContentBlock;
+        result
+            .content
+            .into_iter()
+            .map(|block| match block {
+                ContentBlock::TextContent(t) => t.text,
+                other => panic!("expected TextContent, got {other:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     #[test]
     fn achieved_content_patch_is_rejected() {
         let (_tmp, _cfg, cwd) = fixture();
@@ -2021,6 +2035,115 @@ targets:
         // File unchanged.
         let t1 = load_target(&cwd, "T1");
         assert_eq!(t1.name, "Old achieved target");
+        assert_eq!(t1.status, Status::Achieved);
+    }
+
+    fn apply_set(cwd: &str, id: &str, frag: crate::apply::Fragment) -> ToolResult {
+        let mut targets = std::collections::BTreeMap::new();
+        targets.insert(id.to_string(), frag);
+        apply_request(
+            cwd,
+            crate::apply::ApplyRequest {
+                targets,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn differing_attestation_on_achieved_is_refused_not_reported_as_no_change() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let err = apply_set(
+            &cwd,
+            "T1",
+            crate::apply::Fragment {
+                attestation: Some("corrected: the Makefile does wipe bin/".into()),
+                ..Default::default()
+            },
+        )
+        .expect_err("differing attestation on achieved must be refused");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("immutable_achieved"),
+            "expected immutable_achieved code: {msg}"
+        );
+        assert!(
+            msg.contains("status: identified") && msg.contains("reason"),
+            "refusal must name the reopen path: {msg}"
+        );
+        assert!(
+            !msg.contains("already matched the ledger"),
+            "refused write must not use the no-change message: {msg}"
+        );
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.attestation.as_deref(), Some("green on abc123"));
+    }
+
+    #[test]
+    fn identical_attestation_on_achieved_reports_no_change() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let result = apply_set(
+            &cwd,
+            "T1",
+            crate::apply::Fragment {
+                attestation: Some("green on abc123".into()),
+                ..Default::default()
+            },
+        )
+        .expect("byte-identical attestation is a no-op");
+        let body = result_text(result);
+        assert!(
+            body.contains("already matched the ledger"),
+            "identical write must use the no-change message: {body}"
+        );
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.attestation.as_deref(), Some("green on abc123"));
+    }
+
+    #[test]
+    fn re_achieve_with_differing_attestation_is_refused_not_reported_as_no_change() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let err = handle_commit(crate::tools::CommitTool {
+            cwd: cwd.clone(),
+            op: "achieve".to_string(),
+            id: Some("T1".to_string()),
+            child_of: None,
+            name: None,
+            value: None,
+            cost: None,
+            acceptance: None,
+            checks: None,
+            adopt_command_checks: false,
+            context: None,
+            status: None,
+            depends_on: None,
+            blocks: None,
+            origin: None,
+            tags: None,
+            actual_cost: None,
+            attestation: Some("corrected: the Makefile does wipe bin/".into()),
+            reason: None,
+            postponed_until: None,
+            postpone_predicate: None,
+            parent: None,
+            mode: None,
+            children: None,
+            retire_reason: None,
+            tail: None,
+            owner: None,
+        })
+        .expect_err("re-achieve with a new attestation must be refused");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("immutable_achieved"),
+            "expected immutable_achieved code: {msg}"
+        );
+        assert!(
+            !msg.contains("already matched the ledger"),
+            "refused write must not use the no-change message: {msg}"
+        );
+        let t1 = load_target(&cwd, "T1");
+        assert_eq!(t1.attestation.as_deref(), Some("green on abc123"));
         assert_eq!(t1.status, Status::Achieved);
     }
 

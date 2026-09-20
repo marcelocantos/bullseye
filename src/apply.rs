@@ -521,6 +521,85 @@ fn introduces_first_command_check(file: &TargetsFile, req: &ApplyRequest) -> boo
     })
 }
 
+/// True when the fragment would rewrite stored content.
+///
+/// Presence is not a change: a `--set` whose value already matches the
+/// target is a no-op, and the no-change report is reserved for that
+/// case. Achieved immutability (🎯T8) fires only when the write would
+/// actually mutate — including `attestation`, which is content on an
+/// achieved row even though it is only *applied* on a status
+/// transition to achieved.
+fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
+    if frag.name.as_ref().is_some_and(|v| v != &target.name) {
+        return true;
+    }
+    if frag.value.is_some_and(|v| v != target.value) {
+        return true;
+    }
+    if frag.cost.is_some_and(|v| v != target.cost) {
+        return true;
+    }
+    if frag
+        .actual_cost
+        .is_some_and(|v| target.actual_cost != Some(v))
+    {
+        return true;
+    }
+    if frag
+        .acceptance
+        .as_ref()
+        .is_some_and(|v| v != &target.acceptance)
+    {
+        return true;
+    }
+    if frag.checks.as_ref().is_some_and(|v| v != &target.checks) {
+        return true;
+    }
+    if frag.context.as_ref().is_some_and(|v| v != &target.context) {
+        return true;
+    }
+    if frag.tags.as_ref().is_some_and(|v| v != &target.tags) {
+        return true;
+    }
+    if frag.origin.as_ref().is_some_and(|v| v != &target.origin) {
+        return true;
+    }
+    if frag
+        .depends_on
+        .as_ref()
+        .is_some_and(|v| v != &target.depends_on)
+    {
+        return true;
+    }
+    if frag
+        .attestation
+        .as_ref()
+        .is_some_and(|v| target.attestation.as_ref() != Some(v))
+    {
+        return true;
+    }
+    if let Some(fields) = &frag.clear {
+        for field in fields {
+            let occupied = match field.as_str() {
+                "owner" => target.owned_by.is_some(),
+                "postponed_until" => target.postponed_until.is_some(),
+                "postpone_predicate" => target.postpone_predicate.is_some(),
+                "actual_cost" => target.actual_cost.is_some(),
+                "context" => !target.context.is_empty(),
+                "tags" => !target.tags.is_empty(),
+                "depends_on" => !target.depends_on.is_empty(),
+                // Unknown clear keys are a later validation error; treat
+                // them as a change so an achieved row still refuses first.
+                _ => true,
+            };
+            if occupied {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn apply(
     file: &mut TargetsFile,
     req: &ApplyRequest,
@@ -754,18 +833,13 @@ pub fn apply(
         } else {
             // Achieved targets are historical artifacts: their content
             // is immutable unless this same apply reopens them (🎯T8).
-            let content_edits = frag.name.is_some()
-                || frag.value.is_some()
-                || frag.cost.is_some()
-                || frag.actual_cost.is_some()
-                || frag.acceptance.is_some()
-                || frag.checks.is_some()
-                || frag.context.is_some()
-                || frag.tags.is_some()
-                || frag.origin.is_some()
-                || frag.depends_on.is_some()
-                || frag.clear.as_ref().is_some_and(|fields| !fields.is_empty());
-            if from == Some(Status::Achieved) && to == Status::Achieved && content_edits {
+            // Compare against stored values, not field presence: a
+            // refused write must not be reported as "already matched".
+            if from == Some(Status::Achieved)
+                && to == Status::Achieved
+                && let Some(existing) = file.targets.get(&id)
+                && fragment_changes_content(existing, frag)
+            {
                 return Err(ApplyError::new(
                     ErrorCode::ImmutableAchieved,
                     format!(
@@ -1672,6 +1746,103 @@ targets:
         .expect_err("must refuse");
         assert_eq!(err.code, ErrorCode::ImmutableAchieved);
         assert!(file.targets["T2"].actual_cost.is_none());
+    }
+
+    #[test]
+    fn differing_attestation_on_achieved_target_is_refused_with_reopen_path() {
+        // Specimen: `apply --set attestation=<corrected>` on an
+        // achieved row used to succeed with an empty report, so the
+        // handler claimed the fragment already matched. Attestation is
+        // content; a differing write must name immutability.
+        let mut file = base_file();
+        let err = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    attestation: Some("corrected: the Makefile does wipe bin/".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert_eq!(err.code, ErrorCode::ImmutableAchieved);
+        assert!(
+            err.message.contains("status: identified") && err.message.contains("reason"),
+            "refusal must name the reopen path, got: {}",
+            err.message
+        );
+        assert_eq!(
+            file.targets["T2"].attestation.as_deref(),
+            Some("green on abc123")
+        );
+    }
+
+    #[test]
+    fn re_achieve_with_differing_attestation_is_refused() {
+        // `commit --op achieve --attestation <corrected>` is sugar for
+        // status=achieved plus attestation. Same hole as --set.
+        let mut file = base_file();
+        let err = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    status: Some("achieved".into()),
+                    attestation: Some("corrected: the Makefile does wipe bin/".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("must refuse");
+        assert_eq!(err.code, ErrorCode::ImmutableAchieved);
+        assert_eq!(
+            file.targets["T2"].attestation.as_deref(),
+            Some("green on abc123")
+        );
+    }
+
+    #[test]
+    fn identical_attestation_on_achieved_target_is_no_change() {
+        let mut file = base_file();
+        let report = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    attestation: Some("green on abc123".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("byte-identical attestation is a no-op, not a refusal");
+        assert!(report.updated.is_empty());
+        assert_eq!(
+            file.targets["T2"].attestation.as_deref(),
+            Some("green on abc123")
+        );
+    }
+
+    #[test]
+    fn identical_name_on_achieved_target_is_no_change() {
+        let mut file = base_file();
+        let report = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    name: Some("other thing works".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("byte-identical name is a no-op, not a refusal");
+        assert!(report.updated.is_empty());
+        assert_eq!(file.targets["T2"].name, "other thing works");
     }
 
     #[test]
