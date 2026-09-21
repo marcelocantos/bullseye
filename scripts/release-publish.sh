@@ -41,6 +41,53 @@ done
 
 require_gh
 
+# `brew upgrade` updates the Cellar binary; the supervised HTTP daemon on
+# :18743 keeps the old image until restarted. This is part of shipping —
+# not an optional post-release chore for the owner.
+restart_local_bullseye_daemon() {
+	local want_version="$1"
+	local port=18743
+	if [[ -n "${BULLSEYE_ADDR:-}" ]]; then
+		port="${BULLSEYE_ADDR##*:}"
+	fi
+
+	if command -v supervisorctl >/dev/null 2>&1; then
+		if supervisorctl status bullseye >/dev/null 2>&1; then
+			echo "release-publish: supervisorctl restart bullseye …" >&2
+			supervisorctl restart bullseye
+		else
+			echo "release-publish: bullseye not in supervisord — skipping daemon restart" >&2
+			return 0
+		fi
+	else
+		echo "release-publish: supervisorctl not on PATH — skipping daemon restart" >&2
+		return 0
+	fi
+
+	local i=0
+	while [[ "$i" -lt 30 ]]; do
+		if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+			break
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+
+	local pid listen_bin cli_bin
+	pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true)"
+	if [[ -z "$pid" ]]; then
+		echo "release-publish: nothing listening on :${port} after daemon restart" >&2
+		exit 1
+	fi
+	listen_bin="$(ps -p "$pid" -o command= 2>/dev/null | awk '{print $1}')"
+	cli_bin="$(command -v bullseye)"
+	if [[ "$listen_bin" != "$cli_bin" ]]; then
+		echo "release-publish: daemon listens as ${listen_bin:-?}, CLI is ${cli_bin:-?}" >&2
+		exit 1
+	fi
+	echo "release-publish: daemon on :${port} pid ${pid} (${listen_bin}) — CLI ${want_version}" >&2
+}
+
 for triple in darwin-arm64 linux-amd64 linux-arm64; do
 	f="dist/bullseye-${VERSION}-${triple}.tar.gz"
 	[[ -f "$f" ]] || {
@@ -84,6 +131,7 @@ if [[ "$SKIP_BREW" == false ]]; then
 		echo "release-publish: expected bullseye ${VERSION}, got ${got:-<missing>}" >&2
 		exit 1
 	fi
+	restart_local_bullseye_daemon "$VERSION"
 fi
 
 # The reachability probe (🎯T70) used to run in ci.yml. With CI gone it

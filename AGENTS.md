@@ -145,7 +145,7 @@ Local, from the dev Mac. There is no release workflow:
 ```bash
 make release-dist   # dist/bullseye-<ver>-{darwin-arm64,linux-amd64,linux-arm64}.tar.gz
 make release-tap    # push the formula to marcelocantos/homebrew-tap (release must exist)
-make release        # gate + dist + gh release create + tap + brew upgrade + verify
+make release        # gate + dist + gh release create + tap + brew upgrade + supervisord restart + verify
 ```
 
 The Linux tarballs cross-compile here through `cargo-zigbuild`, which
