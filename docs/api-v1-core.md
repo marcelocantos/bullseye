@@ -235,6 +235,7 @@ Errors are text messages that include a stable `code=` token:
 | `conflict` | CAS lost update / external edit during write |
 | `immutable_achieved` | Content edit on achieved target without reopen |
 | `id_reserved` | Explicit create collides with git-history ID |
+| `id_history_scan_failed` | Git history scan for ID allocation failed (timeout, etc.) |
 | `validation` | Schema / graph validation failure on write path |
 | `unsafe_repo` | Repo is a submodule replica or has detached HEAD |
 | `not_found` | Target or path not found |

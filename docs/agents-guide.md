@@ -866,7 +866,8 @@ Auto-assignment (omit `id`) picks the next free plain top-level `T{n}`
 across **the live file and git history** of `bullseye.yaml` on every
 branch/remote the local clone knows about (🎯T28). IDs are never
 recycled. Explicit `id` that appears only in history is **rejected**
-(`code=id_reserved`).
+(`code=id_reserved`). A wedged or timed-out git history scan refuses
+allocation with `code=id_history_scan_failed` (not `id_reserved`).
 
 **Cross-machine caveat:** two clones that allocate without fetching
 each other can still land on the same `T{n}`. That is accepted for

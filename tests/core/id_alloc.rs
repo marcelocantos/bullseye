@@ -366,11 +366,102 @@ fn historical_ids_fail_closed_on_git_timeout() {
     let err = result
         .expect("scan must not panic")
         .expect_err("git log timeout must fail closed, not return an empty set");
+    assert_eq!(
+        err.code(),
+        bullseye::api::ErrorCode::IdHistoryScanFailed,
+        "scan failure must not masquerade as id_reserved (🎯T92)"
+    );
     let msg = err.to_string();
     assert!(
         msg.contains("timed out") || msg.contains("scan failed"),
         "error should name the scan failure: {msg}"
     );
+}
+
+#[test]
+fn id_history_incremental_scan_after_new_commit() {
+    let _guard = t28_lock();
+    use bullseye::config::{self, Location};
+    use bullseye::id_alloc;
+
+    let data = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(data.path().to_path_buf()));
+    bullseye::id_alloc::clear_cache_for_tests();
+
+    let tmp = tempfile::tempdir().unwrap();
+    t28_git_init(tmp.path());
+    let yaml = store::create_at(tmp.path(), Location::InRepo, "t92-incr").unwrap();
+    t28_git(tmp.path(), &["add", "bullseye.yaml"]);
+    t28_git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+    id_alloc::historical_ids(&yaml).expect("initial full scan");
+    let first_args = id_alloc::last_git_log_args_for_tests().expect("git log ran");
+    assert!(
+        first_args.iter().any(|a| a == "--all"),
+        "first scan must walk all refs: {first_args:?}"
+    );
+    assert_eq!(id_alloc::git_log_invocation_count_for_tests(), 1);
+
+    id_alloc::clear_process_cache_for_tests();
+    id_alloc::historical_ids(&yaml).expect("reload from disk");
+    assert_eq!(
+        id_alloc::git_log_invocation_count_for_tests(),
+        1,
+        "unchanged tips must not re-run git log"
+    );
+
+    {
+        let mut file = store::load(&yaml).unwrap();
+        let today = chrono::Local::now().date_naive();
+        file.targets.insert(
+            "T50".to_string(),
+            bullseye::schema::Target {
+                name: "post-persist".to_string(),
+                status: bullseye::schema::Status::Identified,
+                value: 0.0,
+                cost: 0.0,
+                actual_cost: None,
+                attestation: None,
+                set_aside_reason: None,
+                acceptance: vec!["a".to_string()],
+                checks: vec![],
+                context: String::new(),
+                gates: vec![],
+                depends_on: vec![],
+                cross_depends: vec![],
+                cross_enables: vec![],
+                tags: vec![],
+                strategy: None,
+                origin: "test".to_string(),
+                discovered: today,
+                achieved: None,
+                owned_by: None,
+                postponed_until: None,
+                postpone_predicate: None,
+            },
+        );
+        store::save(&yaml, &file).unwrap();
+    }
+    t28_git(tmp.path(), &["add", "bullseye.yaml"]);
+    t28_git(tmp.path(), &["commit", "-q", "-m", "add T50"]);
+
+    id_alloc::clear_process_cache_for_tests();
+    let ids = id_alloc::historical_ids(&yaml).expect("incremental scan");
+    assert!(
+        ids.contains("T50"),
+        "incremental scan must see T50: {ids:?}"
+    );
+    let incr_args = id_alloc::last_git_log_args_for_tests().expect("incremental git log");
+    assert!(
+        incr_args.iter().any(|a| a == "--not"),
+        "second scan must use --not prior tips: {incr_args:?}"
+    );
+    assert!(
+        !incr_args.iter().any(|a| a == "--all"),
+        "incremental scan must not use --all: {incr_args:?}"
+    );
+
+    config::set_external_root_override(None);
 }
 
 // --- 🎯T29: bullseye_resolve --------------------------------------------

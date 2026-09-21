@@ -18,6 +18,8 @@ pub enum ErrorCode {
     Conflict,
     ImmutableAchieved,
     IdReserved,
+    /// Git history could not be scanned for ID allocation (🎯T92).
+    IdHistoryScanFailed,
     Validation,
     UnsafeRepo,
     NotFound,
@@ -31,6 +33,7 @@ impl ErrorCode {
             Self::Conflict => "conflict",
             Self::ImmutableAchieved => "immutable_achieved",
             Self::IdReserved => "id_reserved",
+            Self::IdHistoryScanFailed => "id_history_scan_failed",
             Self::Validation => "validation",
             Self::UnsafeRepo => "unsafe_repo",
             Self::NotFound => "not_found",
@@ -112,6 +115,9 @@ pub fn classify_message(msg: &str) -> ErrorCode {
     }
     if lower.contains("collides with a target recorded in git history") {
         return ErrorCode::IdReserved;
+    }
+    if lower.contains("git history scan failed") {
+        return ErrorCode::IdHistoryScanFailed;
     }
     if lower.contains("detached head")
         || lower.contains("submodule")
