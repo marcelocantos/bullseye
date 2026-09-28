@@ -1844,8 +1844,20 @@ pub fn apply_request_as(cwd: &str, req: crate::apply::ApplyRequest, op: &str) ->
     // and `with_locked_mutation`'s bound accepts it directly, so the
     // code survives the closure boundary without a side-channel local
     // to carry it — the workaround this comment used to describe.
-    let report =
-        store::with_locked_mutation(&path, |file| crate::apply::apply(file, &req, &historical));
+    // 🎯T94: real writes enforce the achieve-time gate check, so a
+    // fabricated/unknown/misquoted/non-green/dirty-tree/precedes-fix
+    // citation is refused here rather than merely flagged by a later
+    // audit walk. `path`'s parent is the ledger's own git checkout,
+    // which is also the tree the cited gate's fix commit must be an
+    // ancestor in.
+    let gate_store = crate::gatecheck::FsGateStore::new(
+        path.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from(".")),
+    );
+    let report = store::with_locked_mutation(&path, |file| {
+        crate::apply::apply_with_gate(file, &req, &historical, &gate_store)
+    });
     let report = match report {
         Ok(r) => r,
         Err(e) => return Err(mutation_tool_err(e)),
@@ -2431,5 +2443,245 @@ targets:
     #[test]
     fn issuepipe_env_absent_is_silent() {
         assert_eq!(super::issuepipe_env_status_from("", "", "", "5"), "");
+    }
+
+    // 🎯T94 (jevons 🎯T765.1): the achieve-time gate check exercised
+    // through the REAL write path — `handle_commit(op="achieve")`, the
+    // same entry point a fleet agent's `bullseye commit --op achieve`
+    // CLI call reaches — not just the pure `gatecheck`/`apply` unit
+    // tests above. A fabricated/unknown gate id is refused before
+    // anything is written; a real GREEN clean-tree record whose commit
+    // matches (or, by `FsGateStore::contains`'s fast exact-match path,
+    // equals) the cited fix is accepted.
+
+    /// RAII guard: points `JEVONS_HOME` at an isolated tempdir gate
+    /// store for the lifetime of one test, restoring (or clearing) the
+    /// prior value on drop so this test cannot leak state into another.
+    struct GateHomeScope {
+        _tmp: tempfile::TempDir,
+        prior: Option<String>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    /// `cargo test` runs this file's tests concurrently in one process,
+    /// and `JEVONS_HOME` is process-global state — without this lock two
+    /// gate-home tests racing would each see the other's tempdir. Only
+    /// this handful of achieve-gate tests ever touches the env var, so
+    /// serializing just them (not the whole suite) is enough.
+    static GATE_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    impl GateHomeScope {
+        fn new() -> Self {
+            let guard = GATE_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join("gates")).unwrap();
+            let prior = std::env::var("JEVONS_HOME").ok();
+            // SAFETY: serialized by GATE_HOME_LOCK above — no other test
+            // in this process reads or writes JEVONS_HOME concurrently.
+            unsafe { std::env::set_var("JEVONS_HOME", tmp.path()) };
+            Self {
+                _tmp: tmp,
+                prior,
+                _guard: guard,
+            }
+        }
+
+        fn write_gate(&self, id: &str, json: &str) {
+            std::fs::write(
+                self._tmp.path().join("gates").join(format!("{id}.json")),
+                json,
+            )
+            .unwrap();
+        }
+    }
+
+    impl Drop for GateHomeScope {
+        fn drop(&mut self) {
+            // SAFETY: see `new`.
+            unsafe {
+                match &self.prior {
+                    Some(v) => std::env::set_var("JEVONS_HOME", v),
+                    None => std::env::remove_var("JEVONS_HOME"),
+                }
+            }
+        }
+    }
+
+    fn achieve_commit(cwd: &str, id: &str, attestation: &str) -> ToolResult {
+        handle_commit(crate::tools::CommitTool {
+            cwd: cwd.to_string(),
+            op: "achieve".to_string(),
+            id: Some(id.to_string()),
+            child_of: None,
+            name: None,
+            value: None,
+            cost: None,
+            acceptance: None,
+            checks: None,
+            adopt_command_checks: false,
+            context: None,
+            status: None,
+            depends_on: None,
+            blocks: None,
+            origin: None,
+            tags: None,
+            actual_cost: None,
+            attestation: Some(attestation.to_string()),
+            reason: None,
+            postponed_until: None,
+            postpone_predicate: None,
+            parent: None,
+            mode: None,
+            children: None,
+            retire_reason: None,
+            tail: None,
+            owner: None,
+        })
+    }
+
+    #[test]
+    fn achieve_with_unknown_gate_id_is_refused_through_the_real_write_path() {
+        let _gate_home = GateHomeScope::new();
+        let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+
+        let err = achieve_commit(&cwd, "T2", "GATE make-test GREEN id=deadbeef01")
+            .expect_err("an achieve citing a gate id that does not exist must be refused");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("gate id unknown"),
+            "refusal must name the specific failing field: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
+        );
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(
+            t2.status,
+            Status::Identified,
+            "T2 must not have become achieved"
+        );
+    }
+
+    #[test]
+    fn achieve_with_red_gate_is_refused_through_the_real_write_path() {
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0001",
+            r#"{"verdict":"RED","exit_status":1,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":true,"dirty_files":0}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+
+        let err = achieve_commit(&cwd, "T2", "GATE make-test id=cafe0001")
+            .expect_err("an achieve citing a RED gate must be refused");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("not GREEN"),
+            "refusal must name the verdict field: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
+        );
+    }
+
+    #[test]
+    fn achieve_with_dirty_tree_gate_is_refused_through_the_real_write_path() {
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0002",
+            r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":false,"dirty_files":4}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+
+        let err = achieve_commit(&cwd, "T2", "GATE make-test GREEN id=cafe0002")
+            .expect_err("an achieve citing a dirty-tree gate must be refused");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("tree.clean:false"),
+            "refusal must name the tree field: {msg}"
+        );
+    }
+
+    #[test]
+    fn achieve_with_misquoted_verdict_is_refused_through_the_real_write_path() {
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0003",
+            r#"{"verdict":"RED","exit_status":1,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":true,"dirty_files":0}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+
+        let err = achieve_commit(&cwd, "T2", "GATE make-test GREEN id=cafe0003")
+            .expect_err("an achieve that misquotes a RED record as GREEN must be refused");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("verdict misquoted"),
+            "refusal must name the misquote: {msg}"
+        );
+    }
+
+    #[test]
+    fn achieve_with_gate_precedes_fix_is_refused_through_the_real_write_path() {
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0004",
+            r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"1111111111111111111111111111111111111a","clean":true,"dirty_files":0}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+
+        let err = achieve_commit(
+            &cwd,
+            "T2",
+            "GATE make-test GREEN id=cafe0004 fixes 2222222222222222222222222222222222222b",
+        )
+        .expect_err("a gate that did not measure the named fix commit must be refused");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("is not an ancestor"),
+            "refusal must name the ancestry failure: {msg}"
+        );
+    }
+
+    #[test]
+    fn achieve_with_real_green_clean_gate_on_the_named_commit_succeeds() {
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0005",
+            r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"1234567890abcdef1234567890abcdef12345678","clean":true,"dirty_files":0}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+
+        achieve_commit(
+            &cwd,
+            "T2",
+            "GATE make-test GREEN id=cafe0005 fixes 1234567890abcdef1234567890abcdef12345678",
+        )
+        .expect("a real GREEN clean-tree gate on the cited fix commit must be accepted");
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.status, Status::Achieved);
+    }
+
+    #[test]
+    fn achieve_with_accepted_risk_prose_and_no_gate_citation_still_succeeds() {
+        // Acceptance 4: explicit accepted-risk / class-3 achieves with
+        // no gate citation at all remain writable (this check is scoped
+        // to *cited* gates, same as jevons' internal/gate.CheckAchieve).
+        let (_tmp, _cfg, cwd) = fixture();
+        achieve_commit(
+            &cwd,
+            "T2",
+            "Accepted-risk: manually smoke-tested in the running cockpit, no automated oracle \
+             for this UI-only change (class-3).",
+        )
+        .expect("an accepted-risk attestation with no gate citation must still be writable");
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.status, Status::Achieved);
     }
 }

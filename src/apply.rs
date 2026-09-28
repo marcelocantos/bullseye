@@ -29,6 +29,7 @@ use chrono::{Local, NaiveDate};
 use serde::Deserialize;
 
 use crate::api::ErrorCode;
+use crate::gatecheck::{self, GateStore, NullGateStore};
 use crate::ops;
 use crate::schema::{Check, OwnedBy, Status, Target, TargetsFile};
 
@@ -435,6 +436,7 @@ fn check_obligations(
     from: Option<Status>,
     to: Status,
     frag: &Fragment,
+    gate: &dyn GateStore,
 ) -> Result<(), ApplyError> {
     // Assigning an owner needs a justification; clearing one does not
     // — it returns the work to this frontier rather than removing it.
@@ -462,7 +464,27 @@ fn check_obligations(
             // `commit --op achieve` has always applied.
             "attestation" => match &frag.attestation {
                 Some(raw) => match normalize_attestation(raw) {
-                    Ok(_) => true,
+                    Ok(text) => {
+                        // 🎯T94 (jevons 🎯T765.1): a cited gate must
+                        // actually hold before the write lands — not
+                        // merely be detected wrong by a later audit
+                        // walk. Refuse before anything is touched.
+                        match gatecheck::check_attestation(&text, gate) {
+                            gatecheck::AchieveVerdict::Verified
+                            | gatecheck::AchieveVerdict::Ungated
+                            | gatecheck::AchieveVerdict::Marked { .. } => true,
+                            gatecheck::AchieveVerdict::Refused { reasons } => {
+                                return Err(ApplyError::new(
+                                    ErrorCode::Validation,
+                                    format!(
+                                        "apply rejected for 🎯{id}: attestation cites a gate \
+                                         that does not hold — {}",
+                                        reasons.join("; ")
+                                    ),
+                                ));
+                            }
+                        }
+                    }
                     Err(msg) => {
                         return Err(ApplyError::new(
                             ErrorCode::Validation,
@@ -600,10 +622,21 @@ fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
     false
 }
 
-pub fn apply(
+/// [`apply`] with an explicit gate store (🎯T94). Real callers on the
+/// write path (the `commit --op achieve` sugar and the raw `apply` MCP
+/// tool, both funneled through [`crate::handler::apply_request_as`])
+/// pass a real [`crate::gatecheck::FsGateStore`] so a fabricated,
+/// unknown, misquoted, non-green, dirty-tree, or fix-precedes-gate
+/// citation is refused before the write — not merely flagged by a
+/// later audit walk. [`apply`] itself passes [`NullGateStore`], which
+/// only affects attestations that actually cite a `GATE … id=…` line;
+/// every other transition (and every existing test fixture, none of
+/// which uses that syntax) behaves exactly as before.
+pub fn apply_with_gate(
     file: &mut TargetsFile,
     req: &ApplyRequest,
     historical: &HashSet<String>,
+    gate: &dyn GateStore,
 ) -> Result<ApplyReport, ApplyError> {
     // Rollout gate before anything is touched (🎯T86). Adopting the
     // `command` kind stamps the ledger schema_version 6, after which
@@ -766,7 +799,7 @@ pub fn apply(
             });
             ops::refuse_open_dependencies(file, &id, &effective_deps)?;
         }
-        check_obligations(&id, from, to, frag)?;
+        check_obligations(&id, from, to, frag, gate)?;
 
         if is_create {
             let name = frag.name.clone().ok_or_else(|| {
@@ -1015,6 +1048,21 @@ pub fn apply(
         .collect();
 
     Ok(report)
+}
+
+/// Apply `req` to `file` with no gate enforcement ([`NullGateStore`]).
+/// Existing callers (unit tests, and composite ops like `subdivide`
+/// that create/rewire targets without an evidence-bearing achieve of
+/// their own) keep this signature and this behaviour unchanged.
+/// Real write-path callers that can transition a target to `achieved`
+/// on an external caller's attestation use [`apply_with_gate`] instead
+/// (🎯T94).
+pub fn apply(
+    file: &mut TargetsFile,
+    req: &ApplyRequest,
+    historical: &HashSet<String>,
+) -> Result<ApplyReport, ApplyError> {
+    apply_with_gate(file, req, historical, &NullGateStore)
 }
 
 #[cfg(test)]
