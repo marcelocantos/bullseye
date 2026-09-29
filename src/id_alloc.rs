@@ -22,6 +22,15 @@
 //!   so a daemon restart does not repeat the full walk.
 //! - Results are also memoised in-process keyed by the sorted tip
 //!   list so unchanged refs answer without touching disk or git.
+//! - Every worktree of the repo (`git worktree list`) also contributes
+//!   the keys in its **working-tree** ledger, committed or not. A row
+//!   filed on the main clone stays uncommitted until the work it tracks
+//!   lands, and no ref contains it until then — so a sibling worktree
+//!   allocating from history alone mints that same ID a second time.
+//!   Observed in jevons (its 🎯T913): a fleet worker filed from its
+//!   worktree and got the main ledger's newest, still-uncommitted ID.
+//!   Each file's keys are memoised by mtime and length; this set is not
+//!   grow-only — a row deleted from a working tree frees its ID.
 //!
 //! Accepted residual collision risk (T51 clone-scoped IDs backed out for
 //! human ergonomics — short sequential `T{n}` restored):
@@ -32,8 +41,9 @@
 //! - Two machines / clones that allocate without fetching each other can
 //!   still pick the same next `T{n}`; resolve by hand (or later policy
 //!   such as even/odd developer ranges) if it becomes a major issue.
-//! - Two worktrees allocating simultaneously: narrow race between scan
-//!   and commit; flock is per yaml path, not cross-worktree.
+//! - Two worktrees allocating simultaneously: narrow race between the
+//!   worktree scan and the write; flock is per yaml path, not
+//!   cross-worktree. Sequential filings across worktrees are covered.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -57,6 +67,14 @@ static CACHE: Mutex<Option<HashMap<PathBuf, CachedScan>>> = Mutex::new(None);
 
 static ID_RE: OnceLock<Regex> = OnceLock::new();
 
+/// Keys of one worktree's working-tree ledger, stamped with the
+/// modification time and length they were read at.
+type CachedLedgerKeys = (Instant, (std::time::SystemTime, u64), HashSet<String>);
+
+static WORKTREE_CACHE: Mutex<Option<HashMap<PathBuf, CachedLedgerKeys>>> = Mutex::new(None);
+
+static KEY_RE: OnceLock<Regex> = OnceLock::new();
+
 thread_local! {
     static GIT_LOG_ARGS: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
 }
@@ -68,6 +86,17 @@ fn id_re() -> &'static Regex {
         // and uses `[^\S\n]` rather than `\s` so the `(?m)` mode's
         // line-anchored `^` doesn't get confused by embedded newlines.
         Regex::new(r"(?m)^\+[^\S\n]+(T\d+(?:\.\d+)*):").expect("id_alloc regex is well-formed")
+    })
+}
+
+fn key_re() -> &'static Regex {
+    KEY_RE.get_or_init(|| {
+        // A target key line in a ledger file: indented `T15:` or
+        // `T1.2:` with nothing after the colon. Requiring the bare key
+        // keeps prose in a block scalar (`    T5: see above`) from
+        // reserving a number.
+        Regex::new(r"(?m)^[^\S\n]+(T\d+(?:\.\d+)*):[^\S\n]*$")
+            .expect("id_alloc key regex is well-formed")
     })
 }
 
@@ -151,7 +180,23 @@ fn scan_historical_ids(
         Err(GitQueryError::NotARepo) => return Ok(HashSet::new()),
         Err(GitQueryError::Failed(reason)) => return Err(scan_failed(reason)),
     };
+    let pathspec = relative_pathspec(yaml_path, &repo_top)
+        .ok_or_else(|| scan_failed("could not relativize bullseye.yaml to the repo root"))?;
 
+    // History is grow-only and cached by ref tips; the worktree ledgers
+    // change without any ref moving, so they are read on every call.
+    let mut ids = git_history_ids(&repo_top, &pathspec, timeout)?;
+    ids.extend(worktree_ledger_ids(&repo_top, &pathspec, timeout)?);
+    Ok(ids)
+}
+
+/// Every key ever added to `pathspec` on any ref (🎯T28, 🎯T92).
+fn git_history_ids(
+    repo_top: &Path,
+    pathspec: &str,
+    timeout: Duration,
+) -> Result<HashSet<String>, HistoricalIdsError> {
+    let repo_top = repo_top.to_path_buf();
     let current_tips = match ref_tips(&repo_top, timeout) {
         Ok(t) => t,
         Err(GitQueryError::NotARepo) => return Ok(HashSet::new()),
@@ -161,9 +206,6 @@ fn scan_historical_ids(
     if let Some(cached) = cache_get(&repo_top, &current_tips) {
         return Ok(cached);
     }
-
-    let pathspec = relative_pathspec(yaml_path, &repo_top)
-        .ok_or_else(|| scan_failed("could not relativize bullseye.yaml to the repo root"))?;
 
     let persisted = load_persisted(&repo_top);
     let prior_tips = persisted
@@ -186,7 +228,7 @@ fn scan_historical_ids(
         full_scan,
         &current_tips,
         &prior_tips,
-        &pathspec,
+        pathspec,
         timeout,
     ) {
         Ok(body) => body,
@@ -201,6 +243,87 @@ fn scan_historical_ids(
     save_persisted(&repo_top, &ids, &current_tips)?;
     cache_put(repo_top, current_tips, ids.clone());
     Ok(ids)
+}
+
+/// Every key in the working-tree ledger at `pathspec` of each worktree
+/// of this repo, the caller's own included — committed or not.
+///
+/// A worktree whose ledger is absent (a bare entry, a directory deleted
+/// without `git worktree prune`) contributes nothing. Failing to list
+/// the worktrees, or to read a ledger that exists, refuses allocation
+/// like a failed history scan: a guess from the rest could hand out the
+/// very ID the unread file holds.
+fn worktree_ledger_ids(
+    repo_top: &Path,
+    pathspec: &str,
+    timeout: Duration,
+) -> Result<HashSet<String>, HistoricalIdsError> {
+    let listing = match git_query_detailed(
+        repo_top,
+        &["worktree", "list", "--porcelain", "-z"],
+        timeout,
+    ) {
+        Ok(listing) => listing,
+        Err(GitQueryError::NotARepo) => return Ok(HashSet::new()),
+        Err(GitQueryError::Failed(reason)) => return Err(scan_failed(reason)),
+    };
+
+    let mut ids = HashSet::new();
+    for field in listing.split('\0') {
+        let Some(worktree) = field.strip_prefix("worktree ") else {
+            continue;
+        };
+        let ledger = Path::new(worktree).join(pathspec);
+        let keys = ledger_keys(&ledger).map_err(|e| {
+            scan_failed(format!(
+                "could not read worktree ledger {}: {e}",
+                ledger.display()
+            ))
+        })?;
+        ids.extend(keys);
+    }
+    Ok(ids)
+}
+
+/// Target keys in one ledger file, memoised by modification time and
+/// length. A missing file has no keys.
+fn ledger_keys(path: &Path) -> std::io::Result<HashSet<String>> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => return Err(e),
+    };
+    let stamp = (meta.modified()?, meta.len());
+
+    {
+        let guard = WORKTREE_CACHE
+            .lock()
+            .expect("id_alloc worktree cache poisoned");
+        if let Some((cached_at, cached_stamp, keys)) = guard.as_ref().and_then(|c| c.get(path))
+            && *cached_stamp == stamp
+            && !cache::expired(*cached_at)
+        {
+            return Ok(keys.clone());
+        }
+    }
+
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => return Err(e),
+    };
+    let keys: HashSet<String> = key_re()
+        .captures_iter(&raw)
+        .map(|cap| cap[1].to_string())
+        .collect();
+
+    let mut guard = WORKTREE_CACHE
+        .lock()
+        .expect("id_alloc worktree cache poisoned");
+    let cache = guard.get_or_insert_with(HashMap::new);
+    cache.retain(|_, (cached_at, _, _)| !cache::expired(*cached_at));
+    cache.insert(path.to_path_buf(), (Instant::now(), stamp, keys.clone()));
+    Ok(keys)
 }
 
 fn run_history_log(

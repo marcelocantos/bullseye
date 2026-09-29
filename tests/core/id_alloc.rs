@@ -465,3 +465,139 @@ fn id_history_incremental_scan_after_new_commit() {
 }
 
 // --- 🎯T29: bullseye_resolve --------------------------------------------
+
+/// File a target with `bullseye_put` from `cwd`, returning the tool's
+/// text on success or its debug-formatted error.
+fn t913_put(cwd: &std::path::Path, id: Option<&str>) -> Result<String, String> {
+    use bullseye::handler::handle_put;
+    use bullseye::tools::PutTool;
+    handle_put(PutTool {
+        reason: None,
+        cwd: cwd.to_string_lossy().to_string(),
+        id: id.map(str::to_string),
+        child_of: None,
+        name: Some("T913 filing".to_string()),
+        value: None,
+        cost: None,
+        acceptance: Some(vec!["done".to_string()]),
+        checks: None,
+        adopt_command_checks: false,
+        context: None,
+        status: None,
+        depends_on: None,
+        blocks: None,
+        origin: None,
+        tags: None,
+    })
+    .map(text_from_call_result)
+    .map_err(|e| format!("{e:?}"))
+}
+
+/// A repo with T1 committed on master and a linked worktree on branch
+/// `worker` cut at that commit. Returns (main dir, worktree parent dir,
+/// worktree path).
+fn t913_repo_with_worktree() -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
+    use bullseye::config::Location;
+    bullseye::id_alloc::clear_cache_for_tests();
+    let main = tempfile::tempdir().unwrap();
+    t28_git_init(main.path());
+    store::create_at(main.path(), Location::InRepo, "t913").unwrap();
+    t28_git(main.path(), &["add", "bullseye.yaml"]);
+    t28_git(main.path(), &["commit", "-q", "-m", "init"]);
+
+    let outside = tempfile::tempdir().unwrap();
+    let worktree = outside.path().join("worker");
+    t28_git(
+        main.path(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worker",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    (main, outside, worktree)
+}
+
+#[test]
+fn worktree_filing_skips_ids_on_the_main_ledger_after_its_branch_point() {
+    // jevons 🎯T913: the main clone files T2 (committed) and T3, T4
+    // (still uncommitted — rows ride the commit of the work they track).
+    // A worktree cut before any of them must allocate T5, not T2 (which
+    // history alone would already prevent) and not T3 (which it would
+    // not: no ref contains an uncommitted row).
+    let _guard = t28_lock();
+    use bullseye::config;
+    let data = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(data.path().to_path_buf()));
+    let (main, _outside, worktree) = t913_repo_with_worktree();
+
+    t913_put(main.path(), None).expect("main files T2");
+    t28_git(main.path(), &["commit", "-q", "-am", "file T2"]);
+    t913_put(main.path(), None).expect("main files T3");
+    t913_put(main.path(), None).expect("main files T4");
+
+    let main_ids: std::collections::HashSet<String> =
+        store::load(&main.path().join("bullseye.yaml"))
+            .unwrap()
+            .targets
+            .into_keys()
+            .collect();
+    for id in ["T1", "T2", "T3", "T4"] {
+        assert!(
+            main_ids.contains(id),
+            "main ledger should hold {id}: {main_ids:?}"
+        );
+    }
+
+    let filed = t913_put(&worktree, None).expect("worktree filing succeeds");
+    assert!(
+        filed.contains("🎯T5 "),
+        "worktree must skip every ID the main ledger uses; got: {filed}"
+    );
+    assert!(
+        !main_ids.contains("T5"),
+        "T5 must be free on main: {main_ids:?}"
+    );
+
+    // An explicit ID that the main ledger holds uncommitted is reserved.
+    let err =
+        t913_put(&worktree, Some("T4")).expect_err("explicit T4 from the worktree must be refused");
+    assert!(
+        err.contains("T4") && err.contains("another worktree"),
+        "refusal should name T4 and the worktree source: {err}"
+    );
+
+    // And the other direction: main sees the worktree's uncommitted T5.
+    let back = t913_put(main.path(), None).expect("main files again");
+    assert!(
+        back.contains("🎯T6 "),
+        "main must skip the worktree's uncommitted T5; got: {back}"
+    );
+
+    config::set_external_root_override(None);
+}
+
+#[test]
+fn worktree_whose_directory_is_gone_does_not_block_allocation() {
+    // A worktree deleted without `git worktree prune` is still listed;
+    // its missing ledger contributes nothing rather than refusing.
+    let _guard = t28_lock();
+    use bullseye::config;
+    let data = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(data.path().to_path_buf()));
+    let (main, _outside, worktree) = t913_repo_with_worktree();
+
+    t913_put(&worktree, None).expect("worktree files T2");
+    std::fs::remove_dir_all(&worktree).unwrap();
+
+    let filed = t913_put(main.path(), None).expect("main filing succeeds");
+    assert!(
+        filed.contains("🎯T2 "),
+        "a vanished worktree's rows free their IDs; got: {filed}"
+    );
+
+    config::set_external_root_override(None);
+}

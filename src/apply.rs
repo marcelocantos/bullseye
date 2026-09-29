@@ -748,8 +748,8 @@ pub fn apply_with_gate(
                 ErrorCode::IdReserved,
                 format!(
                     "🎯{id} collides with a target recorded in git history (it may exist on \
-                     another branch or have been deleted). Use an allocation slot to take the \
-                     next free ID."
+                     another branch, sit uncommitted in another worktree's ledger, or have \
+                     been deleted). Use an allocation slot to take the next free ID."
                 ),
             ));
         }
