@@ -198,6 +198,24 @@ not formal proof. Persisted on the target (`attestation` field +
 `Achieved YYYY-MM-DD: …` context line). Missing / whitespace-only / trivial
 tokens (`done`, `ok`, …) are rejected with a nudge in the error copy.
 
+**A cited gate must hold** (🎯T94). When the attestation cites a
+`GATE <name> [exit=N] <VERDICT> id=<id>` line — the line `bin/gate`
+prints — the record behind `id=` is resolved from `~/.jevons/gates` and
+checked *before* anything is written. An id that is unknown or missing,
+a misquoted verdict (cited `GREEN`, record `RED`), a non-GREEN record, a
+dirty-tree run (`tree.clean=false`), or a run that measured a commit
+not containing a commit the attestation names as the fix (ancestry via
+`git merge-base`, not exact match) refuses the write, names the failing
+field, and leaves `bullseye.yaml` byte-identical. An attestation that
+states an accepted risk about the gate itself (`accepted-risk: gate ran
+dirty, …`) is still written, but persisted with the prefix
+`UNVERIFIED — ACCEPTED RISK: ` on the `attestation` field and the
+context audit line, so the row is never indistinguishable from a
+verified green. An unknown id or a misquoted verdict is never marked:
+that is a citation of a run that did not happen as described, not a
+risk anyone accepted. Prose that merely uses the word "gate" cites
+nothing and is outside this check.
+
 ### `bullseye_plan_checks`
 
 Same behaviour as legacy `bullseye_verify`: returns a plan of sawmill

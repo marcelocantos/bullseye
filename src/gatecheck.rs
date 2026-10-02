@@ -15,9 +15,17 @@
 //!
 //! Parsing is a direct port of jevons' `CheckAchieve`: an attestation
 //! that cites no `GATE … id=…` line is `Ungated` — outside this
-//! check's scope, same as upstream — and a cited gate is resolved
-//! through the pluggable [`GateStore`] so this module stays testable
-//! without a real `~/.jevons/gates` store or a git checkout.
+//! check's scope, same as upstream — unless it is gate-shaped with the
+//! `id=` missing (`GATE make-test GREEN`), which is a claim nothing can
+//! resolve and is refused. A cited gate is resolved through the
+//! pluggable [`GateStore`] so this module stays testable without a real
+//! `~/.jevons/gates` store or a git checkout.
+//!
+//! A `Marked` achieve is persisted with [`ACCEPTED_RISK_MARKER`]
+//! prefixed to its attestation ([`persisted_attestation`]) so the
+//! ledger row is visibly distinct from a verified green — to a reader,
+//! to `grep`, and to jevons' after-the-fact audit walk, which renders
+//! its own marked verdict with the same bytes.
 
 use std::sync::LazyLock;
 
@@ -87,6 +95,14 @@ pub enum AchieveVerdict {
 static LEDGER_GATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"GATE\s+(\S+)\s+(?:exit=(\S+)\s+)?(?:(GREEN|DIRTY|EMPTY|RED|SUSPECT|UNKNOWN|VOID|KILLED)\s+)?id=([0-9a-zA-Z]+)").unwrap()
 });
+/// A gate-shaped line — the `GATE <name> [exit=N] <VERDICT>` prefix
+/// `bin/gate` prints — with no `id=` behind it. Deliberately narrower
+/// than jevons' prose `gateMentionRe`: the lowercase English word
+/// "gate" ("T7 turned out not to gate this") is not a claim of a run.
+static GATE_CLAIM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bGATE\s+\S+\s+(?:exit=\S+|GREEN|DIRTY|EMPTY|RED|SUSPECT|UNKNOWN|VOID|KILLED)\b")
+        .unwrap()
+});
 static GATE_RISK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)\baccepted[- ]risk\b[^\n.;]{0,120}?\b(dirty|-clean|clean|gate|gates)\b[^\n.;]*",
@@ -96,6 +112,47 @@ static GATE_RISK_RE: LazyLock<Regex> = LazyLock::new(|| {
 static KEY_VALUE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\w+=\S+").unwrap());
 static NAMED_COMMIT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[0-9a-f]{7,40}\b").unwrap());
+
+/// The visible prefix a `Marked` achieve is persisted with — the same
+/// bytes as jevons' `internal/gate.AchieveMarker`, so one grep finds
+/// every accepted-risk achieve in a ledger whichever side wrote it
+/// (🎯T94 acceptance 4).
+pub const ACCEPTED_RISK_MARKER: &str = "UNVERIFIED — ACCEPTED RISK";
+
+/// Separator between [`ACCEPTED_RISK_MARKER`] and the attestation it
+/// marks, mirroring jevons' `AchieveResult::String` rendering.
+const ACCEPTED_RISK_SEPARATOR: &str = ": ";
+
+/// The attestation text to persist on the ledger row for `verdict`.
+///
+/// A `Marked` achieve is stored as `UNVERIFIED — ACCEPTED RISK: <text>`
+/// — the caller's words unchanged, so the gate citation and the risk
+/// sentence they rest on stay greppable, behind a prefix no verified
+/// green ever carries. Every other verdict stores `text` as given;
+/// bullseye never strips a marker the caller wrote themselves, and
+/// text that already starts with the marker is not marked twice.
+pub fn persisted_attestation(text: &str, verdict: &AchieveVerdict) -> String {
+    match verdict {
+        AchieveVerdict::Marked { .. } if !text.starts_with(ACCEPTED_RISK_MARKER) => {
+            format!("{ACCEPTED_RISK_MARKER}{ACCEPTED_RISK_SEPARATOR}{text}")
+        }
+        _ => text.to_string(),
+    }
+}
+
+/// `text` with a leading [`ACCEPTED_RISK_MARKER`] and its separator
+/// removed, or `text` itself when it carries none. Lets a caller who
+/// re-sends the attestation they wrote be recognised as making the same
+/// claim as the marked row that was stored for it.
+pub fn unmarked(text: &str) -> &str {
+    match text.strip_prefix(ACCEPTED_RISK_MARKER) {
+        Some(rest) => rest
+            .strip_prefix(ACCEPTED_RISK_SEPARATOR.trim_end())
+            .unwrap_or(rest)
+            .trim_start(),
+        None => text,
+    }
+}
 
 /// The commits an attestation names as evidence, with gate handles
 /// (`id=…`, `out=…`) stripped so they are never mistaken for a fix sha.
@@ -134,6 +191,22 @@ pub fn check_attestation(attestation: &str, store: &dyn GateStore) -> AchieveVer
         // "gate"/"gated" ("T7 turned out not to gate this") is not a
         // citation and must not be treated as one — that word appears
         // in ordinary English having nothing to do with `bin/gate`.
+        //
+        // A gate-shaped line with its `id=` missing is different: it is
+        // `bin/gate`'s own output with the one field that makes it
+        // checkable dropped (jevons' FlagAchieveGateUncited). Nothing
+        // can be resolved, so it is refused — unless the attestation
+        // accepts that risk by name, which marks it instead.
+        if let Some(m) = GATE_CLAIM_RE.find(text) {
+            return with_risk(
+                text,
+                vec![format!(
+                    "gate id missing — the attestation claims a gate run (\"{}\") but cites no \
+                     id=, so nothing can be resolved; cite the GATE line bin/gate printed",
+                    m.as_str()
+                )],
+            );
+        }
         return AchieveVerdict::Ungated;
     }
 
@@ -461,6 +534,86 @@ mod tests {
             AchieveVerdict::Refused { .. } => {}
             other => panic!("expected Refused (unknown id must never be marked), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn gate_claim_with_missing_id_is_refused() {
+        let store = StubStore {
+            records: HashMap::new(),
+            ancestors: Default::default(),
+        };
+        let v = check_attestation("GATE make-test GREEN, every suite passed", &store);
+        match v {
+            AchieveVerdict::Refused { reasons } => {
+                assert!(
+                    reasons.iter().any(|r| r.contains("gate id missing")),
+                    "{reasons:?}"
+                );
+            }
+            other => panic!("expected Refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gate_claim_with_missing_id_and_accepted_risk_is_marked() {
+        let store = StubStore {
+            records: HashMap::new(),
+            ancestors: Default::default(),
+        };
+        let v = check_attestation(
+            "GATE make-test exit=0 — accepted-risk: gate record lost with the tmpdir",
+            &store,
+        );
+        match v {
+            AchieveVerdict::Marked { risk } => assert!(risk.contains("gate record lost"), "{risk}"),
+            other => panic!("expected Marked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lowercase_gate_prose_is_still_ungated() {
+        let store = StubStore {
+            records: HashMap::new(),
+            ancestors: Default::default(),
+        };
+        let v = check_attestation("T7 turned out not to gate this; green on cafe1234", &store);
+        assert_eq!(v, AchieveVerdict::Ungated);
+    }
+
+    #[test]
+    fn marked_attestation_is_persisted_behind_the_marker() {
+        let text = "GATE make-test GREEN id=abc12345 — accepted-risk: gate ran dirty";
+        let marked = AchieveVerdict::Marked {
+            risk: "accepted-risk: gate ran dirty".to_string(),
+        };
+        assert_eq!(
+            persisted_attestation(text, &marked),
+            format!("{ACCEPTED_RISK_MARKER}: {text}")
+        );
+    }
+
+    #[test]
+    fn verified_and_ungated_attestations_are_persisted_verbatim() {
+        let text = "GATE make-test GREEN id=abc12345 fixes cafebabe";
+        assert_eq!(persisted_attestation(text, &AchieveVerdict::Verified), text);
+        assert_eq!(persisted_attestation(text, &AchieveVerdict::Ungated), text);
+    }
+
+    #[test]
+    fn already_marked_text_is_not_marked_twice() {
+        let text = format!("{ACCEPTED_RISK_MARKER}: GATE make-test GREEN id=abc12345");
+        let marked = AchieveVerdict::Marked {
+            risk: "accepted-risk: gate".to_string(),
+        };
+        assert_eq!(persisted_attestation(&text, &marked), text);
+    }
+
+    #[test]
+    fn unmarked_strips_the_marker_and_separator_only() {
+        let raw = "GATE make-test GREEN id=abc12345 — accepted-risk: gate ran dirty";
+        assert_eq!(unmarked(&format!("{ACCEPTED_RISK_MARKER}: {raw}")), raw);
+        assert_eq!(unmarked(raw), raw);
+        assert_eq!(unmarked(ACCEPTED_RISK_MARKER), "");
     }
 
     #[test]

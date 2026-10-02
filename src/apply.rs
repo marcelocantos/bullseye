@@ -430,14 +430,19 @@ pub fn normalize_attestation(raw: &str) -> Result<String, String> {
 
 /// Check the fragment against [`POLICY`] for one target's transition.
 ///
-/// `from` is `None` for a create.
+/// `from` is `None` for a create. On success, returns the attestation
+/// text to persist when this transition achieves the target: the
+/// normalized text, prefixed with [`gatecheck::ACCEPTED_RISK_MARKER`]
+/// when its cited gate evidence did not verify but the attestation
+/// accepts that risk by name (🎯T94). `None` for every other
+/// transition.
 fn check_obligations(
     id: &str,
     from: Option<Status>,
     to: Status,
     frag: &Fragment,
     gate: &dyn GateStore,
-) -> Result<(), ApplyError> {
+) -> Result<Option<String>, ApplyError> {
     // Assigning an owner needs a justification; clearing one does not
     // — it returns the work to this frontier rather than removing it.
     let owner_assigned = frag.owner.as_deref().is_some_and(|o| !o.trim().is_empty());
@@ -446,6 +451,7 @@ fn check_obligations(
     let reopened = from == Some(Status::Achieved) && to != Status::Achieved;
 
     let mut unmet: Vec<&Obligation> = Vec::new();
+    let mut persisted_attestation: Option<String> = None;
     for ob in POLICY {
         let triggered = match ob.transition {
             "status → achieved" => becomes_achieved,
@@ -470,9 +476,6 @@ fn check_obligations(
                         // merely be detected wrong by a later audit
                         // walk. Refuse before anything is touched.
                         match gatecheck::check_attestation(&text, gate) {
-                            gatecheck::AchieveVerdict::Verified
-                            | gatecheck::AchieveVerdict::Ungated
-                            | gatecheck::AchieveVerdict::Marked { .. } => true,
                             gatecheck::AchieveVerdict::Refused { reasons } => {
                                 return Err(ApplyError::new(
                                     ErrorCode::Validation,
@@ -482,6 +485,14 @@ fn check_obligations(
                                         reasons.join("; ")
                                     ),
                                 ));
+                            }
+                            // Verified, Ungated and Marked all write —
+                            // but a Marked row is written visibly
+                            // distinct, never as a plain green.
+                            verdict => {
+                                persisted_attestation =
+                                    Some(gatecheck::persisted_attestation(&text, &verdict));
+                                true
                             }
                         }
                     }
@@ -503,7 +514,7 @@ fn check_obligations(
     }
 
     if unmet.is_empty() {
-        return Ok(());
+        return Ok(persisted_attestation);
     }
     let detail = unmet
         .iter()
@@ -593,10 +604,15 @@ fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
     {
         return true;
     }
-    if frag
-        .attestation
-        .as_ref()
-        .is_some_and(|v| target.attestation.as_ref() != Some(v))
+    // A marked attestation (🎯T94) is stored behind its marker prefix.
+    // A caller re-sending the text they wrote is making the same claim
+    // the row already records, not a new one, so the unmarked form of
+    // the stored row counts as a match too.
+    if let Some(v) = &frag.attestation
+        && target
+            .attestation
+            .as_deref()
+            .is_none_or(|stored| stored != v && gatecheck::unmarked(stored) != v.trim())
     {
         return true;
     }
@@ -799,7 +815,10 @@ pub fn apply_with_gate(
             });
             ops::refuse_open_dependencies(file, &id, &effective_deps)?;
         }
-        check_obligations(&id, from, to, frag, gate)?;
+        // The attestation as it will be persisted (marked when the
+        // verdict is Marked, 🎯T94); `None` unless this transition
+        // achieves the target.
+        let attestation = check_obligations(&id, from, to, frag, gate)?;
 
         if is_create {
             let name = frag.name.clone().ok_or_else(|| {
@@ -831,9 +850,7 @@ pub fn apply_with_gate(
                 set_aside_reason: (to == Status::SetAside)
                     .then(|| frag.reason.clone())
                     .flatten(),
-                attestation: (to == Status::Achieved)
-                    .then(|| frag.attestation.clone())
-                    .flatten(),
+                attestation: attestation.clone(),
                 acceptance,
                 checks: frag.checks.clone().unwrap_or_default(),
                 context: frag.context.clone().unwrap_or_default(),
@@ -980,11 +997,11 @@ pub fn apply_with_gate(
                 target.clear_illegal_status_scoped_fields();
                 match to {
                     Status::Achieved => {
-                        target.attestation = frag.attestation.clone();
+                        target.attestation = attestation.clone();
                         if target.achieved.is_none() {
                             target.achieved = Some(today);
                         }
-                        if let Some(note) = frag.attestation.clone() {
+                        if let Some(note) = attestation.clone() {
                             append_context_audit(target, format!("Achieved {today}: {note}"));
                         }
                     }

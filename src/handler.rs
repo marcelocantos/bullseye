@@ -2599,6 +2599,7 @@ targets:
             r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":false,"dirty_files":4}}"#,
         );
         let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
 
         let err = achieve_commit(&cwd, "T2", "GATE make-test GREEN id=cafe0002")
             .expect_err("an achieve citing a dirty-tree gate must be refused");
@@ -2606,6 +2607,12 @@ targets:
         assert!(
             msg.contains("tree.clean:false"),
             "refusal must name the tree field: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
         );
     }
 
@@ -2617,6 +2624,7 @@ targets:
             r#"{"verdict":"RED","exit_status":1,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":true,"dirty_files":0}}"#,
         );
         let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
 
         let err = achieve_commit(&cwd, "T2", "GATE make-test GREEN id=cafe0003")
             .expect_err("an achieve that misquotes a RED record as GREEN must be refused");
@@ -2624,6 +2632,12 @@ targets:
         assert!(
             msg.contains("verdict misquoted"),
             "refusal must name the misquote: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
         );
     }
 
@@ -2635,6 +2649,7 @@ targets:
             r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"1111111111111111111111111111111111111a","clean":true,"dirty_files":0}}"#,
         );
         let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
 
         let err = achieve_commit(
             &cwd,
@@ -2646,6 +2661,33 @@ targets:
         assert!(
             msg.contains("is not an ancestor"),
             "refusal must name the ancestry failure: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
+        );
+    }
+
+    #[test]
+    fn achieve_with_gate_claim_but_no_id_is_refused_through_the_real_write_path() {
+        let _gate_home = GateHomeScope::new();
+        let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+
+        let err = achieve_commit(&cwd, "T2", "GATE make-test GREEN, every suite passed")
+            .expect_err("a GATE line with its id= missing claims a run nothing can resolve");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("gate id missing"),
+            "refusal must name the missing field: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
         );
     }
 
@@ -2666,6 +2708,61 @@ targets:
         .expect("a real GREEN clean-tree gate on the cited fix commit must be accepted");
         let t2 = load_target(&cwd, "T2");
         assert_eq!(t2.status, Status::Achieved);
+
+        let yaml =
+            std::fs::read_to_string(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert!(
+            !yaml.contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "a verified achieve must never carry the accepted-risk marker: {yaml}"
+        );
+    }
+
+    /// Acceptance 4 (🎯T94): an accepted-risk achieve on gate evidence
+    /// that does not verify is written — but visibly marked, so the
+    /// ledger row can never be mistaken for a verified green by a
+    /// reader, a grep, or jevons' audit walk.
+    #[test]
+    fn achieve_with_accepted_risk_on_dirty_gate_is_written_with_the_unverified_marker() {
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0006",
+            r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":false,"dirty_files":1}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+        let raw = "GATE make-test GREEN id=cafe0006 — accepted-risk: gate ran dirty, the tree \
+                   structurally cannot go clean here";
+
+        achieve_commit(&cwd, "T2", raw)
+            .expect("an accepted-risk attestation naming the dirt must remain writable");
+
+        let yaml =
+            std::fs::read_to_string(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert!(
+            yaml.contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "the written ledger must carry the visible marker: {yaml}"
+        );
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.status, Status::Achieved);
+        assert_eq!(
+            t2.attestation.as_deref(),
+            Some(format!("{}: {raw}", crate::gatecheck::ACCEPTED_RISK_MARKER).as_str()),
+            "the marker prefixes the attestation the caller wrote, unchanged"
+        );
+        assert!(
+            t2.context.contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "the Achieved audit line in context carries the marker too: {}",
+            t2.context
+        );
+
+        // Re-sending the same accepted-risk text is the same claim: a
+        // no-op, not a 🎯T8 immutability refusal against the marked row.
+        let result = achieve_commit(&cwd, "T2", raw)
+            .expect("re-achieving with the identical accepted-risk text is a no-op");
+        let body = result_text(result);
+        assert!(
+            body.contains("already matched the ledger"),
+            "identical re-achieve must use the no-change message: {body}"
+        );
     }
 
     #[test]
@@ -2683,5 +2780,15 @@ targets:
         .expect("an accepted-risk attestation with no gate citation must still be writable");
         let t2 = load_target(&cwd, "T2");
         assert_eq!(t2.status, Status::Achieved);
+
+        // Ungated is outside the gate check: nothing was checked, so
+        // nothing is marked — the marker means "a cited gate did not
+        // hold", never "no gate was cited".
+        let yaml =
+            std::fs::read_to_string(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert!(
+            !yaml.contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "an ungated achieve must not carry the accepted-risk marker: {yaml}"
+        );
     }
 }
