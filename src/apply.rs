@@ -364,6 +364,20 @@ fn non_empty(v: &Option<String>) -> bool {
     v.as_deref().is_some_and(|s| !s.trim().is_empty())
 }
 
+/// Persist the attestation a Marked achieve must carry so a ledger
+/// reader can tell it from a verified green (🎯T94). Verified and
+/// Ungated rows are stored as written. Called only after
+/// [`check_obligations`] has already allowed the write.
+fn persist_attestation(raw: Option<&str>, gate: &dyn GateStore) -> Option<String> {
+    let text = raw?;
+    match gatecheck::check_attestation(text, gate) {
+        gatecheck::AchieveVerdict::Marked { .. } => {
+            Some(gatecheck::with_accepted_risk_marker(text))
+        }
+        _ => Some(text.to_string()),
+    }
+}
+
 /// Portfolio scores must be real numbers. `NaN < 0.0` is false and Inf
 /// is non-negative, so a `< 0` check alone lets them through and
 /// poisons WSJF ranking (Fable F7).
@@ -832,7 +846,7 @@ pub fn apply_with_gate(
                     .then(|| frag.reason.clone())
                     .flatten(),
                 attestation: (to == Status::Achieved)
-                    .then(|| frag.attestation.clone())
+                    .then(|| persist_attestation(frag.attestation.as_deref(), gate))
                     .flatten(),
                 acceptance,
                 checks: frag.checks.clone().unwrap_or_default(),
@@ -980,11 +994,11 @@ pub fn apply_with_gate(
                 target.clear_illegal_status_scoped_fields();
                 match to {
                     Status::Achieved => {
-                        target.attestation = frag.attestation.clone();
+                        target.attestation = persist_attestation(frag.attestation.as_deref(), gate);
                         if target.achieved.is_none() {
                             target.achieved = Some(today);
                         }
-                        if let Some(note) = frag.attestation.clone() {
+                        if let Some(note) = target.attestation.clone() {
                             append_context_audit(target, format!("Achieved {today}: {note}"));
                         }
                     }

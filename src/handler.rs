@@ -2666,6 +2666,14 @@ targets:
         .expect("a real GREEN clean-tree gate on the cited fix commit must be accepted");
         let t2 = load_target(&cwd, "T2");
         assert_eq!(t2.status, Status::Achieved);
+        assert!(
+            !t2.attestation
+                .as_deref()
+                .unwrap_or("")
+                .contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "a verified green must not carry the accepted-risk marker: {:?}",
+            t2.attestation
+        );
     }
 
     #[test]
@@ -2683,5 +2691,114 @@ targets:
         .expect("an accepted-risk attestation with no gate citation must still be writable");
         let t2 = load_target(&cwd, "T2");
         assert_eq!(t2.status, Status::Achieved);
+        assert!(
+            !t2.attestation
+                .as_deref()
+                .unwrap_or("")
+                .contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "Ungated accepted-risk is outside this check — the marker is for Marked              (cited-but-dirty) rows, not for prose with no GATE line: {:?}",
+            t2.attestation
+        );
+    }
+
+    #[test]
+    fn achieve_with_dirty_green_and_accepted_risk_stamps_the_marker_through_the_real_write_path() {
+        // T94: a cited dirty GREEN plus an accepted-risk sentence naming
+        // the dirt remains writable, but the stored row must carry
+        // UNVERIFIED — ACCEPTED RISK so a reader cannot confuse it with
+        // a verified green.
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0006",
+            r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":false,"dirty_files":2}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+
+        achieve_commit(
+            &cwd,
+            "T2",
+            "GATE make-test GREEN id=cafe0006 — accepted-risk: gate ran dirty, tree              structurally cannot go clean here",
+        )
+        .expect("dirty GREEN + accepted-risk naming the dirt must still be writable");
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.status, Status::Achieved);
+        let att = t2.attestation.as_deref().unwrap_or("");
+        assert!(
+            att.contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "Marked achieve must stamp the marker onto the stored attestation: {att:?}"
+        );
+        assert!(
+            t2.context.contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "the context audit line must also carry the marker so a skim of the row              cannot read it as verified: {}",
+            t2.context
+        );
+        assert!(
+            att.contains("id=cafe0006"),
+            "the original GATE citation must survive the stamp: {att:?}"
+        );
+    }
+
+    #[test]
+    fn achieve_with_unknown_gate_id_and_accepted_risk_is_refused_and_never_stamped() {
+        let _gate_home = GateHomeScope::new();
+        let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+
+        let err = achieve_commit(
+            &cwd,
+            "T2",
+            "GATE make-test GREEN id=deadbeef02 — accepted-risk: gate trust",
+        )
+        .expect_err("accepted-risk must not launder an unknown gate id");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("gate id unknown"),
+            "refusal must name the unknown id, not stamp a marker: {msg}"
+        );
+        assert!(
+            !msg.contains(crate::gatecheck::ACCEPTED_RISK_MARKER),
+            "a refused write must not mention the marker: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
+        );
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.status, Status::Identified);
+        assert!(t2.attestation.is_none());
+    }
+
+    #[test]
+    fn achieve_with_misquoted_verdict_and_accepted_risk_is_refused_and_never_stamped() {
+        let gate_home = GateHomeScope::new();
+        gate_home.write_gate(
+            "cafe0007",
+            r#"{"verdict":"RED","exit_status":1,"tree":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef","clean":true,"dirty_files":0}}"#,
+        );
+        let (_tmp, _cfg, cwd) = fixture();
+        let before = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+
+        let err = achieve_commit(
+            &cwd,
+            "T2",
+            "GATE make-test GREEN id=cafe0007 — accepted-risk: gate trust",
+        )
+        .expect_err("accepted-risk must not launder a misquoted verdict");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("verdict misquoted"),
+            "refusal must name the misquote, not stamp a marker: {msg}"
+        );
+
+        let after = std::fs::read(std::path::Path::new(&cwd).join("bullseye.yaml")).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused achieve must leave the ledger byte-identical"
+        );
+        let t2 = load_target(&cwd, "T2");
+        assert_eq!(t2.status, Status::Identified);
+        assert!(t2.attestation.is_none());
     }
 }

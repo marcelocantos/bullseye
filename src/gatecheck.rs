@@ -84,6 +84,23 @@ pub enum AchieveVerdict {
     Refused { reasons: Vec<String> },
 }
 
+/// Visible prefix a marked achieve is stored with, matching jevons'
+/// `gate.AchieveMarker`. A ledger reader who never re-runs the check
+/// still sees that this row is not a verified green (🎯T94).
+pub const ACCEPTED_RISK_MARKER: &str = "UNVERIFIED — ACCEPTED RISK";
+
+/// Prefix `attestation` with [`ACCEPTED_RISK_MARKER`] unless it already
+/// carries it, so re-stamp is idempotent. The original text is kept so
+/// the cited `GATE … id=…` line remains on the row.
+pub fn with_accepted_risk_marker(attestation: &str) -> String {
+    let trimmed = attestation.trim();
+    if trimmed.starts_with(ACCEPTED_RISK_MARKER) {
+        trimmed.to_string()
+    } else {
+        format!("{ACCEPTED_RISK_MARKER}: {trimmed}")
+    }
+}
+
 static LEDGER_GATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"GATE\s+(\S+)\s+(?:exit=(\S+)\s+)?(?:(GREEN|DIRTY|EMPTY|RED|SUSPECT|UNKNOWN|VOID|KILLED)\s+)?id=([0-9a-zA-Z]+)").unwrap()
 });
@@ -467,6 +484,15 @@ mod tests {
     fn named_commits_strips_gate_handles() {
         let commits = named_commits("GATE make-test GREEN id=abc12345 out=deadbeef fixes cafe1234");
         assert_eq!(commits, vec!["cafe1234".to_string()]);
+    }
+
+    #[test]
+    fn accepted_risk_marker_prefixes_once() {
+        let raw = "GATE make-test GREEN id=abc12345 — accepted-risk: gate ran dirty";
+        let once = with_accepted_risk_marker(raw);
+        assert!(once.starts_with(ACCEPTED_RISK_MARKER));
+        assert!(once.contains(raw));
+        assert_eq!(with_accepted_risk_marker(&once), once);
     }
 }
 
