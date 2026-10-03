@@ -1,5 +1,15 @@
 # Convergence Engine: Design Document
 
+> **Historical design — not implemented as the shipped architecture.** The
+> hierarchical state machine (HSM) proposed below is aspirational and was
+> superseded by the schema v5 uniform-node DAG (retained in schema v6).
+> Bullseye ships one structural edge, `depends_on`; it does not implement
+> typed backward transitions, verification-state node kinds, retry budgets,
+> or an HSM executor. For the current graph model and supported API, see
+> [graph shapes](shapes.md) and the [core API contract](api-v1-core.md).
+> The original proposal is preserved below as design history, not a plan
+> for features already accepted into the product.
+
 ## Motivation
 
 The convergence target system was originally designed around human
