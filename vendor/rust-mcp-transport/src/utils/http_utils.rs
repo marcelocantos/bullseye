@@ -137,6 +137,7 @@ pub fn get_header_value(response: &Response, header_name: HeaderName) -> Option<
     Some(content_type.to_string())
 }
 
+#[cfg(any(feature = "sse", test))]
 pub fn extract_origin(url: &str) -> Option<String> {
     // Remove the fragment first (everything after '#')
     let url = url.split('#').next()?; // Keep only part before `#`

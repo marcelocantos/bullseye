@@ -1,6 +1,7 @@
 use crate::error::{McpSdkError, ProtocolErrorKind, SdkResult};
 use crate::schema::{ClientMessages, ProtocolVersion, SdkError};
 use std::cmp::Ordering;
+#[cfg(feature = "auth")]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Iso8601;
 use time::OffsetDateTime;
@@ -25,6 +26,7 @@ impl Drop for AbortTaskOnDrop {
 }
 
 // Function to convert Unix timestamp to SystemTime
+#[cfg(feature = "auth")]
 pub fn unix_timestamp_to_systemtime(timestamp: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(timestamp)
 }

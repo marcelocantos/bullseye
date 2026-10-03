@@ -419,6 +419,7 @@ impl HyperServer {
             "http"
         };
 
+        #[allow(unused_mut)] // SSE support appends its endpoint when enabled.
         let mut server_url = format!(
             "\n• Streamable HTTP {} is available at {}://{}{}",
             server_type,

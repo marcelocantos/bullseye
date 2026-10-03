@@ -28,7 +28,7 @@ gate:
 	  else echo "✗ fmt"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
 	@log=$$(mktemp); \
 	  if cargo clippy --quiet --all-targets -- -D warnings >"$$log" 2>&1; then echo "✓ clippy"; \
-	  else echo "✗ clippy"; grep -v '^ *--> vendor/' "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
+	  else echo "✗ clippy"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
 	@log=$$(mktemp); \
 	  if cargo test --quiet >"$$log" 2>&1; then echo "✓ tests"; \
 	  else echo "✗ tests"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
