@@ -232,6 +232,7 @@ No scalar score.
 - **Smallest coherent remediation:** Delete the sibling-lock sentence; point the numbered list at `lock_path_for`.
 - **Verification:** Comment grep for `<path>.lock` returns none in `store.rs` docs.
 - **Ratchet candidate:** None until docs match; then a file-content check is optional.
+- **Closure (2026-10-04, 🎯T74.8):** The numbered mutation protocol in `src/store.rs` now points to `lock_path_for` and describes the temp-directory, directory-keyed sentinel. The original evidence above records the audit-time code and line references; it is retained as history. Current source no longer claims a sibling `<path>.lock`, and `fs2::try_lock_exclusive` was separately replaced by `std::fs::File::try_lock` (🎯T74.9). No locking behavior changed for this closure.
 
 ### ENT-009: `fs2` 0.4.3 is unmaintained and the used API is deprecated
 

@@ -750,7 +750,10 @@ impl From<MutationError> for String {
 /// Run a mutation against `bullseye.yaml` under an exclusive flock.
 ///
 /// Steps, in order:
-/// 1. Open (creating if necessary) a sibling lockfile `<path>.lock`.
+/// 1. Open (creating if necessary) the sentinel from [`lock_path_for`]:
+///    `std::env::temp_dir()/bullseye/locks/<key>.lock`, where `<key>`
+///    identifies the canonicalised yaml parent directory (Unix: hex
+///    `(dev_t, ino_t)`; Windows: canonical-path hash).
 /// 2. Acquire an exclusive advisory lock via `std::fs::File::try_lock`
 ///    (stable since Rust 1.89 — no external crate needed; was `fs2`,
 ///    now unmaintained, see 🎯T74.9). On POSIX this is `flock(2)
