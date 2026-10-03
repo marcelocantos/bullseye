@@ -46,16 +46,18 @@ Part of a planned **MCP triad**: targets (plan) + sawmill (code) + mnemo
 ## Architecture
 
 ```
-main.rs        — MCP server + CLI (open/query/commit/plan-checks + L2)
-api.rs         — Mutation envelopes and stable error codes (🎯T45)
-schema.rs      — TargetsFile, Target, Status, …
-store.rs       — YAML I/O, flock + CAS mutations
-graph/         — Frontier, validation, Mermaid, startup context (split by
-                 role: frontier.rs, validate.rs, mermaid.rs, render.rs)
-handler.rs     — Tool dispatch
-tools.rs       — MCP tool definitions
-portfolio.rs   — Cross-repo discovery and portfolio summary
-github.rs      — `bullseye github sync` issue mirror
+main.rs / cli.rs       — CLI entry point, routes and parity
+api.rs / apply.rs      — Mutation envelopes, partial desired-state apply
+schema.rs / id_alloc.rs — Ledger types, migration and target ID allocation
+store.rs / config.rs   — YAML discovery, locking, CAS and configuration
+graph/                 — Frontier, validation, Mermaid and rendering
+ops.rs / handler.rs    — Domain operations and MCP dispatch
+tools.rs               — MCP tool definitions
+portfolio.rs / resolve.rs / priorities.rs — Workspace discovery and priorities
+convergence.rs / gatecheck.rs — Convergence and executable check planning
+github.rs / github_issues.rs — GitHub issue integrations
+bounded.rs / cache.rs / repo_guard.rs — Bounds, caching and repo guardrails
+import.rs / version.rs — Markdown import and version support
 ```
 
 **Surface parity**: Every capability must be reachable from **both**

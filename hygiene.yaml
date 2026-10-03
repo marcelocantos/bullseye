@@ -21,7 +21,7 @@ floors:            # per-dimension held-tier ratchet; below floor => DRIFT
   release: 2
   governance: 2
   build: 2
-  docs: 0          # no validated docs hygiene yet (rustdoc-in-CI, TODO sink)
+  docs: 0          # rustdoc-in-CI remains planned; bullseye.yaml is the TODO sink
   perf: 0          # ratchet exists; not a floor until it runs in the gate
   vcs: 0           # pre-push is present; floor stays 0 until make hooks is fleet-default
   agent: 2
@@ -169,23 +169,23 @@ items:
         test "$(grep -m1 -E '^version' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
         = "$(git describe --tags --abbrev=0 | tr -d v)"
 
-  - id: release.ci-built
+  - id: release.local-built
     dim: release
-    desc: Release binaries are built by CI across all target triples, never locally
+    desc: Local release packaging builds Darwin and both Linux target triples
     state: present
     cadence: per-release
     enforce: warning
     tier: 2
-    evidence: {ci_job: release.yml#build}
+    evidence: {file: {path: scripts/release-package.sh, matches: '(?s)build_one\s+aarch64-apple-darwin.*build_one\s+x86_64-unknown-linux-gnu.*build_one\s+aarch64-unknown-linux-gnu'}}
 
   - id: release.homebrew
     dim: release
-    desc: Published to the Homebrew tap on release
+    desc: Local release publish path updates the Homebrew tap via release-tap.sh
     state: present
     cadence: per-release
     enforce: informational
     tier: 2
-    evidence: {ci_job: release.yml#homebrew}
+    evidence: {file: {path: scripts/release-publish.sh, matches: '(?s)gh release create.*release-tap\.sh'}}
 
   - id: release.changelog
     dim: release
@@ -285,12 +285,12 @@ items:
 
   - id: docs.todo
     dim: docs
-    desc: docs/TODO.md exists as the repo TODO sink
-    state: planned
+    desc: No parallel docs/TODO.md sink; targets live in bullseye.yaml
+    state: skipped
     cadence: once-must-hold
     enforce: informational
     tier: 3
-    reason: No docs/TODO.md; per global convention repos should carry one.
+    reason: bullseye.yaml is the sink; docs/TODO.md would compete with the intent ledger.
     evidence: {absent: {file: {path: docs/TODO.md}}}
 
   # ============================== PERFORMANCE ===========================
