@@ -248,9 +248,18 @@ No scalar score.
 
 ### ENT-010: Meta-docs and hygiene items compete with the tree and with fleet rules
 
+> **2026-10-04 correction (post-audit):** This section's `NOTICES`/`NOTICE`
+> evidence described the August snapshot, not the current tree. The tracked
+> attribution file is now `NOTICE`, and `governance.notice` already points to
+> it. Keep that valid mapping; do not add or rename an attribution file to
+> follow the historical remediation literally. 🎯T74.10 corrects the
+> remaining hygiene metadata (`docs.todo` and obsolete release workflow
+> pointers), labels the April checklist historical, and updates the module map;
+> `bullseye.yaml` remains the work sink.
+
 - **Priority:** P3
 - **Dimensions:** Documentation / governance; Redundancy / sources of truth
-- **Status:** observed fact
+- **Status:** historical finding; corrected 2026-10-04 (🎯T74.10)
 - **Evidence:**
   - `NOTICES` exists (root, Apache attribution for vendor + SQLite). hygiene `governance.notice` still plans absent `NOTICE` (`hygiene.yaml:241`–`242`).
   - hygiene `docs.todo` plans `docs/TODO.md` (`hygiene.yaml:284`–`292`) “per global convention”; fleet `AGENTS.md` bans TODO files and requires bullseye targets.
