@@ -1025,7 +1025,7 @@ fn achieve_requires_and_persists_attestation() {
         filter: None,
         recent_days: None,
         momentum: None,
-        frontier_details: None,
+        frontier_details: Some(true),
         scope: None,
         nodes: None,
         seeds: None,

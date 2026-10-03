@@ -1698,12 +1698,16 @@ fn handle_summary(t: crate::tools::SummaryTool) -> ToolResult {
             }
             map
         });
-    let out = graph::summary(
-        &file,
-        &path.display().to_string(),
-        momentum_map.as_ref(),
-        t.frontier_details.unwrap_or(false),
-    );
+    let out = if t.frontier_details.unwrap_or(false) {
+        graph::summary(
+            &file,
+            &path.display().to_string(),
+            momentum_map.as_ref(),
+            true,
+        )
+    } else {
+        graph::bounded_summary(&file, &path.display().to_string())
+    };
     text_result(out)
 }
 

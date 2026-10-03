@@ -430,6 +430,7 @@ fn cli_query(args: &[String]) -> Result<String, String> {
         return Ok(
             "bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter active|achieved|set_aside|all]\n\
              views: context|frontier|target|list|summary|graph|validate\n\
+             summary: --frontier-details (full unbounded summary with frontier detail)\n\
              graph (🎯T57): [--scope active|all|achieved|set_aside] [--nodes ID,ID]\n\
                            [--seeds ID,ID] [--expand ancestors,descendants,children,parents,frontier]\n\
                default: whole active graph (depends_on edges). nodes= explicit set;\n\
@@ -462,7 +463,7 @@ fn cli_query(args: &[String]) -> Result<String, String> {
         filter: flag_value(args, "--filter"),
         recent_days: flag_value(args, "--recent-days").and_then(|s| s.parse().ok()),
         momentum: None,
-        frontier_details: None,
+        frontier_details: Some(has_flag(args, "--frontier-details")),
         scope: flag_value(args, "--scope"),
         nodes,
         seeds,

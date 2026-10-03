@@ -41,7 +41,7 @@ pub struct OpenTool {
     name = "bullseye_query",
     description = "Core: read the intent ledger. `view` selects the projection: \
         context (default — session snapshot), frontier, target (requires id), list \
-        (optional filter), summary, graph (Mermaid; optional scope/nodes/seeds/expand — 🎯T57), \
+        (optional filter), summary (bounded; frontier_details=true for full), graph (Mermaid; optional scope/nodes/seeds/expand — 🎯T57), \
         validate. Replaces separate list/get/\
         frontier/summary/graph/validate/startup_context calls for new agents."
 )]
@@ -71,7 +71,7 @@ pub struct QueryTool {
     #[serde(default)]
     pub momentum: Option<Vec<MomentumEntry>>,
 
-    /// Expand frontier details when view=summary.
+    /// Request the full unbounded summary with expanded frontier details when view=summary.
     #[serde(default)]
     pub frontier_details: Option<bool>,
 
@@ -703,12 +703,12 @@ pub struct MomentumEntry {
     pub multiplier: f64,
 }
 
-/// Consolidated status overview: grouped targets, focus-ordered frontier, blocked, stale.
+/// Bounded status overview, with an opt-in full report.
 #[mcp_tool(
     name = "bullseye_summary",
-    description = "Shim for bullseye_query view=summary. Return a consolidated status overview in one call: active targets grouped by parent with rollup counts, frontier (unblocked) targets ordered by focus (value × momentum), blocked targets with blockers, and stale targets with inconsistent graph state. \
-        Optionally accepts a `momentum` list ([{id, multiplier}, ...]) that scales each target's value before sorting the frontier; caller supplies the multipliers (e.g. from mnemo_recent_activity). Targets missing from the list default to 1.0 (no boost). \
-        `frontier_details: true` expands each frontier entry with its full acceptance criteria, context, and edges — useful when you would otherwise round-trip `bullseye_get` on every frontier target. \
+    description = "Shim for bullseye_query view=summary. Return a bounded status overview with totals by status, the top 5 ready targets and top 3 hygiene findings per kind with counts. \
+        Repo-level frontier order is unblocking fanout then target ID; momentum is accepted for compatibility but ignored at repo scope. \
+        `frontier_details: true` requests the original unbounded summary and expands frontier detail. Other full views: list, frontier, validate, target. \
         Replaces multiple calls to list/frontier/validate/get for status assessment."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -730,10 +730,8 @@ pub struct SummaryTool {
     #[serde(default)]
     pub momentum: Option<Vec<MomentumEntry>>,
 
-    /// When true, expand each frontier entry with its full detail:
-    /// acceptance criteria, context, depends_on, verifies, rework,
-    /// and tags. Useful for callers that would otherwise round-trip
-    /// `bullseye_get` on every frontier target. Default: false.
+    /// When true, return the original unbounded summary with full frontier
+    /// detail. Default: false (bounded projection).
     #[serde(default)]
     pub frontier_details: Option<bool>,
 }
