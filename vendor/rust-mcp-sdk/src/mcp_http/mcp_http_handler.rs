@@ -1,14 +1,17 @@
 #[cfg(feature = "sse")]
 use super::http_utils::handle_sse_connection;
-use super::http_utils::{
-    accepts_event_stream, error_response, query_param, validate_mcp_protocol_version_header,
-};
+#[cfg(feature = "sse")]
+use super::http_utils::query_param;
+use super::http_utils::{accepts_event_stream, error_response, validate_mcp_protocol_version_header};
 use super::types::GenericBody;
 use crate::auth::AuthInfo;
 #[cfg(feature = "auth")]
 use crate::auth::AuthProvider;
-use crate::mcp_http::{middleware::compose, BoxFutureResponse, Middleware, RequestHandler};
+#[cfg(any(feature = "sse", feature = "auth"))]
+use crate::mcp_http::middleware::compose;
+use crate::mcp_http::{BoxFutureResponse, Middleware, RequestHandler};
 use crate::mcp_http::{GenericBodyExt, HealthHandler, RequestExt};
+#[cfg(any(feature = "sse", feature = "auth"))]
 use crate::mcp_server::error::TransportServerError;
 use crate::schema::schema_utils::SdkError;
 #[cfg(any(feature = "sse", feature = "streamable-http"))]
@@ -280,6 +283,7 @@ impl McpHttpHandler {
         handle(request, state).await
     }
 
+    #[cfg(feature = "sse")]
     async fn internal_handle_sse_message(
         request: http::Request<&str>,
         state: Arc<McpAppState>,

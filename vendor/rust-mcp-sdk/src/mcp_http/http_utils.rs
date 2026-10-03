@@ -22,6 +22,7 @@ use rust_mcp_transport::{
     EventId, McpDispatch, SessionId, SseEvent, SseTransport, StreamId, ID_SEPARATOR,
     MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_ID_HEADER,
 };
+#[cfg(feature = "auth")]
 use serde_json::{Map, Value};
 use std::sync::Arc;
 use tokio::io::{duplex, AsyncBufReadExt, BufReader};
@@ -44,6 +45,7 @@ const DUPLEX_BUFFER_SIZE: usize = 8192;
 ///
 /// # Returns
 /// * `Result<Event, Infallible>` - The constructed SSE event, infallible
+#[cfg(feature = "sse")]
 fn initial_sse_event(endpoint: &str) -> Result<Bytes, TransportServerError> {
     Ok(SseEvent::default()
         .with_event("endpoint")
@@ -61,6 +63,7 @@ pub fn url_base(url: &url::Url) -> String {
 /// This function performs a **case-insensitive** check for the `Bearer`
 /// authentication scheme. If present, the prefix is removed and the
 /// remaining parameter string is returned trimmed.
+#[cfg(feature = "auth")]
 fn strip_bearer_prefix(header: &str) -> &str {
     let lower = header.to_lowercase();
     if lower.starts_with("bearer ") {
@@ -695,6 +698,7 @@ pub fn error_response(
 /// * `Some(String)` containing the value of the query parameter if found.
 /// * `None` if the query string is missing or the key is not present.
 ///
+#[cfg(feature = "sse")]
 pub(crate) fn query_param(request: &http::Request<&str>, key: &str) -> Option<String> {
     request.uri().query().and_then(|query| {
         for pair in query.split('&') {

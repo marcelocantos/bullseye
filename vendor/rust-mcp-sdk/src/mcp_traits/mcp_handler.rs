@@ -1,7 +1,9 @@
 use async_trait::async_trait;
+#[cfg(feature = "client")]
+use rust_mcp_schema::schema_utils::ServerJsonrpcRequest;
 
 use rust_mcp_schema::schema_utils::{
-    ClientJsonrpcNotification, ClientJsonrpcRequest, ServerJsonrpcRequest,
+    ClientJsonrpcNotification, ClientJsonrpcRequest,
 };
 
 #[cfg(feature = "server")]
