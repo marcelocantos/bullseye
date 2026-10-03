@@ -434,3 +434,34 @@ Overlap with entropy (not double-counted as hygiene drift):
 6. **Re-run** this report’s commands on the same definitions (default-feature `cargo test`, both clippy shapes, `hygiene_check.py`, github-issues compile).
 
 No production code was changed in this audit.
+
+## ENT-001 follow-up: adapter-owned mutation (T74.1)
+
+The ENT-001 line numbers above describe the 2026-08-22 snapshot, **not**
+this branch's current code. Before this follow-up, `handle_put` and
+`handle_commit` already constructed fragments for `apply_request_as`; the
+pure `apply::apply_with_gate(&mut TargetsFile, …)` implemented create, patch,
+achieve, defer, assign, postpone, wake and reopen. `ops::revert` and
+`ops::subdivide` were already pure domain transforms. The remaining direct
+mutation in the MCP adapter was `handle_set_aside`: its locked closure fetched
+a target, assigned `status = SetAside`, cleared status-scoped fields and wrote
+`set_aside_reason` (`src/handler.rs`, around the legacy shim). Its outcome
+included no-op reports for already-achieved and already-set-aside rows.
+
+After T74.1, the legacy shim calls `ops::set_aside(&mut TargetsFile, id,
+reason)` under the existing lock. The typed result preserves the historical
+no-op and refusal wording in `handler.rs`; discovery, caller-controlled string
+guards, persistence and envelopes remain adapter responsibilities. Rehash
+intentionally retains parse/heal/save I/O in the handler. No second mutation
+engine was introduced: `apply` remains the single core write verb.
+
+The shipped-path regression oracles are `domain_status_tests::legacy_set_aside_is_pure_and_preserves_noop_and_refusal`,
+`domain_status_tests::status_transition_matrix_clears_every_incompatible_persisted_field`
+(16 from/to pairs), and
+`domain_status_tests::all_persisted_fields_classified_and_status_fields_share_the_schema_table`.
+The latter exhaustively destructures `Target` so a newly added persisted field
+fails test compilation until classified, and compares the status-scoped list
+against `schema::STATUS_SCOPED_FIELDS`. Handler fixture tests continue to
+exercise locked persistence and result envelopes. A new field's actual
+transition behaviour must then be represented in the domain matrix; the
+classification gate does not automatically infer desired semantics.
