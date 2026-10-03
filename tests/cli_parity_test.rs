@@ -438,6 +438,48 @@ fn commit_rejects_an_unrecognised_flag_instead_of_reporting_success() {
     assert!(!out.contains("ok: true"), "must not report success:\n{out}");
 }
 
+/// Exercise the CLI route as well as the already-covered MCP handler.
+#[test]
+fn cli_assign_persists_owner_from_documented_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let yaml = dir.path().join("bullseye.yaml");
+    std::fs::write(
+        &yaml,
+        "schema_version: 5\ntargets:\n  T1:\n    name: available\n    status: identified\n    \
+         value: 0.0\n    cost: 0.0\n    acceptance: [available]\n    discovered: 2026-01-01\n",
+    )
+    .expect("write fixture");
+
+    let (code, out) = run(&[
+        "commit",
+        "--op",
+        "assign",
+        "--cwd",
+        dir.path().to_str().unwrap(),
+        "--id",
+        "T1",
+        "--owner",
+        "alice",
+        "--reason",
+        "collaborator work",
+    ]);
+    assert_eq!(code, 0, "documented assign flags must succeed: {out}");
+    assert!(
+        out.contains("op: assign"),
+        "expected assign response: {out}"
+    );
+    let ledger: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(yaml).unwrap()).unwrap();
+    assert_eq!(
+        ledger["targets"]["T1"]["owned_by"]["owner"].as_str(),
+        Some("alice")
+    );
+    assert_eq!(
+        ledger["targets"]["T1"]["owned_by"]["reason"].as_str(),
+        Some("collaborator work")
+    );
+}
+
 #[test]
 fn commit_help_no_longer_defers_split_to_mcp() {
     let (_, help) = run(&["commit", "--help"]);
