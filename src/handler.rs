@@ -1100,54 +1100,26 @@ pub fn handle_set_aside(t: crate::tools::SetAsideTool) -> ToolResult {
         ));
     }
 
-    enum Outcome {
-        AlreadyAchieved,
-        AlreadySetAside { existing_reason: String },
-        SetAside { name: String, prior: Status },
-    }
-
-    let outcome = store::with_locked_mutation(&path, |file| -> Result<Outcome, api::CodedError> {
-        let target = file.targets.get_mut(&t.id).ok_or_else(|| {
-            api::CodedError::new(
-                api::ErrorCode::NotFound,
-                format!("target {} not found", t.id),
-            )
-        })?;
-        if target.status == Status::Achieved {
-            return Ok(Outcome::AlreadyAchieved);
-        }
-        if target.status == Status::SetAside {
-            return Ok(Outcome::AlreadySetAside {
-                existing_reason: target.set_aside_reason.clone().unwrap_or_default(),
-            });
-        }
-        let prior = target.status;
-        target.status = Status::SetAside;
-        // 🎯T64: drop achieved-only / active-only residue before
-        // recording the new disposition.
-        target.clear_illegal_status_scoped_fields();
-        target.set_aside_reason = Some(reason.clone());
-        Ok(Outcome::SetAside {
-            name: target.name.clone(),
-            prior,
-        })
+    let outcome = store::with_locked_mutation(&path, |file| {
+        ops::set_aside(file, &t.id, &reason)
+            .map_err(|e| api::CodedError::new(e.code(), e.to_string()))
     })
     .map_err(mutation_tool_err)?;
 
     match outcome {
-        Outcome::AlreadyAchieved => Err(tool_err(format!(
+        ops::SetAsideOutcome::AlreadyAchieved => Err(tool_err(format!(
             "🎯{id} is already achieved — `bullseye_set_aside` is for targets that were not \
              delivered. To revise the achievement record, reopen it and patch in one \
              `bullseye_apply`: `targets: {{{id}: {{status: identified, reason: <why>, \
              ...}}}}`.",
             id = t.id,
         ))),
-        Outcome::AlreadySetAside { existing_reason } => text_result(format!(
+        ops::SetAsideOutcome::AlreadySetAside { existing_reason } => text_result(format!(
             "🎯{id} is already set aside.\nExisting reason: {existing_reason}\nNew reason \
              (not applied): {reason}",
             id = t.id,
         )),
-        Outcome::SetAside { name, prior } => {
+        ops::SetAsideOutcome::SetAside { name, prior } => {
             let out = format!(
                 "Set aside 🎯{id} \"{name}\" (was {prior:?})\nReason: {reason}",
                 id = t.id,
@@ -2367,6 +2339,45 @@ targets:
             msg.contains("<parameter "),
             "error should name marker: {msg}"
         );
+    }
+
+    #[test]
+    fn legacy_set_aside_persists_once_and_keeps_shim_envelopes() {
+        let (_tmp, _cfg, cwd) = fixture();
+        let tool = crate::tools::SetAsideTool {
+            cwd: cwd.clone(),
+            id: "T2".into(),
+            reason: "park for later".into(),
+        };
+        let first = result_text(
+            handle_set_aside(crate::tools::SetAsideTool {
+                cwd: cwd.clone(),
+                id: "T2".into(),
+                reason: "park for later".into(),
+            })
+            .expect("set aside"),
+        );
+        assert!(
+            first.contains("op: defer") && first.contains("changed: T2"),
+            "{first}"
+        );
+        assert_eq!(
+            load_target(&cwd, "T2").set_aside_reason.as_deref(),
+            Some("park for later")
+        );
+        let again = result_text(handle_set_aside(tool).expect("no-op"));
+        assert!(
+            again.contains("already set aside") && again.contains("park for later"),
+            "{again}"
+        );
+        let achieved = handle_set_aside(crate::tools::SetAsideTool {
+            cwd: cwd.clone(),
+            id: "T1".into(),
+            reason: "not delivered".into(),
+        })
+        .expect_err("achieved target cannot be set aside");
+        assert!(format!("{achieved:?}").contains("already achieved"));
+        assert_eq!(load_target(&cwd, "T1").status, Status::Achieved);
     }
 
     #[test]

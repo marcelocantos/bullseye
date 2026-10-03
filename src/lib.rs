@@ -25,3 +25,6 @@ pub mod schema;
 pub mod store;
 pub mod tools;
 pub mod version;
+
+#[cfg(test)]
+mod domain_status_tests;

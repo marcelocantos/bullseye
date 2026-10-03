@@ -102,6 +102,65 @@ pub fn revert(
     })
 }
 
+/// Outcome of the legacy set-aside shim. Unlike `apply`, this shim reports
+/// already-terminal rows without writing and retains its historical messages.
+#[derive(Debug, PartialEq)]
+pub enum SetAsideOutcome {
+    AlreadyAchieved,
+    AlreadySetAside { existing_reason: String },
+    SetAside { name: String, prior: Status },
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SetAsideError {
+    TargetNotFound(String),
+}
+
+impl std::fmt::Display for SetAsideError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TargetNotFound(id) => write!(f, "target {id} not found"),
+        }
+    }
+}
+
+impl SetAsideError {
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::TargetNotFound(_) => ErrorCode::NotFound,
+        }
+    }
+}
+
+/// Pure legacy set-aside transform. The adapter owns validation of caller
+/// strings, the lock, persistence and display; no MCP types enter here.
+pub fn set_aside(
+    file: &mut TargetsFile,
+    id: &str,
+    reason: &str,
+) -> Result<SetAsideOutcome, SetAsideError> {
+    let target = file
+        .targets
+        .get_mut(id)
+        .ok_or_else(|| SetAsideError::TargetNotFound(id.to_string()))?;
+    if target.status == Status::Achieved {
+        return Ok(SetAsideOutcome::AlreadyAchieved);
+    }
+    if target.status == Status::SetAside {
+        return Ok(SetAsideOutcome::AlreadySetAside {
+            existing_reason: target.set_aside_reason.clone().unwrap_or_default(),
+        });
+    }
+    let prior = target.status;
+    target.status = Status::SetAside;
+    target.clear_illegal_status_scoped_fields();
+    target.set_aside_reason = Some(reason.to_string());
+    Ok(SetAsideOutcome::SetAside {
+        name: target.name.clone(),
+        prior,
+    })
+}
+
 // --- subdivide ------------------------------------------------------------
 
 /// How a `subdivide` call should treat the parent target and its
