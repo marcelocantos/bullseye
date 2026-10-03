@@ -494,6 +494,7 @@ const COMMIT_FLAGS: &[(&str, bool)] = &[
     ("--actual-cost", true),
     ("--attestation", true),
     ("--reason", true),
+    ("--owner", true),
     ("--postponed-until", true),
     ("--postpone-predicate", true),
     ("--parent", true),
@@ -1187,4 +1188,32 @@ async fn serve_http(addr: &str) -> SdkResult<()> {
         },
     );
     server.start().await
+}
+
+#[cfg(test)]
+mod commit_flag_tests {
+    use super::{COMMIT_FLAGS, cli_commit};
+
+    #[test]
+    fn documented_assign_flags_are_accepted_by_commit_whitelist() {
+        let help = cli_commit(&["--help".to_string()]).expect("commit help");
+        let assign = help
+            .lines()
+            .find(|line| line.trim_start().starts_with("assign:"))
+            .expect("assign help line");
+        let flags: Vec<&str> = assign
+            .split_whitespace()
+            .filter(|word| word.starts_with("--"))
+            .collect();
+        assert!(
+            flags.contains(&"--owner"),
+            "assign help must document --owner"
+        );
+        for flag in flags {
+            assert!(
+                COMMIT_FLAGS.iter().any(|(accepted, _)| *accepted == flag),
+                "assign help documents {flag} but COMMIT_FLAGS rejects it"
+            );
+        }
+    }
 }
