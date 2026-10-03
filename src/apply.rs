@@ -950,7 +950,7 @@ pub fn apply_with_gate(
                 target.postpone_predicate = Some(v.clone());
             }
             if let Some(owner) = &frag.owner {
-                if !owner.trim().is_empty() && target.status.is_terminal() {
+                if !owner.trim().is_empty() && to.is_terminal() {
                     return Err(ApplyError::new(
                         ErrorCode::Validation,
                         format!(
@@ -1397,6 +1397,66 @@ targets:
         )
         .expect("clearing needs no reason");
         assert!(file.targets["T1"].owned_by.is_none());
+    }
+
+    #[test]
+    fn reopen_and_assign_owner_in_one_apply_uses_effective_status() {
+        let mut file = base_file();
+        let report = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    status: Some("identified".into()),
+                    owner: Some("alice".into()),
+                    reason: Some("regression found in production".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("reopen and assign atomically");
+        assert_eq!(report.updated, vec!["T2"]);
+        let target = &file.targets["T2"];
+        assert_eq!(target.status, Status::Identified);
+        let owned = target.owned_by.as_ref().expect("owner survives reopening");
+        assert_eq!(owned.owner, "alice");
+        assert_eq!(owned.reason, "regression found in production");
+        assert!(target.achieved.is_none());
+        assert!(target.attestation.is_none());
+        assert!(
+            target.context.contains("Reverted ")
+                && target.context.contains("regression found in production"),
+            "reopen audit trail must survive: {}",
+            target.context
+        );
+    }
+
+    #[test]
+    fn reopen_and_assign_owner_still_requires_reason() {
+        let mut file = base_file();
+        let err = apply(
+            &mut file,
+            &one(
+                "T2",
+                Fragment {
+                    status: Some("identified".into()),
+                    owner: Some("alice".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("both transitions require reason");
+        assert_eq!(err.code, ErrorCode::Validation);
+        assert!(err.message.contains("reopen"), "got: {}", err.message);
+        assert!(
+            err.message.contains("owner assigned"),
+            "got: {}",
+            err.message
+        );
+        assert_eq!(file.targets["T2"].status, Status::Achieved);
+        assert!(file.targets["T2"].owned_by.is_none());
     }
 
     #[test]
