@@ -84,7 +84,15 @@ fn post_with_session(port: u16, body: &str, session: Option<&str>) -> (String, O
 }
 
 fn start(port: u16) -> Server {
-    let child = Command::new(BIN)
+    start_with_gate_home(port, None)
+}
+
+fn start_with_gate_home(port: u16, gate_home: Option<&std::path::Path>) -> Server {
+    let mut cmd = Command::new(BIN);
+    if let Some(home) = gate_home {
+        cmd.env("JEVONS_HOME", home);
+    }
+    let child = cmd
         .args(["serve", "--addr", &format!("127.0.0.1:{port}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -201,4 +209,138 @@ fn a_bare_invocation_fails_loudly_on_stderr_and_writes_nothing_to_stdout() {
         err.contains("/mcp"),
         "must name the endpoint to register: {err}"
     );
+}
+
+/// T95: observe both executable entry points on disposable ledgers. The
+/// HTTP process uses a private gate store and an ephemeral loopback port,
+/// never the machine's shared Homebrew daemon.
+#[test]
+fn retire_gate_cli_and_http_refuse_bad_evidence_and_persist_risk_marker() {
+    let gates = tempfile::tempdir().unwrap();
+    std::fs::create_dir(gates.path().join("gates")).unwrap();
+    std::fs::write(gates.path().join("gates/cafe9506.json"),
+        r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"1111111111111111111111111111111111111111","clean":false,"dirty_files":1}}"#).unwrap();
+    let reason = "GATE test GREEN id=cafe9506 — accepted-risk: gate ran dirty";
+    let expected = format!("{}: {reason}", bullseye::gatecheck::ACCEPTED_RISK_MARKER);
+    let cli = |cwd: &std::path::Path, args: &[&str]| {
+        Command::new(BIN)
+            .env("JEVONS_HOME", gates.path())
+            .args(args)
+            .arg("--cwd")
+            .arg(cwd)
+            .output()
+            .unwrap()
+    };
+    let seed = |cwd: &std::path::Path| {
+        for args in [
+            vec!["open", "--location", "in_repo"],
+            vec![
+                "commit",
+                "--op",
+                "track",
+                "--id",
+                "T1",
+                "--name",
+                "Original scope",
+                "--acceptance",
+                "Original scope met",
+            ],
+        ] {
+            let out = cli(cwd, &args);
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    };
+    let check_marked = |cwd: &std::path::Path| {
+        let file = bullseye::store::load(&cwd.join("bullseye.yaml")).unwrap();
+        let parent = &file.targets["T1"];
+        assert_eq!(parent.status, bullseye::schema::Status::Achieved);
+        assert_eq!(parent.attestation.as_deref(), Some(expected.as_str()));
+        assert!(parent.context.ends_with(&expected));
+        assert!(file.targets.contains_key("T1.1"));
+    };
+
+    let cli_dir = tempfile::tempdir().unwrap();
+    seed(cli_dir.path());
+    let children = cli_dir.path().join("children.json");
+    std::fs::write(
+        &children,
+        r#"[{"name":"Spillover","acceptance":["Resolved"]}]"#,
+    )
+    .unwrap();
+    let split = |reason: &str| {
+        cli(
+            cli_dir.path(),
+            &[
+                "commit",
+                "--op",
+                "split",
+                "--parent",
+                "T1",
+                "--mode",
+                "retire",
+                "--children-file",
+                children.to_str().unwrap(),
+                "--retire-reason",
+                reason,
+            ],
+        )
+    };
+    let path = cli_dir.path().join("bullseye.yaml");
+    let before = std::fs::read(&path).unwrap();
+    let refused = split("GATE test GREEN id=cafe9599");
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("gate id unknown"));
+    assert_eq!(before, std::fs::read(&path).unwrap());
+    let accepted = split(reason);
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    check_marked(cli_dir.path());
+
+    let http_dir = tempfile::tempdir().unwrap();
+    seed(http_dir.path());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    assert_ne!(port, 18743);
+    drop(listener);
+    let _server = start_with_gate_home(port, Some(gates.path()));
+    let (_, session) = initialize(port);
+    let retire = |reason: &str| {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0", "id": 95, "method": "tools/call",
+            "params": {"name": "bullseye_subdivide", "arguments": {
+                "cwd": http_dir.path(), "parent": "T1", "mode": "retire",
+                "children": [{"name": "Spillover", "acceptance": ["Resolved"]}],
+                "retire_reason": reason
+            }}
+        });
+        let (body, _) = post_with_session(port, &request.to_string(), Some(&session));
+        // The transport can return JSON or a server-sent event containing JSON.
+        let json = body
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap_or(&body);
+        serde_json::from_str::<serde_json::Value>(json).expect("MCP JSON response")
+    };
+    let path = http_dir.path().join("bullseye.yaml");
+    let before = std::fs::read(&path).unwrap();
+    let refused = retire("GATE test GREEN id=cafe9599");
+    assert!(refused.to_string().contains("gate id unknown"), "{refused}");
+    assert!(
+        refused.get("error").is_some() || refused["result"]["isError"] == true,
+        "{refused}"
+    );
+    assert_eq!(before, std::fs::read(&path).unwrap());
+    let accepted = retire(reason);
+    assert!(
+        accepted.get("error").is_none() && accepted["result"]["isError"] != true,
+        "{accepted}"
+    );
+    check_marked(http_dir.path());
 }

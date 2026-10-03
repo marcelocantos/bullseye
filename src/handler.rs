@@ -1233,7 +1233,31 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
         Err(e) => return coded_err(e.code(), e.to_string()),
     };
 
+    let gate_store =
+        crate::gatecheck::FsGateStore::new(path.parent().unwrap_or_else(|| Path::new(".")));
     let result = store::with_locked_mutation(&path, |file| {
+        // Retirement achieves the parent. Check its evidence before creating
+        // children or rewiring dependencies, using the same verdict as achieve.
+        let retire_reason = if mode == ops::SubdivideMode::Retire {
+            let text = crate::apply::normalize_attestation(retire_reason.as_deref().unwrap_or(""))
+                .map_err(|_| {
+                    let e = ops::SubdivideError::EmptyRetireReason;
+                    api::CodedError::new(e.code(), e.to_string())
+                })?;
+            let verdict = crate::gatecheck::check_attestation(&text, &gate_store);
+            if let crate::gatecheck::AchieveVerdict::Refused { reasons } = &verdict {
+                return Err(api::CodedError::new(
+                    api::ErrorCode::Validation,
+                    format!(
+                        "retire_reason cites a gate that does not hold — {}",
+                        reasons.join("; ")
+                    ),
+                ));
+            }
+            Some(crate::gatecheck::persisted_attestation(&text, &verdict))
+        } else {
+            retire_reason
+        };
         ops::subdivide(
             file,
             &t.parent,
@@ -2537,6 +2561,163 @@ targets:
             tail: None,
             owner: None,
         })
+    }
+
+    fn retire_tool(cwd: &str, reason: &str) -> crate::tools::SubdivideTool {
+        crate::tools::SubdivideTool {
+            cwd: cwd.to_string(),
+            parent: "T2".to_string(),
+            mode: "retire".to_string(),
+            children: vec![crate::tools::SubdivisionChild {
+                id: None,
+                name: "Spillover".to_string(),
+                acceptance: vec!["Spillover is resolved".to_string()],
+                context: None,
+                tags: None,
+                depends_on: None,
+            }],
+            retire_reason: Some(reason.to_string()),
+            tail: None,
+        }
+    }
+
+    fn assert_retire_refused(cwd: &str, reason: &str, field: &str) {
+        let path = Path::new(cwd).join("bullseye.yaml");
+        let before = std::fs::read(&path).unwrap();
+        let err = handle_subdivide(retire_tool(cwd, reason)).expect_err("retire must refuse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("retire_reason") && msg.contains(field),
+            "{msg}"
+        );
+        assert_eq!(
+            before,
+            std::fs::read(path).unwrap(),
+            "refusal must not write children, parent or dependencies"
+        );
+    }
+
+    #[test]
+    fn retire_gate_refusal_matrix_leaves_ledger_byte_identical() {
+        let gates = GateHomeScope::new();
+        gates.write_gate("cafe9501", r#"{"verdict":"RED","exit_status":1,"tree":{"commit":"1111111111111111111111111111111111111111","clean":true,"dirty_files":0}}"#);
+        gates.write_gate("cafe9502", r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"1111111111111111111111111111111111111111","clean":false,"dirty_files":1}}"#);
+        let (_tmp, _cfg, cwd) = fixture();
+        for (reason, field) in [
+            ("GATE test GREEN id=cafe9599", "gate id unknown"),
+            ("GATE test GREEN", "gate id missing"),
+            ("GATE test GREEN id=cafe9501", "verdict misquoted"),
+            ("GATE test RED id=cafe9501", "not GREEN"),
+            ("GATE test GREEN id=cafe9502", "tree.clean:false"),
+            (
+                "GATE test GREEN id=cafe9599 — accepted-risk: gate unavailable",
+                "gate id unknown",
+            ),
+            (
+                "GATE test GREEN id=cafe9501 — accepted-risk: gate failed",
+                "verdict misquoted",
+            ),
+        ] {
+            assert_retire_refused(&cwd, reason, field);
+        }
+    }
+
+    #[test]
+    fn retire_gate_accepted_risk_marks_attestation_and_context_after_normalization() {
+        let gates = GateHomeScope::new();
+        gates.write_gate("cafe9503", r#"{"verdict":"GREEN","exit_status":0,"tree":{"commit":"1111111111111111111111111111111111111111","clean":false,"dirty_files":1}}"#);
+        let (_tmp, _cfg, cwd) = fixture();
+        let raw = "GATE test GREEN id=cafe9503 — accepted-risk: gate ran dirty";
+        handle_subdivide(retire_tool(&cwd, &format!("  {raw}  "))).unwrap();
+        let parent = load_target(&cwd, "T2");
+        let marked = format!("{}: {raw}", crate::gatecheck::ACCEPTED_RISK_MARKER);
+        assert_eq!(parent.status, Status::Achieved);
+        assert_eq!(parent.attestation.as_deref(), Some(marked.as_str()));
+        assert!(parent.context.ends_with(&marked), "{}", parent.context);
+        assert_eq!(load_target(&cwd, "T2.1").name, "Spillover");
+    }
+
+    #[test]
+    fn retire_gate_ungated_reasons_remain_unmarked_and_other_modes_ignore_gate_claims() {
+        let _gates = GateHomeScope::new();
+        for reason in [
+            "Original scope met; spillover remains",
+            "Accepted-risk: manual review only (class-3)",
+        ] {
+            let (_tmp, _cfg, cwd) = fixture();
+            handle_subdivide(retire_tool(&cwd, reason)).unwrap();
+            let parent = load_target(&cwd, "T2");
+            assert_eq!(parent.status, Status::Achieved);
+            assert_eq!(parent.attestation.as_deref(), Some(reason));
+            assert!(
+                !parent
+                    .context
+                    .contains(crate::gatecheck::ACCEPTED_RISK_MARKER)
+            );
+        }
+        for mode in ["add", "aggregate"] {
+            let (_tmp, _cfg, cwd) = fixture();
+            let mut tool = retire_tool(&cwd, "GATE test GREEN id=cafe9599");
+            tool.mode = mode.to_string();
+            handle_subdivide(tool).unwrap();
+            let parent = load_target(&cwd, "T2");
+            assert_ne!(parent.status, Status::Achieved);
+            assert!(parent.attestation.is_none());
+            assert!(!parent.context.contains("cafe9599"));
+        }
+    }
+
+    #[test]
+    fn retire_gate_checks_real_git_ancestry_in_both_directions() {
+        let gates = GateHomeScope::new();
+        let (_tmp, _cfg, cwd) = fixture();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(&cwd)
+                .args([
+                    "-c",
+                    "user.name=T95 test",
+                    "-c",
+                    "user.email=t95@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["add", "bullseye.yaml"]);
+        git(&["commit", "-qm", "fix"]);
+        let fix = git(&["rev-parse", "HEAD"]);
+        git(&["commit", "--allow-empty", "-qm", "measured"]);
+        let measured = git(&["rev-parse", "HEAD"]);
+        assert_ne!(fix, measured);
+        gates.write_gate("cafe9504", &serde_json::json!({"verdict":"GREEN", "exit_status":0, "tree":{"commit":fix, "clean":true, "dirty_files":0}}).to_string());
+        assert_retire_refused(
+            &cwd,
+            &format!("GATE test GREEN id=cafe9504 fixes {measured}"),
+            "is not an ancestor",
+        );
+        gates.write_gate("cafe9505", &serde_json::json!({"verdict":"GREEN", "exit_status":0, "tree":{"commit":measured, "clean":true, "dirty_files":0}}).to_string());
+        let reason = format!("GATE test GREEN id=cafe9505 fixes {fix}");
+        handle_subdivide(retire_tool(&cwd, &reason)).unwrap();
+        let parent = load_target(&cwd, "T2");
+        assert_eq!(parent.status, Status::Achieved);
+        assert_eq!(parent.attestation.as_deref(), Some(reason.as_str()));
+        assert!(
+            !parent
+                .context
+                .contains(crate::gatecheck::ACCEPTED_RISK_MARKER)
+        );
     }
 
     #[test]
