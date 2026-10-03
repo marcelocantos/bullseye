@@ -1238,12 +1238,10 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
     let result = store::with_locked_mutation(&path, |file| {
         // Retirement achieves the parent. Check its evidence before creating
         // children or rewiring dependencies, using the same verdict as achieve.
-        let retire_reason = if mode == ops::SubdivideMode::Retire {
-            let text = crate::apply::normalize_attestation(retire_reason.as_deref().unwrap_or(""))
-                .map_err(|_| {
-                    let e = ops::SubdivideError::EmptyRetireReason;
-                    api::CodedError::new(e.code(), e.to_string())
-                })?;
+        let retire_reason = if mode == ops::SubdivideMode::Retire
+            && let Ok(text) =
+                crate::apply::normalize_attestation(retire_reason.as_deref().unwrap_or(""))
+        {
             let verdict = crate::gatecheck::check_attestation(&text, &gate_store);
             if let crate::gatecheck::AchieveVerdict::Refused { reasons } = &verdict {
                 return Err(api::CodedError::new(
@@ -1256,6 +1254,9 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
             }
             Some(crate::gatecheck::persisted_attestation(&text, &verdict))
         } else {
+            // Invalid reasons are still refused by ops before any mutation.
+            // Leave their validation there to preserve structural diagnostics
+            // (such as an empty tail) that precede the reason requirement.
             retire_reason
         };
         ops::subdivide(
