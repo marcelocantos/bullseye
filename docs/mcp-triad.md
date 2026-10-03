@@ -45,6 +45,14 @@ T3:
     - invariant: platform-isolation      # sawmill structural invariant (future, T19)
 ```
 
+**Historical proposal, not implemented as written:** The executing
+`targets_verify` described below is superseded. The shipped
+`bullseye_plan_checks` (and `bullseye_verify` compatibility shim) returns
+an ordered verification *plan*; it does not call sawmill or execute checks.
+The schema v5 uniform-node DAG remains the model in v6; see
+[graph shapes](shapes.md) and the [core API contract](api-v1-core.md).
+The proposal is retained here for historical context.
+
 **Execution model:** `targets_verify` (new tool) iterates a target's
 `checks`, calls sawmill tools for each, and returns a structured
 pass/fail report. This makes verification deterministic, fast, and
