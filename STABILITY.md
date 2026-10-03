@@ -894,3 +894,13 @@ Planned additions:
 ## Out of scope for 1.0
 
 - MCP resource support — waiting on protocol maturity.
+
+### GitHub issue adapter mutex
+
+`github sync` and `issues-poll` / issuepipe background consumer have distinct
+identity and lifecycle rules. They cannot share a ledger: if targets from one
+adapter are present, the other refuses its sync ledger-wide, regardless of
+issue or repository. There is no URL-based same-repo inference. To switch,
+disable the previous consumer and deliberately migrate its mirrored targets
+and lifecycle state, or use separate ledgers. CLI and MCP `github sync` use
+the same guarded path.

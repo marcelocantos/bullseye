@@ -147,7 +147,8 @@ pub fn apply_issues(
     file: &mut TargetsFile,
     issues: &[MasterIssue],
     today: NaiveDate,
-) -> ApplyStats {
+) -> Result<ApplyStats, String> {
+    crate::github::reject_manual_adapter(file)?;
     let mut stats = ApplyStats::default();
     for issue in issues {
         let (id, mut fresh) = target_from_issue(issue, today);
@@ -190,7 +191,7 @@ pub fn apply_issues(
             }
         }
     }
-    stats
+    Ok(stats)
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -230,7 +231,7 @@ pub fn sync_once(
         }
     }
     store::with_locked_mutation(yaml_path, |file| {
-        let stats = apply_issues(file, &all, today);
+        let stats = apply_issues(file, &all, today)?;
         Ok::<ApplyStats, String>(stats)
     })
     .map_err(|e| e.to_string())
@@ -596,9 +597,9 @@ mod tests {
             release_surface: Vec::new(),
             targets: BTreeMap::new(),
         };
-        let s1 = apply_issues(&mut file, std::slice::from_ref(&issue), today);
+        let s1 = apply_issues(&mut file, std::slice::from_ref(&issue), today).unwrap();
         assert_eq!(s1.created, 1);
-        let s2 = apply_issues(&mut file, std::slice::from_ref(&issue), today);
+        let s2 = apply_issues(&mut file, std::slice::from_ref(&issue), today).unwrap();
         assert_eq!(s2.created, 0);
         assert_eq!(s2.unchanged, 1);
         assert_eq!(file.targets.len(), 1);
@@ -606,7 +607,7 @@ mod tests {
 
         let mut issue2 = issue;
         issue2.title = "Hello again".into();
-        let s3 = apply_issues(&mut file, &[issue2], today);
+        let s3 = apply_issues(&mut file, &[issue2], today).unwrap();
         assert_eq!(s3.updated, 1);
         assert_eq!(file.targets["GH10-3"].name, "Hello again");
     }

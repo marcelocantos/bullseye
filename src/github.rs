@@ -49,6 +49,45 @@ fn stub_acceptance(url: &str) -> Vec<String> {
     vec![format!("Mirrored from {url} — define acceptance criteria.")]
 }
 
+/// A ledger has one GitHub issue writer. The adapters use incompatible
+/// coordinates and lifecycle rules; do not guess equivalence from URLs.
+/// Refuse the other adapter even for a different issue or repository.
+pub(crate) fn reject_other_adapter(
+    file: &TargetsFile,
+    other_origin_prefix: &str,
+    writer: &str,
+) -> Result<(), String> {
+    if let Some((id, _)) = file
+        .targets
+        .iter()
+        .find(|(_, t)| t.origin.starts_with(other_origin_prefix))
+    {
+        return Err(format!(
+            "{writer} refused: target {id} belongs to the other GitHub issue adapter; \
+             use only one GitHub issue adapter per ledger (disable the other consumer, \
+             or use a separate ledger; migrate existing targets deliberately)"
+        ));
+    }
+    Ok(())
+}
+
+/// Reverse direction of the ledger-wide mutex: exclude the event adapter's
+/// `github:repo:` namespace rather than treating it as a manual origin.
+pub(crate) fn reject_manual_adapter(file: &TargetsFile) -> Result<(), String> {
+    if let Some((id, _)) = file
+        .targets
+        .iter()
+        .find(|(_, t)| t.origin.starts_with("github:") && !t.origin.starts_with("github:repo:"))
+    {
+        return Err(format!(
+            "issues-poll refused: target {id} belongs to the other GitHub issue adapter; \
+             use only one GitHub issue adapter per ledger (disable the other consumer, \
+             or use a separate ledger; migrate existing targets deliberately)"
+        ));
+    }
+    Ok(())
+}
+
 /// The `GH<n>` target ID for issue `number`.
 pub fn target_id(number: u64) -> String {
     format!("GH{number}")
@@ -936,7 +975,9 @@ pub fn run_with(
     };
     let issues = client.list_issues(&repo, &list_opts)?;
 
-    let targets = store::load(&yaml).map_err(|e| e.to_string())?.targets;
+    let snapshot = store::load(&yaml).map_err(|e| e.to_string())?;
+    reject_other_adapter(&snapshot, "github:repo:", "github sync")?;
+    let targets = snapshot.targets;
     let plan_opts = PlanOpts {
         pull: args.pull,
         push: args.push,
@@ -993,6 +1034,7 @@ pub fn run_with(
             check_mirrored_strings(op)?;
         }
         store::with_locked_mutation(&yaml, |file| {
+            reject_other_adapter(file, "github:repo:", "github sync")?;
             apply_target_ops(file, &p.target_ops);
             Ok::<(), String>(())
         })
@@ -1502,6 +1544,71 @@ mod tests {
         let state = SyncState::load(&SyncState::path_for(&cwd)).unwrap();
         assert!(state.issues.contains_key(&42));
         assert_eq!(state.repo, "o/r");
+    }
+
+    /// Both public sync paths share these functions (CLI and MCP dispatch to
+    /// run_with); a second writer must not alter YAML in either order.
+    #[test]
+    fn dual_adapter_same_issue_refuses_second_writer_without_yaml_change() {
+        use crate::github_issues::{MasterClient, MasterIssue, sync_once};
+
+        struct Master;
+        impl MasterClient for Master {
+            fn list_authorized_repos(&self) -> Result<Vec<i64>, String> {
+                Ok(vec![42])
+            }
+            fn list_issues(&self, _repo_id: i64) -> Result<Vec<MasterIssue>, String> {
+                Ok(vec![MasterIssue {
+                    issue_node_id: "I_7".into(),
+                    repo_id: 42,
+                    number: 7,
+                    title: "Same issue".into(),
+                    body: "body of #7".into(),
+                    state: "open".into(),
+                    labels_json: r#"["bug"]"#.into(),
+                    html_url: "https://github.com/o/r/issues/7".into(),
+                    updated_at: "2026-06-21T00:00:07Z".into(),
+                }])
+            }
+        }
+        let client = FakeGh {
+            issues: vec![issue(7, "Same issue", IssueState::Open)],
+            closed: RefCell::new(vec![]),
+            reopened: RefCell::new(vec![]),
+        };
+        for manual_first in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let yaml = dir.path().join("bullseye.yaml");
+            std::fs::write(&yaml, "schema_version: 5\ntargets: {}\n").unwrap();
+            let args = GithubArgs {
+                cwd: dir.path().to_path_buf(),
+                repo: Some("o/r".into()),
+                label: None,
+                assignee: None,
+                pull: true,
+                push: true,
+                dry_run: false,
+            };
+            let opt_in = BTreeSet::from([42]);
+            if manual_first {
+                run_with(&client, &args, date()).unwrap();
+                let before = std::fs::read(&yaml).unwrap();
+                let error = sync_once(&Master, &opt_in, &yaml, date()).unwrap_err();
+                assert!(error.contains("only one GitHub issue adapter"), "{error}");
+                assert_eq!(before, std::fs::read(&yaml).unwrap());
+                assert_eq!(store::load(&yaml).unwrap().targets.len(), 1);
+                run_with(&client, &args, date()).unwrap(); // original writer remains idempotent
+            } else {
+                sync_once(&Master, &opt_in, &yaml, date()).unwrap();
+                let before = std::fs::read(&yaml).unwrap();
+                let error = run_with(&client, &args, date()).unwrap_err();
+                assert!(error.contains("only one GitHub issue adapter"), "{error}");
+                assert_eq!(before, std::fs::read(&yaml).unwrap());
+                assert_eq!(store::load(&yaml).unwrap().targets.len(), 1);
+                let stats = sync_once(&Master, &opt_in, &yaml, date()).unwrap();
+                assert_eq!(stats.created, 0);
+            }
+        }
     }
 
     #[test]

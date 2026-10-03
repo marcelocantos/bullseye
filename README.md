@@ -260,6 +260,14 @@ Extended (cron / fleet):
 |------------|---------|
 | `bullseye sync-priorities` | Scan the workspace, compute the portfolio frontier, and upsert each frontier target into a SQLite `targets_priorities` table. Designed for periodic invocation from cron or a daemon hook. See [mcp-triad.md §7](docs/mcp-triad.md) for the Protocol-app sync chain. |
 | `bullseye github sync` | Mirror GitHub issues into bullseye targets and reflect target lifecycle back to issues, using the `gh` CLI (so authentication is your existing `gh` session — no token stored). Mirrored issues become `GH<n>` targets, keyed by the issue number; closing/reopening a mirrored target closes/reopens its issue. |
+
+**GitHub issue adapter mutex:** `github sync` (`gh`, two-way, `GH<n>`) and
+`issues-poll` / the issuepipe background consumer (`GH{repo_id}-{n}`) must
+not write the same ledger. A ledger containing targets from either adapter
+rejects the other adapter's sync, even for a different repo or issue; it does
+not infer identity from URLs. Disable one consumer, use separate ledgers, or
+explicitly migrate existing mirrored targets and lifecycle state before
+switching adapters. The check applies to CLI and MCP `github sync` alike.
 | `bullseye convergence` | Invariants hook + unreleased fixes + frontier recommendation (`--cwd`, `--skip-invariants`, `--momentum`). |
 | `bullseye portfolio` | Cross-repo portfolio summary. |
 | `bullseye import` | Import targets from markdown. |
