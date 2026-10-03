@@ -290,9 +290,9 @@ No scalar score.
 
 - **Priority:** P3
 - **Dimensions:** Architecture topology; Correctness / verification
-- **Status:** observed fact
-- **Evidence:** `CLI_ROUTES` (`src/cli.rs:109`–`139`) lists every MCP tool. `issues-poll` is a CLI subcommand (`src/main.rs:89`) with no `#[mcp_tool]` (background spawn is env-based). `tests/cli_parity_test.rs` therefore cannot fail if `issues-poll` is removed from `main` or `--help`.
-- **Mechanism:** The standing sentence “every capability is on both surfaces” is true for MCP tools, false for this CLI-only feature. Drift is silent.
+- **Status:** closed by 🎯T74.12 (CLI-only contract and feature-aware parity oracle)
+- **Original evidence (no longer reproduces):** `CLI_ROUTES` listed every MCP tool but not the CLI-only `issues-poll` verb. A deleted dispatch arm previously escaped the MCP→CLI parity test. `CLI_ONLY` now declares the exception with a reason. `tests/cli_parity_test.rs` checks top-level help and feature-aware dispatch with poller env cleared; removing the dispatch arm in a disposable copy fails `issues_poll_dispatch_is_feature_aware_and_never_networks` on `unknown subcommand: issues-poll` (RED `98adef52`). The default and `github-issues` builds both pass the parity test; STABILITY.md documents the CLI/env-only contract.
+- **Mechanism:** The standing sentence “every capability is on both surfaces” has a deliberate CLI/env-only exception for this long-running optional poller; drift is now observable.
 - **Blast radius:** Event-path operators.
 - **Counterevidence checked:** Feature is optional; MCP spawn is the other surface when env is set. Parity test’s job is MCP↔CLI for `TargetTools`, which it does.
 - **Smallest coherent remediation:** Either add `issues-poll` to a CLI-only route table tested like `CLI_ROUTES`, or document it as CLI/env-only in `STABILITY.md`.
