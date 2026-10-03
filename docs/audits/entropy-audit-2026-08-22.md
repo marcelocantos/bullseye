@@ -211,14 +211,14 @@ No scalar score.
 
 - **Priority:** P3
 - **Dimensions:** Redundancy / sources of truth
-- **Status:** observed fact (dual path); inference (collision harm if both enabled on one repo)
+- **Status:** closed by T74.7 — both adapters now reject a ledger already owned by the other adapter before YAML mutation; the dual-target fixture no longer reproduces
 - **Evidence:** `github::target_id` → `GH{number}` (`src/github.rs:52`–`55`), origin `github:{repo}#{n}`. `github_issues::event_target_id` → `GH{repo_id}-{number}` (`src/github_issues.rs:43`–`48`), origin `github:repo:{id}#{n}`. Comments in both modules say the namespaces are reserved so the paths can coexist. `id_is_conforming` accepts both (`src/graph.rs:479`–`497`).
 - **Mechanism:** Two writers can insert different targets for the same GitHub issue. They do not share `origin`, so neither sync will treat the other as the same object. Lifecycle (open/closed vs achieved) can diverge.
 - **Blast radius:** Repos that run both `bullseye github sync` and `issues-poll` / env consumer.
 - **Counterevidence checked:** Different ID and origin formats are an explicit T34/T33 split. Event path is strict opt-in. Default binary has no HTTP consumer.
 - **Smallest coherent remediation:** Document the mutex in `README`/`STABILITY.md`: do not enable both writers on one ledger. Optionally reject `github sync` creates when `origin` matches `github:repo:`.
 - **Verification:** Integration test with both adapters against one fixture issue expects one target, or a documented hard error.
-- **Ratchet candidate:** Manual attestation until a dual-writer test exists.
+- **Ratchet:** `github::tests::dual_adapter_same_issue_refuses_second_writer_without_yaml_change` exercises both orders with one issue and byte-identical refusal, while the existing single-adapter idempotence tests remain. CLI and MCP `github sync` call the same `run_with` path.
 
 ### ENT-008: Lock implementation and its own doc comment disagree
 
