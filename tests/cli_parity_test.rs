@@ -539,6 +539,8 @@ fn cli_split_creates_children_from_a_yaml_list() {
 /// `bullseye::cli::CLI_ONLY`, or fail here.
 #[test]
 fn every_cli_only_subcommand_is_declared_with_a_reason() {
+    let (help_code, help) = run(&["--help"]);
+    assert_eq!(help_code, 0, "top-level help must succeed: {help}");
     for entry in bullseye::cli::CLI_ONLY {
         assert!(
             !entry.reason.trim().is_empty(),
@@ -551,22 +553,56 @@ fn every_cli_only_subcommand_is_declared_with_a_reason() {
              one of the two is wrong",
             entry.subcommand,
         );
-        let (code, out) = run(&[entry.subcommand, "--help"]);
-        if entry.feature_gated {
-            // Compiled out in a default build, so it cannot exit 0. What
-            // it must not do is look like a typo: the answer has to name
-            // the feature, not report an unknown subcommand.
-            assert!(
-                out.contains("--features"),
-                "feature-gated `{}` must explain how to enable it; got:\n{out}",
-                entry.subcommand,
-            );
-        } else {
+        assert!(
+            help.contains(&format!("bullseye {}", entry.subcommand)),
+            "declared CLI-only subcommand `{}` must appear in top-level help:\n{help}",
+            entry.subcommand,
+        );
+        // A feature-gated verb may not implement subcommand --help even
+        // when enabled. Its dispatch is tested with a feature-aware,
+        // side-effect-free probe below instead.
+        if !entry.feature_gated {
+            let (code, out) = run(&[entry.subcommand, "--help"]);
             assert_eq!(
                 code, 0,
                 "declared CLI-only subcommand `{}` must actually exist; got:\n{out}",
                 entry.subcommand,
             );
         }
+    }
+}
+
+/// A missing dispatch arm must fail on either build: default binaries
+/// explain the optional feature; enabled binaries reach the poller parser.
+/// Clear all configuration inputs so the latter cannot reach HTTP, even
+/// if the developer's environment is configured for an active consumer.
+#[test]
+fn issues_poll_dispatch_is_feature_aware_and_never_networks() {
+    assert!(bullseye::cli::is_cli_only("issues-poll"));
+    let out = Command::new(BIN)
+        .arg("issues-poll")
+        .env_remove("BULLSEYE_ISSUEPIPE_URL")
+        .env_remove("BULLSEYE_ISSUEPIPE_TOKEN")
+        .env_remove("BULLSEYE_ISSUEPIPE_OPT_IN")
+        .env_remove("BULLSEYE_ISSUEPIPE_INTERVAL")
+        .env_remove("GITHUB_TOKEN")
+        .output()
+        .expect("run issues-poll without configuration");
+    assert!(!out.status.success(), "unconfigured poller must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unknown subcommand"),
+        "issues-poll dispatch disappeared: {stderr}"
+    );
+    if cfg!(feature = "github-issues") {
+        assert!(
+            stderr.contains("need --master or BULLSEYE_ISSUEPIPE_URL"),
+            "enabled issues-poll must reach its config parser: {stderr}"
+        );
+    } else {
+        assert!(
+            stderr.contains("rebuild with `--features github-issues`"),
+            "disabled issues-poll must name its feature gate: {stderr}"
+        );
     }
 }

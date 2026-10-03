@@ -325,6 +325,9 @@ fn print_help() {
          \x20                              Extended: repo reference → absolute path"
     );
     println!("    bullseye sync-priorities ...   Extended: portfolio frontier → SQLite");
+    println!(
+        "    bullseye run-checks (--id ID | --all) [--cwd DIR]   Explicitly execute declared checks"
+    );
     println!("    bullseye github sync ...       Extended: GitHub issues ⇄ targets");
     println!(
         "    bullseye issues-poll ...       Extended: issuepipe Master → targets (feature github-issues)"

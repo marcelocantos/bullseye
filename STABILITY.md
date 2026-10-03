@@ -117,6 +117,17 @@ Changes affecting the interaction surface, newest first:
     env (URL + token + OPT_IN); half-config warns loudly; complete
     recommends continuous consumer (`issues-poll --interval` / MCP
     spawn). No silent no-op.
+  - **T74.12:** `issues-poll` is intentionally **CLI/env-only**, not an MCP
+    tool: its long-running consumer is compiled only with the optional
+    `github-issues` feature. The default build recognizes the verb but
+    exits non-zero with a rebuild hint. The enabled CLI accepts `--master`,
+    `--token`, `--opt-in`, `--cwd`, and `--interval` (0 = one tick); the
+    corresponding inputs can come from `BULLSEYE_ISSUEPIPE_URL`,
+    `BULLSEYE_ISSUEPIPE_TOKEN` (fallback `GITHUB_TOKEN`),
+    `BULLSEYE_ISSUEPIPE_OPT_IN`, and `BULLSEYE_ISSUEPIPE_INTERVAL`.
+    `CLI_ONLY` and `tests/cli_parity_test.rs` pin top-level help and
+    feature-aware dispatch. This is an explicit exception to MCP→CLI
+    parity, not a new MCP capability.
   - **T53:** Advisory graph-hygiene warnings (empty frontier while
     active work remains; buried blocked leaves) in validate / summary /
     startup context — never hard-block mutations like showcase.
