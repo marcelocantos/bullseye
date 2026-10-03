@@ -46,7 +46,7 @@ Part of a planned **MCP triad**: targets (plan) + sawmill (code) + mnemo
 ## Architecture
 
 ```
-main.rs / cli.rs       — CLI entry point, routes and parity
+main.rs / cli.rs       — MCP server entry point; CLI routes and parity
 api.rs / apply.rs      — Mutation envelopes, partial desired-state apply
 schema.rs / id_alloc.rs — Ledger types, migration and target ID allocation
 store.rs / config.rs   — YAML discovery, locking, CAS and configuration
@@ -54,7 +54,8 @@ graph/                 — Frontier, validation, Mermaid and rendering
 ops.rs / handler.rs    — Domain operations and MCP dispatch
 tools.rs               — MCP tool definitions
 portfolio.rs / resolve.rs / priorities.rs — Workspace discovery and priorities
-convergence.rs / gatecheck.rs — Convergence and executable check planning
+convergence.rs         — Convergence checks and report
+gatecheck.rs           — Cited gate/attestation validation at achieve time
 github.rs / github_issues.rs — GitHub issue integrations
 bounded.rs / cache.rs / repo_guard.rs — Bounds, caching and repo guardrails
 import.rs / version.rs — Markdown import and version support
