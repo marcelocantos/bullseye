@@ -27,8 +27,8 @@ pub use mermaid::{
     MermaidExpand, MermaidOpts, MermaidScope, mermaid, mermaid_with_opts, select_mermaid_nodes,
 };
 pub use render::{
-    degraded_read_banner, startup_context, startup_context_broken_file, startup_context_no_file,
-    summary,
+    bounded_summary, degraded_read_banner, startup_context, startup_context_broken_file,
+    startup_context_no_file, summary,
 };
 pub use validate::{
     ValidationIssue, graph_hygiene_warnings, open_blockers, validate, validate_blocking,

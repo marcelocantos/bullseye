@@ -526,3 +526,74 @@ fn list_set_aside_filter_returns_set_aside_targets() {
 }
 
 // --- 🎯T58: achieve requires free-text attestation ---
+
+#[test]
+fn bounded_summary_980_targets_caps_unicode_prose_and_keeps_counts() {
+    let mut file = load_fixture();
+    file.targets.clear();
+    let template = load_fixture().targets.get("T1").unwrap().clone();
+    for n in 0..980 {
+        let mut target = template.clone();
+        target.name = "🦊é".repeat(600);
+        target.status = Status::Identified;
+        target.depends_on = if n == 0 || n % 2 == 0 {
+            vec![]
+        } else {
+            vec!["T0".into()]
+        };
+        target.acceptance = vec!["🦊é".repeat(800)];
+        target.context = "🦊é".repeat(800);
+        file.targets.insert(format!("T{n}"), target);
+    }
+    let short = graph::bounded_summary(&file, "test/bullseye.yaml");
+    assert!(
+        short.chars().count() < 10_000,
+        "{} characters",
+        short.chars().count()
+    );
+    assert!(short.contains("Total: 980 target(s)"), "{short}");
+    assert!(
+        short.contains("980 identified")
+            && short.contains("0 achieved")
+            && short.contains("980 active")
+    );
+    assert!(short.contains("## Hygiene findings") && short.contains("finding(s)"));
+    assert!(short.contains("view=list filter=all") && short.contains("view=validate"));
+    assert!(short.contains("…"));
+    let frontier = short
+        .split("## Frontier")
+        .nth(1)
+        .unwrap()
+        .split("## Hygiene")
+        .next()
+        .unwrap();
+    assert_eq!(
+        frontier
+            .lines()
+            .filter(|line| line.starts_with("🎯"))
+            .count(),
+        5
+    );
+    let hygiene = short
+        .split("## Hygiene")
+        .nth(1)
+        .unwrap()
+        .split("Full views:")
+        .next()
+        .unwrap();
+    assert!(hygiene.contains("490 finding(s)"), "{hygiene}");
+    // Exactly three exemplars per kind, even though hundreds are reported.
+    for group in hygiene.split("- graph hygiene:").skip(1) {
+        let lines = group.split("\n- ").next().unwrap();
+        assert_eq!(
+            lines
+                .lines()
+                .filter(|line| line.starts_with("  - ") && !line.contains("more"))
+                .count(),
+            3
+        );
+    }
+    let full = graph::summary(&file, "test/bullseye.yaml", None, false);
+    assert!(full.chars().count() > short.chars().count());
+    assert!(full.contains("## Active targets by group"));
+}

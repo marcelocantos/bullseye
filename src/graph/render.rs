@@ -492,6 +492,122 @@ pub fn summary(
     out
 }
 
+/// Bounded agent snapshot. Full history and every diagnostic remain available
+/// through `summary` (convergence), `list`, `target`, and `validate`.
+/// All free-form text is truncated by Unicode scalar values before rendering;
+/// the final character guard also covers unexpectedly verbose filenames.
+pub fn bounded_summary(file: &TargetsFile, file_path: &str) -> String {
+    const LIMIT: usize = 9_000; // leave margin below the 10,000-character contract
+    const FRONTIER: usize = 5;
+    const FINDINGS: usize = 3;
+    let active = file.active();
+    let achieved = file.achieved();
+    let aside = file.set_aside();
+    let identified = active
+        .values()
+        .filter(|t| t.status == Status::Identified)
+        .count();
+    let converging = active.len() - identified;
+    let tolerant = frontier_tolerant(file);
+    let ranked = rank_frontier(file, &tolerant.targets);
+    let mut out = format!(
+        "# Summary (bounded)\nFile: {}\nTotal: {} target(s) — {} identified, {} converging, {} achieved, {} set aside ({} active)\nFrontier: {} ready\n\n",
+        shorten(file_path, 180),
+        file.targets.len(),
+        identified,
+        converging,
+        achieved.len(),
+        aside.len(),
+        active.len(),
+        ranked.len(),
+    );
+    out.push_str("## Frontier (top 5, unblocked, ready for work)\n\n");
+    out.push_str(REPO_SCOPE_BANNER);
+    if ranked.is_empty() {
+        out.push_str("(no targets ready for work)\n");
+    }
+    for rf in ranked.iter().take(FRONTIER) {
+        out.push_str(&format!(
+            "🎯{} {} [{:?}] — fanout={}\n",
+            shorten(&rf.target.id, 80),
+            shorten(&rf.target.name, 110),
+            rf.target.status,
+            rf.fanout
+        ));
+    }
+    if ranked.len() > FRONTIER {
+        out.push_str(&format!(
+            "… {} more ready; use `bullseye_query view=frontier` for all.\n",
+            ranked.len() - FRONTIER
+        ));
+    }
+    out.push_str("\n## Hygiene findings (top 3 per kind)\n\n");
+    // Group by a stable diagnostic label, not by the target's free-form text.
+    // Every kind prints its total before its bounded sample. BTreeMap and ID
+    // ordering make the projection independent of traversal order.
+    let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for warning in graph_hygiene_warnings(file) {
+        let (id, kind) = hygiene_key(&warning);
+        groups
+            .entry(kind.to_string())
+            .or_default()
+            .push((id.to_string(), warning));
+    }
+    for issue in &tolerant.issues {
+        groups
+            .entry("validation error".into())
+            .or_default()
+            .push((issue.target.clone(), issue.to_string()));
+    }
+    if groups.is_empty() {
+        out.push_str("(none)\n");
+    }
+    for (kind, findings) in &mut groups {
+        findings.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        out.push_str(&format!("- {}: {} finding(s)\n", kind, findings.len()));
+        for (_, finding) in findings.iter().take(FINDINGS) {
+            out.push_str(&format!("  - {}\n", shorten(finding, 180)));
+        }
+        if findings.len() > FINDINGS {
+            out.push_str(&format!("  - … {} more\n", findings.len() - FINDINGS));
+        }
+    }
+    let pointer = "\nFull views: `bullseye_query view=list filter=all`, `view=frontier`, `view=validate`, and `view=target id=…`. Use `frontier_details=true` (CLI: `--frontier-details`) on `view=summary` for the original unbounded summary with frontier detail.\n";
+    // All kind totals precede the samples. With the fixed kind taxonomy and
+    // three short samples per kind, the cap is unreachable on a normal path;
+    // leave this guard for future findings categories without clipping the
+    // pointer or the status totals.
+    if out.chars().count() + pointer.chars().count() >= LIMIT {
+        let budget = LIMIT - pointer.chars().count() - 1;
+        out = out.chars().take(budget).collect();
+    }
+    out.push_str(pointer);
+    out
+}
+
+fn shorten(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+}
+
+fn hygiene_key(warning: &str) -> (&str, &'static str) {
+    let (id, body) = warning.split_once(':').unwrap_or(("", warning));
+    let id = if id.starts_with('T') { id } else { "" };
+    let body = if id.is_empty() { warning } else { body };
+    let kind = if body.contains("merge completeness:") {
+        "merge completeness"
+    } else if body.contains("fake edge:") {
+        "fake edge"
+    } else if body.contains("graph hygiene:") {
+        "graph hygiene"
+    } else {
+        "other advisory"
+    };
+    (id, kind)
+}
+
 /// Render the detail block for a single frontier target — acceptance
 /// criteria, context, tags, and relevant edges. Used when
 /// `frontier_details` is true on [`summary`] (via `bullseye_convergence`),
