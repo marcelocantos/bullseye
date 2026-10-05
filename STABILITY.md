@@ -5,7 +5,13 @@
 Version 1.0 will represent a backwards-compatibility contract. After
 1.0, breaking changes to the MCP tool interface, bullseye.yaml schema,
 or CLI flags will require a new product (not a major version bump).
-The pre-1.0 period exists to get these right.
+
+## Annotation key
+
+- **Stable** — the owner will fork the product rather than break this promise after 1.0.
+- **Needs review** — may still be true after 1.0. A non-empty pile is not a failed gate.
+- **Fluid** — still moving, and may still be true after 1.0. A non-empty pile is not a failed gate.
+- **Removed** — gone from the surface. Pre-removal files load under the migration named in the row.
 
 ## Interaction surface catalogue
 
@@ -20,7 +26,7 @@ Changes affecting the interaction surface, newest first:
   decide whether to park or continue. `bullseye.yaml` remains ignored
   (🎯T73). Clean-tree stays a ship/release gate (`/commit`, `/push`).
   The missing-hook skeleton, agents-guide examples, and this repo's
-  Makefile dogfood the policy. Settling clock resets at v0.48.0.
+  Makefile dogfood the policy.
 
 - **Dotted child IDs are umbrella edges** (🎯T39.1). `child_of` and
   explicit dotted-id create under a live parent append the child to
@@ -32,8 +38,7 @@ Changes affecting the interaction surface, newest first:
   dotted child is still active. `child_of` and explicit dotted create
   on a terminal parent are refused. Graph `expand: children` remains display-only — the blocking
   edge is `depends_on`. Docs that called `add` "parent untouched" or
-  `child_of` ID-only are updated. Settling clock resets at the release
-  that ships this.
+  `child_of` ID-only are updated.
 
 - **Bullseye does not commit `bullseye.yaml`** (🎯T73; 🎯T22/T72)
   auto-commit rail retired). Mutating tools write the file and leave
@@ -46,7 +51,7 @@ Changes affecting the interaction surface, newest first:
   always stages a dirty in-repo ledger, `/push` refuses if it is still
   dirty. The T72 own-commit amend path is gone, not retained as dead
   code. No `git_commit` module; no callable path that can still create
-  `Update bullseye.yaml`. Settling clock resets at v0.46.0.
+  `Update bullseye.yaml`.
 
 - **Hang bounds, UTF-8 panic, ledger heal, CLI parity, provenance**
   (🎯T62–T72). Reliability and delivery surface that ships in v0.45.0.
@@ -78,7 +83,6 @@ Changes affecting the interaction surface, newest first:
     reachable. T73 removed auto-commit, so bullseye never rewrites
     git history.
   Additive reliability + CLI wording + version-string shape.
-  Settling clock resets at v0.45.0.
 
 - **Graph-engineering hygiene and create-time location default** (🎯T56
   disposition → 🎯T59, 🎯T60, 🎯T61).
@@ -93,7 +97,7 @@ Changes affecting the interaction surface, newest first:
     remains filesystem-only; per-call `location` always wins.
   - **T56:** Graph-engineering evaluation dispositioned (docs +
     vocabulary; no orchestration runtime). Additive warnings + create
-    defaults only — no settling-clock reset.
+    defaults only.
 
 - **Store ownership, postpone, global IDs, agent DX** (🎯T41, 🎯T50–T55).
   - **T41:** Every save stamps `# content_hash: sha256:…` over the
@@ -135,7 +139,6 @@ Changes affecting the interaction surface, newest first:
     agents must use only `ids:` from the result (never scan max `T*`).
   - **T54:** Startup context header prints `Binary:` version and
     `Schema: file=… binary_supports=…` for skew diagnosis.
-  Settling clock resets at the release shipping this surface.
 
 - **Build performance: no tokio `full`, optional sqlite** (🎯T47, 🎯T48,
   🎯T49). Vendored `rust-mcp-sdk` / `rust-mcp-transport` patches
@@ -146,8 +149,7 @@ Changes affecting the interaction surface, newest first:
   --no-default-features` builds MCP core without SQLite. Sync-priorities
   CLI/MCP error clearly when built without `sqlite`. Adoption thresholds
   for sccache/mold/nextest/workspace split documented in
-  `docs/build-perf-2026-04-11.md` — not installed by default. Settling
-  clock resets at the release shipping this surface.
+  `docs/build-perf-2026-04-11.md` — not installed by default.
 
 - **Ownership exclusion, release surface, and profile release policy**
   (🎯T42, 🎯T43, 🎯T44, 🎯T46). New optional top-level `release_surface`
@@ -162,8 +164,7 @@ Changes affecting the interaction surface, newest first:
   `profile:` from AGENTS.md/CLAUDE.md and a template
   (`$BULLSEYE_PROFILES_DIR` then `~/.claude/gates/<profile>.yaml`) with
   `release.unreleased_fixes: recommend_ship | informational` and
-  optional `channel` — no hard-coded flavor strings. Settling clock
-  resets at the release shipping this surface.
+  optional `channel` — no hard-coded flavor strings.
 
 - **Mermaid graph subgraph selection** (🎯T57). `bullseye_query
   view=graph` / `bullseye_graph` / CLI `query --view graph` still default
@@ -171,8 +172,7 @@ Changes affecting the interaction surface, newest first:
   (`active`\|`all`\|`achieved`\|`set_aside`), explicit `nodes`, and
   `seeds`+`expand` (`ancestors` / `descendants` / `children` / `parents` /
   `frontier`) select subgraphs. Disjoint components allowed. Fenced
-  ` ```mermaid ` output for chat renderers. Settling clock resets at the
-  release that ships this surface.
+  ` ```mermaid ` output for chat renderers.
 
 - **Achieve requires free-text `attestation`** (🎯T58). `bullseye_commit
   op=achieve`, `bullseye_retire`, and CLI `commit --op achieve
@@ -183,7 +183,6 @@ Changes affecting the interaction surface, newest first:
   context; visible on `view=target` / list / summary / startup context.
   Trivial tokens (`done`, `ok`, …) rejected. `bullseye_revert` clears
   attestation. Not a semantic judge of truth — soft API nudge only.
-  Settling clock resets at the release that ships this surface.
 
 - **Four-tool core intent-ledger API** (🎯T45). Day-to-day agent surface is
   `bullseye_open`, `bullseye_query`, `bullseye_commit`, and
@@ -200,8 +199,7 @@ Changes affecting the interaction surface, newest first:
   documented as **extended (L2)**. CLI twins: `bullseye open|query|commit|
   plan-checks`. Contract: `docs/api-v1-core.md`. Server instructions and
   default agents-guide snippet treat bullseye as a ledger (user intent
-  overrides frontier; boundary commits), not a planning gate. Settling
-  clock resets at the release that ships this surface.
+  overrides frontier; boundary commits), not a planning gate.
 
 - **Bullseye owns target ID allocation and rejects unsafe target text**
   (🎯T39, 🎯T40). `bullseye_put` now accepts `child_of` for
@@ -218,8 +216,7 @@ Changes affecting the interaction surface, newest first:
   and tab remain valid prose whitespace, while bytes such as U+0001 are
   rejected with a field-specific error and the file left unchanged. The
   child-allocation addition is a tool-surface change and the stricter
-  ID/control-character checks narrow accepted input, so the settling
-  clock resets at v0.37.0.
+  ID/control-character checks narrow accepted input (v0.37.0).
 
 - **`bullseye_convergence` bounds the invariants hook with a timeout**
   (🎯T38). The project's `make bullseye` / `mk bullseye` hook now runs
@@ -351,9 +348,8 @@ Earlier v0.28.0 changes still in effect:
   are no longer any checkpoints as a structural concept. The
   `bullseye_summary` frontier annotation changes from `dist=N,
   fanout=M` to `fanout=M`. Older binaries reading a v5 file fail
-  loudly via the existing schema-version check. Hard reset of the
-  settling clock to the next release tag — schema bump, two tools
-  removed, one tool added, one tool's parameter set narrowed.
+  loudly via the existing schema-version check. Breaking: schema bump,
+  two tools removed, one tool added, one tool's parameter set narrowed.
 
 Earlier v0.27.0 changes still in effect:
 
@@ -709,13 +705,9 @@ bottleneck allocator) uses WSJF + momentum + cross-repo value
 propagation (🎯T2.3, pending). The repo/portfolio split means per-
 target `value`/`cost` are documented as portfolio-scope inputs only.
 
-The settling clock for 1.0 eligibility was last hard-reset at
-v0.27.0 (schema bump 3→4, removed parameters on two mutating tools).
-🎯T25 resets it again — schema bump 4→5, two tools removed
-(`bullseye_rework`, `bullseye_tunnels`), one tool added
-(`bullseye_revert`), `bullseye_put` parameter set narrowed (`kind`
-and `verifies` dropped). Settling clock resets at the next release
-tag after 🎯T25.
+The cut is the owner's `## 1.0 judgment`, under `/release` B.3a, and
+the last breaking release is v0.48.0. The settling clock is retired;
+it no longer authorizes or blocks that cut.
 
 ### MCP tools
 
@@ -824,83 +816,34 @@ Planned additions:
 | Tool response text format | Fluid | Not yet formalised; consumers should parse loosely |
 | `targets_priorities` SQLite schema | Fluid | New in v0.24.0. Written by `bullseye sync-priorities`, replicated to the Protocol app via sqlpipe-over-pigeon. Columns: `id` PRIMARY KEY (`"{repo}/{target_id}"`), `repo` TEXT NOT NULL, `name` TEXT NOT NULL, `priority` REAL NOT NULL, `context` TEXT, `horizon` TEXT NOT NULL DEFAULT `'today'`, `updated_at` TEXT NOT NULL. Schema is laptop-owned (Protocol is read-only). Column set may evolve as the phone-side rendering settles — particularly whether `priority` should carry richer banding info or whether `horizon` should be auto-assigned by rank. See 🎯T3.1, `docs/mcp-triad.md` §7. |
 
-## Gaps and prerequisites for 1.0
+## Gaps
 
-- **Tool response format**: Responses are unstructured text. Consider
-  returning structured JSON alongside text for programmatic consumers.
-- **`bullseye_verify` feedback loop**: The plan-only shape shipped in
-  v0.13.0 has no mechanism to fold sawmill results back into a
-  structured pass/fail report on the target. Before 1.0 this should
-  either be added or the decision to stay plan-only should be
-  documented as deliberate.
+These are inputs to the owner's `## 1.0 judgment`, and they do not
+authorize the cut.
+
+- **Tool response format** (**Additive**). Responses are unstructured
+  text. Structured JSON alongside that text can land later without
+  revising the text promise.
+- **`bullseye_verify` feedback loop** (**Additive**). The plan-only
+  shape shipped in v0.13.0 has no mechanism to fold sawmill results
+  back into a structured pass/fail report on the target. That
+  mechanism can land later.
 - **`bullseye_startup_context`, `bullseye_portfolio`, `bullseye_summary`
-  stabilisation**: All three are new and their output formats may evolve
-  with real-world usage.
-- **`bullseye_put` stabilisation**: Unified upsert replacing add/update.
-  Needs real-world usage before locking in the parameter set — the
-  `blocks` sugar field in particular may see iteration (e.g., symmetric
-  `gated_by`, `verified_by` sugars).
-- **Portfolio-level WSJF (🎯T2.3)**: Cross-repo enabler propagation is
-  currently a binary flag; the value-weighted upgrade is pending.
-  Should land before 1.0 so the portfolio engine is stable.
-- **Settling threshold reset**: v0.16.0 redesigned storage discovery
-  (per-repo location, `bullseye_configure` removed, `location`
-  required on `bullseye_init`/`bullseye_import`, no auto-create on
-  `bullseye_put`). The settling clock restarts from v0.16.0.
-  v0.17.0 relaxes the `bullseye_put` input contract (`value`/`cost`
-  optional on create) — additive, no reset. v0.18.0 introduces the
-  lockfile protocol (🎯T17) — additive for bullseye's own tools
-  but imposes a new expectation on third-party editors, so note the
-  change here even though it's not a hard reset. v0.19.0 renames
-  the `observable` field to `showcase` and adds the
-  `demonstration`-on-retire obligation (🎯T14) — schema bumps to v2,
-  the legacy field name still loads via a serde alias, the
-  `bullseye_put` parameter renames in lockstep, and `bullseye_retire`
-  gains the new required-when-showcase `demonstration` parameter.
-  Field rename + new required parameter on a mutating tool — hard
-  reset of the settling clock to v0.19.0. v0.20.0 adds the
-  `set_aside` status enum value, the `set_aside_reason` schema
-  field, and the new `bullseye_set_aside` mutating tool (🎯T18) —
-  schema bumps to v3, the new tool joins the surface, the
-  `bullseye_put` status parser rejects `set_aside` (a new constraint
-  on an existing tool), and the third-party-writer story changes
-  with the lockfile relocation (🎯T19). New mutating tool + schema
-  bump + new constraint on existing tool — hard reset of the
-  settling clock to v0.20.0. v0.21.0 adds two optional parameters
-  to `bullseye_rework` for structured sawmill/mnemo payloads
-  (🎯T1.5) — purely additive on a previously stable tool, no
-  schema bump, no settling-clock reset. v0.22.0 adds a uniform
-  envelope-leak guard on every mutating handler (🎯T20) — rejects
-  agent-side serialisation bugs at the write boundary so they don't
-  silently corrupt YAML. Behavioural addition only; no schema
-  change, no surface change visible to well-behaved callers, no
-  settling-clock reset. v0.23.0 adds an optional `strategy` block
-  to the target schema (🎯T15.2) for the bullseye-native executor
-  to consume; closes 🎯T20's test-acceptance gaps; and retires the
-  full MCP triad integration (🎯T1, 🎯T1.4, 🎯T1.5) with live
-  end-to-end demonstrations across the rework and compaction
-  flows. All purely additive — no schema bump, no settling-clock
-  reset. v0.24.0 ships the `bullseye sync-priorities` CLI subcommand
-  for the Protocol-app integration (🎯T3.1) and tunnel warnings on
-  every mutation (🎯T21). New CLI subcommand surface and a new
-  output section on four MCP tools, but no schema bump and no
-  breaking change to any existing tool — behavioural addition only,
-  no settling-clock reset. v0.27.0 removes the `showcase` construct
-  entirely (🎯T23) — schema bumps to v4, `bullseye_put` loses its
-  `showcase` parameter, `bullseye_retire` loses its `demonstration`
-  parameter, and the corresponding `Target` fields are gone.
-  Schema bump + breaking parameter removals on two mutating tools —
-  hard reset of the settling clock to v0.27.0. 🎯T25 removes `kind`,
-  `verifies`, `rework`, `retry_budget`, and `retries` from the schema
-  (uniform-node model), bumps schema 4→5, removes `bullseye_rework`
-  and `bullseye_tunnels`, adds `bullseye_revert`, and narrows
-  `bullseye_put`'s parameter set. Schema bump + two tools removed +
-  one tool added — hard reset of the settling clock to the next
-  release tag.
-- **Test coverage for CLI flags**: `--version` and `--help` carry
-  provenance (🎯T69, `tests/version_provenance_test.rs`). `--help-agent`
-  still has no dedicated test (it prints `--help` then the embedded
-  agents-guide).
+  stabilisation** (**Closure**). All three are new and their output
+  formats may evolve with real-world usage: a kind of use not yet
+  seen could force a break in those reports.
+- **`bullseye_put` stabilisation** (**Additive**). Unified upsert
+  replacing add/update. The `blocks` sugar may see further sugars
+  (symmetric `gated_by`, `verified_by`). Those can land later without
+  revising the current parameters.
+- **Portfolio-level WSJF (🎯T2.3)** (**Additive**). Cross-repo enabler
+  propagation is currently a binary flag; the value-weighted upgrade
+  can land later.
+- **Test coverage for CLI flags** (**Additive**). `--version` and
+  `--help` carry provenance (🎯T69,
+  `tests/version_provenance_test.rs`). `--help-agent` still has no
+  dedicated test (it prints `--help` then the embedded agents-guide).
+  The test can land later.
 
 ## Out of scope for 1.0
 
