@@ -705,15 +705,15 @@ bottleneck allocator) uses WSJF + momentum + cross-repo value
 propagation (🎯T2.3, pending). The repo/portfolio split means per-
 target `value`/`cost` are documented as portfolio-scope inputs only.
 
-The cut is the owner's `## 1.0 judgment`, under `/release` B.3a, and
-the last breaking release is v0.48.0. The settling clock is retired;
-it no longer authorizes or blocks that cut.
+The cut requires the agent's `## 1.0 judgment`, under `/release`
+B.3a, and the last breaking release is v0.48.0. The settling clock
+is retired; it no longer authorizes or blocks that cut.
 
 ### MCP tools
 
 | Tool | Status | Notes |
 |------|--------|-------|
-| `bullseye_list(cwd, filter)` | Stable | Filter values (active/achieved/all) are settled |
+| `bullseye_list(cwd, filter)` | Stable | Filter values (`active`, `achieved`, `set_aside`, `all`) are settled |
 | `bullseye_get(cwd, id)` | Stable | |
 | `bullseye_put(cwd, id?, name?, value?, cost?, acceptance?, depends_on?, blocks?, ...)` | Needs review | Unified upsert (create-or-patch). Introduced in v0.8.0 as `bullseye_assert`; renamed to `bullseye_put` in v0.12.0. v0.13.0 refuses content patches on achieved targets — see 🎯T8. v0.17.0 makes `value`/`cost` optional on create (default `0.0`, the "not set at repo scope" sentinel) — see 🎯T11. v0.20.0 rejects `status: set_aside` and routes callers to `bullseye_set_aside` so the rationale is always recorded — see 🎯T18. v0.27.0 removes the `showcase` parameter — see 🎯T23. 🎯T25 drops the `kind` and `verifies` parameters — every target is now structurally uniform. |
 | `bullseye_retire(cwd, id, attestation, actual_cost?)` | Needs review | v0.27.0 removes the `demonstration` parameter alongside the showcase construct; retirement is achievement-only. See 🎯T23. **🎯T58:** `attestation` is required (non-empty free text — how you believe the target is met). Not formal proof. Persisted as `Target.attestation` + `Achieved YYYY-MM-DD: …` context line; visible on target/list/summary. Trivial tokens (`done`, `ok`, …) rejected. Core path: `bullseye_commit op=achieve` with `attestation`. |
@@ -804,7 +804,7 @@ Planned additions:
 | `--version` | Stable | |
 | `--help` | Stable | |
 | `--help-agent` | Stable | |
-| (no args) | Stable | Starts MCP stdio server |
+| (no args) | Stable | Bare invocation exits. `bullseye serve` is the only MCP transport |
 | `sync-priorities [--db PATH] [--root PATH] [--horizon STR] [--max-depth N]` | Fluid | New in v0.24.0. Cron-targetable subcommand that scans the workspace and upserts the portfolio frontier into a SQLite `targets_priorities` table. The flag set may evolve once the Protocol-app sync chain is live and real usage clarifies what's needed (e.g. multi-horizon banding, per-repo include/exclude). See 🎯T3.1. |
 | `github sync [--repo owner/name] [--label L] [--assignee A] [--pull-only] [--push-only] [--dry-run] [--cwd DIR]` | Fluid | New in v0.33.0. Mirrors GitHub issues ⇄ bullseye targets via the `gh` CLI: open issues become `GH<n>` targets, and target lifecycle (achieved/set-aside/revert) closes/reopens the issue. Two-way reconcile against a `.bullseye/github-sync.json` sidecar. The flag set may evolve as multi-repo mirroring lands. See 🎯T34. |
 
@@ -818,7 +818,7 @@ Planned additions:
 
 ## Gaps
 
-These are inputs to the owner's `## 1.0 judgment`, and they do not
+These are inputs to the agent's `## 1.0 judgment`, and they do not
 authorize the cut.
 
 - **Tool response format** (**Additive**). Responses are unstructured
@@ -829,9 +829,9 @@ authorize the cut.
   back into a structured pass/fail report on the target. That
   mechanism can land later.
 - **`bullseye_startup_context`, `bullseye_portfolio`, `bullseye_summary`
-  stabilisation** (**Closure**). All three are new and their output
-  formats may evolve with real-world usage: a kind of use not yet
-  seen could force a break in those reports.
+  stabilisation** (**Additive**). Their output formats may evolve
+  with real-world usage. Those rows are Needs review, so a later
+  format can land without revising a Stable promise.
 - **`bullseye_put` stabilisation** (**Additive**). Unified upsert
   replacing add/update. The `blocks` sugar may see further sugars
   (symmetric `gated_by`, `verified_by`). Those can land later without
@@ -858,3 +858,52 @@ issue or repository. There is no URL-based same-repo inference. To switch,
 disable the previous consumer and deliberately migrate its mirrored targets
 and lifecycle state, or use separate ledgers. CLI and MCP `github sync` use
 the same guarded path.
+
+## 1.0 judgment
+
+Last breaking release recorded in this file: v0.48.0.
+
+### Expandability
+
+Permanent:
+
+- `status` is identified, converging, achieved, and set_aside.
+- `depends_on` is the single blocking edge.
+- Discovery locations are `in_repo` and `external`.
+- Targets stay uniform: no `kind`, `verifies`, or `rework`.
+- `bullseye_list` filters are `active`, `achieved`, `set_aside`, and `all`.
+- A bare invocation exits. `bullseye serve` is the only MCP transport.
+- `issues-poll` stays CLI/env-only.
+- `github sync` and `issues-poll` cannot share a ledger.
+- Postpone predicates stay opaque. Bullseye does not evaluate them.
+- `set_aside_reason` stays free text. The schema does not taxonomise it.
+- `value` and `cost` stay on the Fibonacci scale. Repo-level ordering
+  does not consume them. Frontier order is descending fanout, then
+  ascending ID.
+- Profile `release.unreleased_fixes` is `recommend_ship` or
+  `informational`.
+- `owned_by` excludes a target from the local frontier and does not
+  satisfy `depends_on`.
+
+Can grow by addition:
+
+- Advisory `cross_depends` and `cross_enables`, including weighted
+  `cross_enables` propagation.
+- The reserved `GH<repo>-<n>` form beside `GH<n>`.
+- Structured JSON alongside tool text. Consumers parse the text loosely.
+- Further `blocks` sugars, and a `bullseye_verify` result report beside
+  the plan-only shape.
+- `checks`, `strategy` (trigger is free-form), `sync-priorities` flags,
+  `github sync` flags, and `targets_priorities` columns. Those rows are
+  Fluid.
+- Mermaid styling, and the text of `bullseye_startup_context`,
+  `bullseye_portfolio`, `bullseye_summary`, and `bullseye_convergence`.
+  Those rows are Needs review, so today's layout is not a fork promise.
+- Further `bullseye_validate` warnings. The row says rules will
+  continue to grow, and existing hard rules stay as they are.
+
+### Closure
+
+The catalogue names no kind of situation the locked contract could
+not absorb. The items under Gaps are unfinished work that can land
+by addition.
