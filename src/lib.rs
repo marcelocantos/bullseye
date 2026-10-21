@@ -6,6 +6,7 @@ pub mod apply;
 pub mod bounded;
 pub mod cache;
 pub mod cli;
+pub mod commit_mode;
 pub mod config;
 pub mod convergence;
 pub mod gatecheck;
