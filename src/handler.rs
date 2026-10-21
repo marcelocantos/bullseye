@@ -763,14 +763,16 @@ fn handle_rehash(cwd: &str, reason: &str) -> ToolResult {
     }
     check_persisted_string("reason", reason).map_err(tool_err)?;
     // Parse without heal, then heal explicitly so `changed:` names every
-    // target whose record is normalised (🎯T82).
-    let raw = store::parse_file_raw(&path).map_err(|e| tool_err(e.to_string()))?;
-    let before = raw.targets.clone();
-    let mut file = raw;
-    crate::schema::heal_status_scoped_residue(&mut file);
-    let changed = store::targets_differing(&before, &file.targets);
-    store::save(&path, &file).map_err(tool_err)?;
-    let hash = store::compute_content_hash(&file);
+    // target whose record is normalised (🎯T82). Use the locked path so
+    // rehash cannot clobber concurrent writers (🎯T96 / jevons 🎯T1138).
+    let (changed, hash) = store::with_locked_mutation(&path, |file| {
+        let before = file.targets.clone();
+        crate::schema::heal_status_scoped_residue(file);
+        let changed = store::targets_differing(&before, &file.targets);
+        let hash = store::compute_content_hash(file);
+        Ok::<_, api::CodedError>((changed, hash))
+    })
+    .map_err(mutation_tool_err)?;
     let front = api::frontier_ids_from_path(&path);
     text_result(api::format_mutation_result(
         "rehash",
