@@ -18,8 +18,46 @@ use crate::bounded::{
 /// Default integration ref for commit mode (local master per 🎯T104).
 pub const DEFAULT_REF: &str = "refs/heads/master";
 
+/// Opt-in env var (🎯T100 / 🎯T100.4). When truthy, ledger persists via ref CAS.
+pub const COMMIT_ENV: &str = "BULLSEYE_COMMIT";
+
+/// Integration ref override (default [`DEFAULT_REF`]).
+pub const INTEGRATION_REF_ENV: &str = "BULLSEYE_INTEGRATION_REF";
+
+/// Matches handler `apply_request` conflict retries (🎯T100.2).
+pub const PERSIST_CONFLICT_ATTEMPTS: usize = 8;
+
 /// Ledger path inside the git tree.
 pub const LEDGER_PATH: &str = "bullseye.yaml";
+
+// Per-thread test override so parallel `cargo test` workers do not fight over
+// `BULLSEYE_COMMIT` (🎯T100.2).
+thread_local! {
+    static PERSIST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether commit-mode persist is active for this process.
+pub fn persist_enabled() -> bool {
+    if let Some(v) = PERSIST_OVERRIDE.get() {
+        return v;
+    }
+    env_truthy(std::env::var(COMMIT_ENV).ok().as_deref())
+}
+
+/// Force commit-mode on/off on this thread (integration tests only).
+#[doc(hidden)]
+pub fn set_persist_override_for_tests(enabled: Option<bool>) {
+    PERSIST_OVERRIDE.set(enabled);
+}
+
+/// Ref name for commit-mode writes (env override or [`DEFAULT_REF`]).
+pub fn integration_ref_name() -> String {
+    std::env::var(INTEGRATION_REF_ENV).unwrap_or_else(|_| DEFAULT_REF.to_string())
+}
+
+fn env_truthy(v: Option<&str>) -> bool {
+    matches!(v.map(str::trim), Some("1") | Some("true") | Some("yes"))
+}
 
 /// Outcome of one commit-mode write attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]

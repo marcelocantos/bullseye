@@ -11,6 +11,10 @@ use std::time::{Duration, Instant, SystemTime};
 use tempfile::NamedTempFile;
 
 use crate::api::{CodedError, ErrorCode};
+use crate::bounded::{GIT_QUERY_TIMEOUT, git_query_detailed};
+use crate::commit_mode::{
+    PERSIST_CONFLICT_ATTEMPTS, WriteError, integration_ref_name, persist_enabled,
+};
 use crate::config::{Location, external_root};
 use sha2::{Digest, Sha256};
 
@@ -985,6 +989,57 @@ fn acquire_lock(yaml_path: &Path) -> Result<std::fs::File, MutationError> {
     }
 }
 
+/// Git repo root for commit-mode persist (`git rev-parse --show-toplevel`).
+fn git_toplevel_for_ledger(path: &Path) -> Result<PathBuf, MutationError> {
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    git_query_detailed(dir, &["rev-parse", "--show-toplevel"], GIT_QUERY_TIMEOUT)
+        .map(|s| PathBuf::from(s.trim()))
+        .map_err(|e| MutationError::Save(e.to_string()))
+}
+
+fn integration_parent_sha(path: &Path) -> Result<String, MutationError> {
+    let repo = git_toplevel_for_ledger(path)?;
+    let ref_name = integration_ref_name();
+    crate::commit_mode::ref_tip(&repo, &ref_name).map_err(|e| MutationError::Save(e.to_string()))
+}
+
+/// Persist mutated ledger bytes: working-tree save (default) or ref CAS (commit mode).
+fn persist_locked_targets(path: &Path, file: &TargetsFile) -> Result<(), MutationError> {
+    if persist_enabled() {
+        let repo = git_toplevel_for_ledger(path)?;
+        let bytes = render_file_text(file).map_err(MutationError::Save)?;
+        let ref_name = integration_ref_name();
+        match crate::commit_mode::write_ledger_at_ref_with_retry(
+            &repo,
+            &ref_name,
+            bytes.as_bytes(),
+            "bullseye: ledger mutation",
+            PERSIST_CONFLICT_ATTEMPTS,
+        ) {
+            Ok(_) => Ok(()),
+            Err(WriteError::Conflict) => Err(MutationError::Conflict {
+                path: path.to_path_buf(),
+            }),
+            Err(WriteError::Git(msg)) => Err(MutationError::Save(msg)),
+        }
+    } else {
+        save(path, file).map_err(MutationError::Save)?;
+        let expected = compute_content_hash(file);
+        let on_disk = read_disk_content_hash_line(path);
+        if on_disk.as_deref() != Some(&expected) {
+            return Err(MutationError::VerifyFailed {
+                path: path.to_path_buf(),
+                expected,
+                found: on_disk,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Write a full [`TargetsFile`] to `path` under an exclusive flock.
 /// Used for wholesale replacements (e.g. `bullseye_import`) where we
 /// want lock coordination with concurrent mutators but don't have a
@@ -992,7 +1047,7 @@ fn acquire_lock(yaml_path: &Path) -> Result<std::fs::File, MutationError> {
 /// exist (import creates the shadow directory beforehand).
 pub fn with_locked_write(path: &Path, file: &TargetsFile) -> Result<(), MutationError> {
     let _lock = acquire_lock(path)?;
-    save(path, file).map_err(MutationError::Save)?;
+    persist_locked_targets(path, file)?;
     Ok(())
 }
 
@@ -1005,27 +1060,33 @@ where
 
     // --- Critical section: flock held. ---
     let mut file = parse_file_raw(path).map_err(MutationError::Load)?;
-    let stamp_before = file_stamp(path);
+    let commit_mode = persist_enabled();
+    let parent_before = if commit_mode {
+        Some(integration_parent_sha(path)?)
+    } else {
+        None
+    };
+    let stamp_before = if commit_mode { None } else { file_stamp(path) };
 
     let output = f(&mut file).map_err(|e| MutationError::Apply(e.into()))?;
 
-    let stamp_now = file_stamp(path);
-    if stamp_now != stamp_before {
-        return Err(MutationError::Conflict {
-            path: path.to_path_buf(),
-        });
+    if commit_mode {
+        let parent_now = integration_parent_sha(path)?;
+        if parent_before.as_deref() != Some(&parent_now) {
+            return Err(MutationError::Conflict {
+                path: path.to_path_buf(),
+            });
+        }
+    } else {
+        let stamp_now = file_stamp(path);
+        if stamp_now != stamp_before {
+            return Err(MutationError::Conflict {
+                path: path.to_path_buf(),
+            });
+        }
     }
 
-    save(path, &file).map_err(MutationError::Save)?;
-    let expected = compute_content_hash(&file);
-    let on_disk = read_disk_content_hash_line(path);
-    if on_disk.as_deref() != Some(&expected) {
-        return Err(MutationError::VerifyFailed {
-            path: path.to_path_buf(),
-            expected,
-            found: on_disk,
-        });
-    }
+    persist_locked_targets(path, &file)?;
     // Lock released on drop of lock_file at end of scope.
     Ok(output)
 }

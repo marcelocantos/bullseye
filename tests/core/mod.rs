@@ -24,6 +24,7 @@ mod resolve;
 mod retire_cas;
 mod startup_summary;
 mod store;
+mod store_commit_persist;
 mod subdivide;
 mod tool_schema;
 mod verify_plan;
