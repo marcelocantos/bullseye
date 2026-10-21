@@ -180,6 +180,8 @@ struct CacheEntry {
     file_len: u64,
     /// Payload hash from the banner at parse time (🎯T96).
     content_hash: String,
+    /// Integration ref tip when cached in commit mode (🎯T100.3).
+    ref_tip: Option<String>,
     /// When this entry was parsed. Correctness rests on `mtime`; the
     /// stamp bounds how long an untouched ledger sits in memory, and
     /// stops an unstattable file being served indefinitely (🎯T78.1).
@@ -199,6 +201,25 @@ static PARSE_CACHE: Mutex<Option<HashMap<PathBuf, CacheEntry>>> = Mutex::new(Non
 /// Returns the mtime of `path`, or `None` if stat fails.
 fn file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
+}
+
+/// Integration ref tip for commit-mode cache keys and reads (🎯T100.3).
+fn integration_ref_tip_for_load(path: &Path) -> Result<String, LoadError> {
+    let repo = git_toplevel_for_ledger(path).map_err(|e| LoadError::Io(e.to_string()))?;
+    let ref_name = integration_ref_name();
+    crate::commit_mode::ref_tip(&repo, &ref_name).map_err(|e| LoadError::Io(e.to_string()))
+}
+
+/// Ledger text: working-tree file (default) or ref tip in commit mode.
+fn read_ledger_text(path: &Path) -> Result<String, LoadError> {
+    if persist_enabled() {
+        let repo = git_toplevel_for_ledger(path).map_err(|e| LoadError::Io(e.to_string()))?;
+        let ref_name = integration_ref_name();
+        return crate::commit_mode::read_ledger_at_ref(&repo, &ref_name, path)
+            .map_err(|e| LoadError::Io(e.to_string()));
+    }
+    std::fs::read_to_string(path)
+        .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))
 }
 
 /// Structured error type returned by [`load`]. Having distinct
@@ -550,8 +571,7 @@ fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, Load
 /// rewrites unrelated targets as a side effect (🎯T82). Read paths use
 /// [`parse_file`], which heals in memory for validation/frontier.
 pub(crate) fn parse_file_raw(path: &Path) -> Result<TargetsFile, LoadError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
+    let content = read_ledger_text(path)?;
     parse_targets_content_strict(&content, path)
 }
 
@@ -561,8 +581,7 @@ pub(crate) fn parse_file_raw(path: &Path) -> Result<TargetsFile, LoadError> {
 /// path. Callers should prefer [`load`] which adds mtime-based caching on
 /// top.
 fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
+    let content = read_ledger_text(path)?;
     let mut file = parse_targets_content(&content, path)?;
     // 🎯T64: a file that already carries status-scoped residue (from an
     // older binary or a hand edit) heals here rather than staying
@@ -619,6 +638,12 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
     // Canonicalise to a stable cache key. If canonicalisation fails (broken
     // symlink, etc.), fall back to the raw path — load will fail anyway.
     let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let commit_mode = persist_enabled();
+    let current_ref_tip = if commit_mode {
+        Some(integration_ref_tip_for_load(path)?)
+    } else {
+        None
+    };
     let current_mtime = file_mtime(path);
 
     // --- Check cache under lock (no I/O inside) ---
@@ -627,16 +652,23 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
         let cache = guard.get_or_insert_with(HashMap::new);
 
         if let Some(entry) = cache.get(&key) {
-            // If we couldn't stat the file, fall back to the cached copy.
-            // If the mtime is unchanged, return the cached copy. Either
-            // way an expired entry is a miss: a file we cannot stat must
-            // not be served from memory forever.
-            let mtime_ok = current_mtime.is_none() || current_mtime == Some(entry.mtime);
-            let len_ok = std::fs::metadata(path)
-                .map(|m| m.len() == entry.file_len)
-                .unwrap_or(false);
-            let hash_ok = read_disk_content_hash_line(path).as_deref() == Some(&entry.content_hash);
-            if mtime_ok && len_ok && hash_ok && !crate::cache::expired(entry.stamped) {
+            let fresh = if commit_mode {
+                current_ref_tip.as_deref() == entry.ref_tip.as_deref()
+                    && !crate::cache::expired(entry.stamped)
+            } else {
+                // If we couldn't stat the file, fall back to the cached copy.
+                // If the mtime is unchanged, return the cached copy. Either
+                // way an expired entry is a miss: a file we cannot stat must
+                // not be served from memory forever.
+                let mtime_ok = current_mtime.is_none() || current_mtime == Some(entry.mtime);
+                let len_ok = std::fs::metadata(path)
+                    .map(|m| m.len() == entry.file_len)
+                    .unwrap_or(false);
+                let hash_ok =
+                    read_disk_content_hash_line(path).as_deref() == Some(&entry.content_hash);
+                mtime_ok && len_ok && hash_ok && !crate::cache::expired(entry.stamped)
+            };
+            if fresh {
                 return Ok(entry.file.clone());
             }
         }
@@ -659,6 +691,7 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
                     mtime,
                     file_len,
                     content_hash,
+                    ref_tip: current_ref_tip.clone(),
                     stamped: Instant::now(),
                     file: file.clone(),
                 },
@@ -1019,7 +1052,12 @@ fn persist_locked_targets(path: &Path, file: &TargetsFile) -> Result<(), Mutatio
             "bullseye: ledger mutation",
             PERSIST_CONFLICT_ATTEMPTS,
         ) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                crate::commit_mode::refresh_worktree_ledger(&repo, &ref_name, path)
+                    .map_err(|e| MutationError::Save(e.to_string()))?;
+                evict_cache(path);
+                Ok(())
+            }
             Err(WriteError::Conflict) => Err(MutationError::Conflict {
                 path: path.to_path_buf(),
             }),

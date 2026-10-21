@@ -9,7 +9,7 @@ use bullseye::commit_mode::{
     DEFAULT_REF, LEDGER_PATH, integration_ref_name, ref_tip, set_persist_override_for_tests,
 };
 use bullseye::schema::Status;
-use bullseye::store::{HashCheck, load_and_check_hash, with_locked_mutation};
+use bullseye::store::{HashCheck, load, load_and_check_hash, with_locked_mutation};
 
 struct PersistOverrideGuard;
 
@@ -128,8 +128,23 @@ fn commit_mode_on_moves_integration_ref_not_working_tree() {
     );
 
     let worktree_after = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(
+    assert_ne!(
         worktree_before, worktree_after,
-        "working tree refresh is 🎯T100.3; this slice only moves the ref"
+        "working tree must be refreshed to match ref tip"
+    );
+    assert!(
+        worktree_after.contains("converging"),
+        "refreshed worktree must match ref ledger"
+    );
+    assert_eq!(
+        worktree_after, ref_body,
+        "worktree file must match git show at ref"
+    );
+
+    let cached = load(&path).expect("load after commit-mode write");
+    assert_eq!(
+        cached.targets["T1"].status,
+        Status::Converging,
+        "parse cache must not serve pre-mutation state"
     );
 }

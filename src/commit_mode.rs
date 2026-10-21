@@ -217,3 +217,47 @@ fn is_ref_conflict(stderr: &str) -> bool {
 fn git_err(e: GitQueryError) -> WriteError {
     WriteError::Git(e.to_string())
 }
+
+/// Path to the ledger file relative to `repo` root (POSIX separators).
+pub fn ledger_relpath(repo: &Path, ledger_abs: &Path) -> Result<String, WriteError> {
+    let canon_repo = repo
+        .canonicalize()
+        .map_err(|e| WriteError::Git(format!("canonicalize repo: {e}")))?;
+    let canon_ledger = ledger_abs
+        .canonicalize()
+        .map_err(|e| WriteError::Git(format!("canonicalize ledger: {e}")))?;
+    match canon_ledger.strip_prefix(&canon_repo) {
+        Ok(p) => Ok(p.to_string_lossy().replace('\\', "/")),
+        Err(_) => Err(WriteError::Git(
+            "ledger path is outside git toplevel".into(),
+        )),
+    }
+}
+
+/// Read ledger bytes at `ref_name` (e.g. `git show refs/heads/master:path`).
+pub fn read_ledger_at_ref(
+    repo: &Path,
+    ref_name: &str,
+    ledger_abs: &Path,
+) -> Result<String, WriteError> {
+    let rel = ledger_relpath(repo, ledger_abs)?;
+    let spec = format!("{ref_name}:{rel}");
+    git_run_detailed(repo, &[], &["show", &spec], GIT_QUERY_TIMEOUT).map_err(git_err)
+}
+
+/// After a commit-mode write, mirror the ref tip into the working tree.
+pub fn refresh_worktree_ledger(
+    repo: &Path,
+    ref_name: &str,
+    ledger_abs: &Path,
+) -> Result<(), WriteError> {
+    let rel = ledger_relpath(repo, ledger_abs)?;
+    git_run_detailed(
+        repo,
+        &[],
+        &["checkout", ref_name, "--", &rel],
+        GIT_QUERY_TIMEOUT,
+    )
+    .map(|_| ())
+    .map_err(git_err)
+}
