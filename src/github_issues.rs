@@ -596,6 +596,7 @@ mod tests {
             last_evaluated: None,
             release_surface: Vec::new(),
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         let s1 = apply_issues(&mut file, std::slice::from_ref(&issue), today).unwrap();
         assert_eq!(s1.created, 1);
@@ -663,6 +664,7 @@ mod tests {
             last_evaluated: None,
             release_surface: Vec::new(),
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         store::save(&yaml, &initial).unwrap();
 
@@ -750,6 +752,7 @@ mod tests {
                 last_evaluated: None,
                 release_surface: Vec::new(),
                 targets: BTreeMap::new(),
+                load_parse_failures: Default::default(),
             },
         )
         .unwrap();
@@ -828,6 +831,7 @@ mod tests {
                 last_evaluated: None,
                 release_surface: Vec::new(),
                 targets: BTreeMap::new(),
+                load_parse_failures: Default::default(),
             },
         )
         .unwrap();

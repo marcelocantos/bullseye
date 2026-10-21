@@ -73,6 +73,7 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
         last_evaluated: None,
         release_surface: vec![],
         targets,
+        load_parse_failures: Default::default(),
     };
 
     let front = graph::frontier(&file);

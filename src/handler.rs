@@ -830,6 +830,13 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
     let mut sorted: Vec<_> = targets;
     sorted.sort_by(|a, b| a.0.cmp(b.0));
 
+    let include_parse_failures = matches!(t.filter.as_str(), "active" | "all");
+    let mut row_ids: std::collections::BTreeSet<String> =
+        sorted.iter().map(|(id, _)| (*id).to_string()).collect();
+    if include_parse_failures {
+        row_ids.extend(file.load_parse_failures.keys().cloned());
+    }
+
     // 🎯T64: list answers regardless of validation state, but an
     // invalid target is called out inline so a reader who never runs
     // `view=validate` still sees it.
@@ -843,51 +850,60 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
     }
 
     let mut out = format!("# Targets ({})\nFile: {}\n\n", t.filter, path.display());
-    for (id, target) in &sorted {
-        out.push_str(&format!(
-            "🎯{id} {name}\n  status: {status:?}  value: {v}, cost: {c}\n",
-            name = target.name,
-            status = target.status,
-            v = target.value,
-            c = target.cost,
-        ));
-        // 🎯T80: `Identified` renders identically whether a target is
-        // ready or blocked, so a scanning agent cannot tell them apart
-        // without fetching every dependency. Say it on the row.
-        if !target.status.is_terminal() {
-            let blockers = graph::open_blockers(&file, target);
-            if !blockers.is_empty() {
-                out.push_str(&format!(
-                    "  BLOCKED — not workable until achieved: {}\n",
-                    blockers
-                        .iter()
-                        .map(|b| format!("🎯{b}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
+    for id in &row_ids {
+        if let Some(target) = file.targets.get(id) {
+            out.push_str(&format!(
+                "🎯{id} {name}\n  status: {status:?}  value: {v}, cost: {c}\n",
+                name = target.name,
+                status = target.status,
+                v = target.value,
+                c = target.cost,
+            ));
+            if !target.status.is_terminal() {
+                let blockers = graph::open_blockers(&file, target);
+                if !blockers.is_empty() {
+                    out.push_str(&format!(
+                        "  BLOCKED — not workable until achieved: {}\n",
+                        blockers
+                            .iter()
+                            .map(|b| format!("🎯{b}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
             }
+            if let Some(reason) = &target.set_aside_reason {
+                out.push_str(&format!("  reason: {reason}\n"));
+            }
+            if let Some(att) = &target.attestation {
+                out.push_str(&format!("  attestation: {att}\n"));
+            }
+            if !target.tags.is_empty() {
+                out.push_str(&format!("  tags: {}\n", target.tags.join(", ")));
+            }
+        } else {
+            out.push_str(&format!("🎯{id}\n  status: (schema parse failed)\n"));
         }
-        for message in issues_by_target.get(*id).into_iter().flatten() {
+        for message in issues_by_target.get(id).into_iter().flatten() {
             out.push_str(&format!("  INVALID: {message}\n"));
-        }
-        if let Some(reason) = &target.set_aside_reason {
-            out.push_str(&format!("  reason: {reason}\n"));
-        }
-        if let Some(att) = &target.attestation {
-            out.push_str(&format!("  attestation: {att}\n"));
-        }
-        if !target.tags.is_empty() {
-            out.push_str(&format!("  tags: {}\n", target.tags.join(", ")));
         }
         out.push('\n');
     }
-    out.push_str(&format!("{} target(s)", sorted.len()));
+    out.push_str(&format!("{} target(s)", row_ids.len()));
 
     text_result(out)
 }
 
 fn handle_get(t: crate::tools::GetTool) -> ToolResult {
     let (_path, file) = load_file(&t.cwd)?;
+
+    if let Some(message) = file.load_parse_failures.get(&t.id) {
+        return text_result(format!(
+            "🎯{id}\n\nINVALID:\n- schema parse: {message}\n",
+            id = t.id,
+            message = message,
+        ));
+    }
 
     let target = file
         .targets

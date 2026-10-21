@@ -364,5 +364,6 @@ pub fn ledger(seed: u64, shape: &Shape) -> TargetsFile {
         last_evaluated: None,
         release_surface: Vec::new(),
         targets,
+        load_parse_failures: Default::default(),
     }
 }

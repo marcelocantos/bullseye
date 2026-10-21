@@ -269,6 +269,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         let mut t = tgt("p", &[]);
         t.postponed_until = Some(NaiveDate::from_ymd_opt(2099, 1, 1).unwrap());
@@ -288,6 +289,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         let mut t = tgt("p", &[]);
         t.postponed_until = Some(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());

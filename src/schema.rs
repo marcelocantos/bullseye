@@ -93,7 +93,7 @@ pub fn required_schema_version(file: &TargetsFile) -> u32 {
 }
 
 /// Top-level targets file structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TargetsFile {
     /// Schema version. Written by bullseye on every save so that an
     /// older binary loading a file produced by a newer binary can
@@ -123,6 +123,11 @@ pub struct TargetsFile {
     /// All targets keyed by ID (e.g., "T1", "T1.1").
     #[serde(default)]
     pub targets: BTreeMap<String, Target>,
+
+    /// Per-target YAML/schema deserialize failures from the last load (🎯T99).
+    /// In-memory only; not written to disk.
+    #[serde(skip, default)]
+    pub load_parse_failures: BTreeMap<String, String>,
 }
 
 /// Ownership exclusion — this target is driven by someone else (🎯T43).

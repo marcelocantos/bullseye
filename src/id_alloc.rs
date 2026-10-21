@@ -519,6 +519,7 @@ mod top_level_id_tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         }
     }
 

@@ -539,6 +539,93 @@ fn t82_unrelated_patch_leaves_other_targets_byte_identical() {
 /// and target still answer, naming the offender rather than returning
 /// only the error. `validate` is the one view that still reports errors
 /// and nothing else — that is its contract.
+const T99_MISSING_DISCOVERED_YAML: &str = r#"
+schema_version: 5
+targets:
+  T1:
+    name: Healthy and ready
+    status: converging
+    value: 0
+    cost: 0
+    acceptance:
+      - It works
+    context: ok
+    origin: manual
+    discovered: 2026-08-01
+  T2:
+    name: Missing discovered field
+    status: converging
+    value: 0
+    cost: 0
+    acceptance:
+      - Broken row
+    context: bad
+    origin: manual
+"#;
+
+/// One target missing a required schema field must not brick unrelated
+/// reads — same degrade path as 🎯T64 validation errors (🎯T99).
+#[test]
+fn t99_missing_required_field_does_not_brick_other_reads() {
+    use bullseye::config;
+    use bullseye::handler::handle_query;
+    use bullseye::tools::QueryTool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    std::fs::write(&path, T99_MISSING_DISCOVERED_YAML).unwrap();
+    let cwd = tmp.path().to_string_lossy().to_string();
+
+    let shadow = tempfile::tempdir().unwrap();
+    config::set_external_root_override(Some(shadow.path().to_path_buf()));
+
+    let file = store::load(&path).expect("tolerant load");
+    assert_eq!(file.targets.len(), 1);
+    assert!(file.load_parse_failures.contains_key("T2"));
+
+    let query = |view: &str, id: Option<&str>| {
+        text_from_call_result(
+            handle_query(QueryTool {
+                cwd: cwd.clone(),
+                view: Some(view.to_string()),
+                id: id.map(str::to_string),
+                filter: None,
+                momentum: None,
+                frontier_details: None,
+                recent_days: None,
+                scope: None,
+                nodes: None,
+                seeds: None,
+                expand: None,
+            })
+            .unwrap_or_else(|e| panic!("view={view} must still answer, got {e:?}")),
+        )
+    };
+
+    let front = query("frontier", None);
+    assert!(front.contains("🎯T1"), "{front}");
+    assert!(
+        front.contains("Validation errors (degraded read)"),
+        "{front}"
+    );
+    assert!(front.contains("T2"), "{front}");
+    assert!(front.contains("discovered"), "{front}");
+
+    let list = query("list", None);
+    assert!(list.contains("🎯T1"), "{list}");
+    assert!(list.contains("🎯T2"), "{list}");
+    assert!(list.contains("INVALID:"), "{list}");
+
+    let invalid = query("target", Some("T2"));
+    assert!(invalid.contains("schema parse"), "{invalid}");
+
+    let validate = query("validate", None);
+    assert!(validate.contains("## Errors"), "{validate}");
+    assert!(validate.contains("T2"), "{validate}");
+
+    config::set_external_root_override(None);
+}
+
 #[test]
 fn t64_one_invalid_target_does_not_brick_other_reads() {
     use bullseye::config;

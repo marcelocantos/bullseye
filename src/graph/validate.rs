@@ -388,6 +388,14 @@ pub fn validate_issues(file: &TargetsFile) -> Vec<ValidationIssue> {
     let mut errors = Vec::new();
     let mut seen_ids: HashSet<&str> = HashSet::new();
 
+    for (id, message) in &file.load_parse_failures {
+        errors.push(ValidationIssue::new(
+            id.clone(),
+            format!("schema parse: {message}"),
+        ));
+        seen_ids.insert(id.as_str());
+    }
+
     for (id, t) in &file.targets {
         let mut push = |message: String| errors.push(ValidationIssue::new(id, message));
 
@@ -616,6 +624,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         file.targets.insert("T1".into(), tgt("blocker", &[]));
         file.targets.insert("T2".into(), tgt("blocked", &["T1"]));
@@ -641,6 +650,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         let mut a = tgt("pred-a", &[]);
         a.status = Status::Achieved;
@@ -697,6 +707,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         file.targets.insert("T1".into(), tgt("a", &[]));
         file.targets.insert("T2".into(), tgt("b", &[]));
@@ -721,6 +732,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         for (id, name) in [("T1", "a"), ("T2", "b")] {
             let mut t = tgt(name, &[]);
@@ -746,6 +758,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         // Short names + default acceptance "a" → no significant tokens.
         file.targets.insert("T1".into(), tgt("pred-xy", &[]));
@@ -790,6 +803,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         file.targets.insert("T1".into(), tgt("schema-work", &[]));
         let mut b = tgt("consumer", &["T1"]);
@@ -810,6 +824,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         file.targets
             .insert("T1".into(), tgt("widget-renderer pipeline", &[]));
@@ -831,6 +846,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         let mut a = tgt("pred", &[]);
         a.acceptance = vec!["emit frobulator.schema.json for consumers".into()];
@@ -885,6 +901,7 @@ mod tests {
             last_evaluated: None,
             release_surface: vec![],
             targets: BTreeMap::new(),
+            load_parse_failures: Default::default(),
         };
         file.targets.insert("T1".into(), tgt("a", &[]));
         let mut done = tgt("done-chain", &["T1"]);
@@ -918,6 +935,7 @@ mod tests {
                 last_evaluated: None,
                 release_surface: vec![],
                 targets: BTreeMap::new(),
+                load_parse_failures: Default::default(),
             };
             file.targets.insert("T1".into(), t);
             let errs = validate_blocking(&file);

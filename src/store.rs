@@ -389,23 +389,13 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
         last_evaluated: None,
         release_surface: Vec::new(),
         targets,
+        ..Default::default()
     };
     save(path, &file)
 }
 
-/// Parse YAML text into a [`TargetsFile`], applying in-memory migrations
-/// but **not** status-scoped self-heal (🎯T82).
-fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
-    // Version check BEFORE full deserialization (🎯T86).
-    //
-    // Order is the whole point. A too-new ledger will also fail to
-    // deserialize — a v7 kind is not in this build's enum — and if the
-    // struct parse runs first the reader gets `data did not match any
-    // variant of untagged enum Check` instead of "upgrade bullseye".
-    // Both are failures; only one tells the reader what to do.
-    //
-    // A cheap partial parse of just the header avoids paying for the
-    // whole document to answer "can I read this at all".
+/// Version probe shared by strict and tolerant parses (🎯T86).
+fn probe_schema_version(content: &str, path: &Path) -> Result<(), LoadError> {
     #[derive(serde::Deserialize)]
     struct VersionProbe {
         #[serde(default)]
@@ -421,9 +411,10 @@ fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, Load
             path: path.to_path_buf(),
         });
     }
+    Ok(())
+}
 
-    let mut file: TargetsFile = serde_yaml_ng::from_str(content)
-        .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
+fn finish_parsed_file(mut file: TargetsFile, path: &Path) -> Result<TargetsFile, LoadError> {
     if let Some(v) = file.schema_version
         && v > CURRENT_SCHEMA_VERSION
     {
@@ -440,6 +431,115 @@ fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, Load
     Ok(file)
 }
 
+/// Strict whole-file deserialize — used on mutation paths that must not
+/// silently drop broken target blocks (🎯T82 / 🎯T99).
+fn parse_targets_content_strict(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
+    probe_schema_version(content, path)?;
+    let file: TargetsFile = serde_yaml_ng::from_str(content)
+        .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
+    finish_parsed_file(file, path)
+}
+
+/// When whole-file serde fails, parse each `targets` entry independently so
+/// one missing required field does not brick the ledger (🎯T99).
+fn parse_targets_content_tolerant(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
+    use crate::schema::Target;
+    use serde_yaml_ng::Value;
+
+    probe_schema_version(content, path)?;
+
+    let root: Value = serde_yaml_ng::from_str(content)
+        .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
+
+    let mapping = root.as_mapping().ok_or_else(|| {
+        LoadError::Parse(format!(
+            "failed to parse {}: root is not a YAML mapping",
+            path.display()
+        ))
+    })?;
+
+    let schema_version = mapping
+        .get(Value::from("schema_version"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    let last_evaluated = mapping
+        .get(Value::from("last_evaluated"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let release_surface: Vec<String> = mapping
+        .get(Value::from("release_surface"))
+        .and_then(|v| serde_yaml_ng::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let targets_value = mapping.get(Value::from("targets")).ok_or_else(|| {
+        LoadError::Parse(format!(
+            "failed to parse {}: missing `targets` mapping",
+            path.display()
+        ))
+    })?;
+    let targets_mapping = targets_value.as_mapping().ok_or_else(|| {
+        LoadError::Parse(format!(
+            "failed to parse {}: `targets` is not a mapping",
+            path.display()
+        ))
+    })?;
+
+    let mut targets = std::collections::BTreeMap::new();
+    let mut load_parse_failures = std::collections::BTreeMap::new();
+
+    for (key, value) in targets_mapping {
+        let id = key.as_str().ok_or_else(|| {
+            LoadError::Parse(format!(
+                "failed to parse {}: target id is not a string",
+                path.display()
+            ))
+        })?;
+        match serde_yaml_ng::from_value::<Target>(value.clone()) {
+            Ok(target) => targets.insert(id.to_string(), target),
+            Err(e) => {
+                load_parse_failures.insert(id.to_string(), format_target_parse_error(id, &e));
+                None
+            }
+        };
+    }
+
+    finish_parsed_file(
+        TargetsFile {
+            schema_version,
+            last_evaluated,
+            release_surface,
+            targets,
+            load_parse_failures,
+        },
+        path,
+    )
+}
+
+/// Actionable per-target message without repeating the `targets.{id}` prefix.
+fn format_target_parse_error(id: &str, err: &serde_yaml_ng::Error) -> String {
+    let raw = err.to_string();
+    let prefix = format!("targets.{id}: ");
+    raw.strip_prefix(&prefix).map(str::to_string).unwrap_or(raw)
+}
+
+/// Parse YAML text into a [`TargetsFile`], applying in-memory migrations
+/// but **not** status-scoped self-heal (🎯T82).
+fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
+    // Version check BEFORE full deserialization (🎯T86).
+    //
+    // Order is the whole point. A too-new ledger will also fail to
+    // deserialize — a v7 kind is not in this build's enum — and if the
+    // struct parse runs first the reader gets `data did not match any
+    // variant of untagged enum Check` instead of "upgrade bullseye".
+    // Both are failures; only one tells the reader what to do.
+    //
+    match parse_targets_content_strict(content, path) {
+        Ok(file) => Ok(file),
+        Err(LoadError::Parse(_)) => parse_targets_content_tolerant(content, path),
+        Err(e) => Err(e),
+    }
+}
+
 /// Parse a targets file from disk without status-scoped self-heal.
 ///
 /// Used by [`with_locked_mutation`] so a single-target patch never
@@ -448,7 +548,7 @@ fn parse_targets_content(content: &str, path: &Path) -> Result<TargetsFile, Load
 pub(crate) fn parse_file_raw(path: &Path) -> Result<TargetsFile, LoadError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
-    parse_targets_content(&content, path)
+    parse_targets_content_strict(&content, path)
 }
 
 /// Parse a targets file from disk without any caching.
@@ -457,7 +557,9 @@ pub(crate) fn parse_file_raw(path: &Path) -> Result<TargetsFile, LoadError> {
 /// path. Callers should prefer [`load`] which adds mtime-based caching on
 /// top.
 fn parse_file(path: &Path) -> Result<TargetsFile, LoadError> {
-    let mut file = parse_file_raw(path)?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::Io(format!("failed to read {}: {e}", path.display())))?;
+    let mut file = parse_targets_content(&content, path)?;
     // 🎯T64: a file that already carries status-scoped residue (from an
     // older binary or a hand edit) heals here rather than staying
     // permanently invalid on read. Healing is in-memory only until an
@@ -1088,6 +1190,7 @@ mod header_tests {
             last_evaluated: None,
             release_surface: Vec::new(),
             targets,
+            ..Default::default()
         }
     }
 
@@ -1209,6 +1312,7 @@ mod t41_hash_tests {
             last_evaluated: None,
             release_surface: vec![],
             targets,
+            ..Default::default()
         }
     }
 

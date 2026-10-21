@@ -198,6 +198,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
         last_evaluated,
         release_surface: Vec::new(),
         targets,
+        ..Default::default()
     };
     migrate_gates_to_depends_on(&mut file);
     Ok(file)
