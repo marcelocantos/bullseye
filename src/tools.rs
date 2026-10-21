@@ -244,6 +244,11 @@ pub struct CommitTool {
     /// Owner handle for op=assign (who is driving this target).
     #[serde(default)]
     pub owner: Option<String>,
+
+    /// Optional CAS token (`sha256:…` content_hash). Used by `op=achieve`
+    /// the same way as `bullseye_apply`'s `base` (🎯T96).
+    #[serde(default)]
+    pub base: Option<String>,
 }
 
 /// Emit a sawmill verification plan for a target's checks (does not run them).
@@ -464,6 +469,12 @@ pub struct RetireTool {
     /// Actual cost (Fibonacci scale) for calibration against the estimate.
     #[serde(default)]
     pub actual_cost: Option<f64>,
+
+    /// Optional CAS token (`sha256:…` content_hash from when you read the
+    /// ledger). A mismatch is `code=conflict` — same semantics as
+    /// `bullseye_apply`'s `base` (🎯T96).
+    #[serde(default)]
+    pub base: Option<String>,
 }
 
 /// Set a target aside (parked / deferred / wont_fix) with a documented

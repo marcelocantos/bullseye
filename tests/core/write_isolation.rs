@@ -393,6 +393,7 @@ targets:
         retire_reason: None,
         tail: None,
         owner: None,
+        base: None,
     })
     .expect("patching T2 should succeed");
 

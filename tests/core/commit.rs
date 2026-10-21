@@ -424,6 +424,7 @@ fn achieve_refuses_active_dotted_children() {
         id: "T1".to_string(),
         attestation: "parent looks done if you ignore the children".to_string(),
         actual_cost: None,
+        base: None,
     })
     .expect_err("cannot achieve parent while T1.1 is active");
     let msg = format!("{err:?}");
@@ -502,6 +503,7 @@ fn retire_refuses_open_dependencies_same_as_achieve() {
         retire_reason: None,
         tail: None,
         owner: None,
+        base: None,
     })
     .expect_err("op=achieve must refuse an open blocker");
     let achieve_msg = format!("{achieve:?}");
@@ -515,6 +517,7 @@ fn retire_refuses_open_dependencies_same_as_achieve() {
         id: "T8".to_string(),
         attestation: attestation.to_string(),
         actual_cost: None,
+        base: None,
     })
     .expect_err("retire shim must refuse the same open blocker");
     let retire_msg = format!("{retire:?}");
@@ -933,6 +936,7 @@ fn achieve_requires_and_persists_attestation() {
             retire_reason: None,
             tail: None,
             owner: None,
+            base: None,
         });
         assert!(
             result.is_err(),
@@ -955,6 +959,7 @@ fn achieve_requires_and_persists_attestation() {
         id: "T1".into(),
         attestation: "  ".into(),
         actual_cost: None,
+        base: None,
     });
     assert!(
         shim_empty.is_err(),
@@ -967,6 +972,7 @@ fn achieve_requires_and_persists_attestation() {
         id: "T1".into(),
         attestation: note.into(),
         actual_cost: Some(2.0),
+        base: None,
     });
     assert!(ok.is_ok(), "retire with attestation must succeed: {ok:?}");
     let body = format!("{ok:?}");
@@ -1074,6 +1080,7 @@ fn revert_clears_attestation() {
         id: "T1".into(),
         attestation: "tests green; smoke on fixture".into(),
         actual_cost: None,
+        base: None,
     })
     .expect("retire");
 

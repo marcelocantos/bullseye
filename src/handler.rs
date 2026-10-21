@@ -427,8 +427,14 @@ pub fn handle_query(t: crate::tools::QueryTool) -> ToolResult {
 /// Build and run a single-target apply, reporting `op` in the envelope.
 /// The `commit` verbs are sugar: each assembles the fragment its name
 /// implies and hands it to the one engine (🎯T76).
-fn commit_sugar(cwd: &str, id: String, frag: crate::apply::Fragment, op: &str) -> ToolResult {
-    commit_sugar_adopting(cwd, id, frag, op, false)
+fn commit_sugar(
+    cwd: &str,
+    id: String,
+    frag: crate::apply::Fragment,
+    op: &str,
+    base: Option<String>,
+) -> ToolResult {
+    commit_sugar_adopting(cwd, id, frag, op, false, base)
 }
 
 /// [`commit_sugar`] carrying the 🎯T86 adoption acknowledgement through to
@@ -439,12 +445,14 @@ fn commit_sugar_adopting(
     frag: crate::apply::Fragment,
     op: &str,
     adopt_command_checks: bool,
+    base: Option<String>,
 ) -> ToolResult {
     let mut targets = std::collections::BTreeMap::new();
     targets.insert(id, frag);
     apply_request_as(
         cwd,
         crate::apply::ApplyRequest {
+            base,
             targets,
             adopt_command_checks,
             ..Default::default()
@@ -564,6 +572,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     ..Default::default()
                 },
                 "achieve",
+                t.base.clone(),
             )
         }
         "defer" => {
@@ -583,6 +592,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     ..Default::default()
                 },
                 "defer",
+                None,
             )
         }
         "reopen" => {
@@ -603,6 +613,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     ..Default::default()
                 },
                 "reopen",
+                None,
             );
             // The engine reports a generic precondition failure; this
             // verb has always explained the specific case, so restore
@@ -647,6 +658,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     ..Default::default()
                 },
                 "assign",
+                None,
             )
         }
         "unassign" => {
@@ -659,6 +671,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     ..Default::default()
                 },
                 "unassign",
+                None,
             )
         }
         "postpone" => handle_postpone(&t),
@@ -675,6 +688,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                     ..Default::default()
                 },
                 "wake",
+                None,
             )
         }
         "rehash" => {
@@ -748,6 +762,7 @@ fn handle_postpone(t: &crate::tools::CommitTool) -> ToolResult {
             ..Default::default()
         },
         "postpone",
+        None,
     )
 }
 
@@ -763,14 +778,16 @@ fn handle_rehash(cwd: &str, reason: &str) -> ToolResult {
     }
     check_persisted_string("reason", reason).map_err(tool_err)?;
     // Parse without heal, then heal explicitly so `changed:` names every
-    // target whose record is normalised (🎯T82).
-    let raw = store::parse_file_raw(&path).map_err(|e| tool_err(e.to_string()))?;
-    let before = raw.targets.clone();
-    let mut file = raw;
-    crate::schema::heal_status_scoped_residue(&mut file);
-    let changed = store::targets_differing(&before, &file.targets);
-    store::save(&path, &file).map_err(tool_err)?;
-    let hash = store::compute_content_hash(&file);
+    // target whose record is normalised (🎯T82). Use the locked path so
+    // rehash cannot clobber concurrent writers (🎯T96 / jevons 🎯T1138).
+    let (changed, hash) = store::with_locked_mutation(&path, |file| {
+        let before = file.targets.clone();
+        crate::schema::heal_status_scoped_residue(file);
+        let changed = store::targets_differing(&before, &file.targets);
+        let hash = store::compute_content_hash(file);
+        Ok::<_, api::CodedError>((changed, hash))
+    })
+    .map_err(mutation_tool_err)?;
     let front = api::frontier_ids_from_path(&path);
     text_result(api::format_mutation_result(
         "rehash",
@@ -952,7 +969,7 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         reason: t.reason,
         ..Default::default()
     };
-    commit_sugar_adopting(&t.cwd, key, frag, "track", t.adopt_command_checks)
+    commit_sugar_adopting(&t.cwd, key, frag, "track", t.adopt_command_checks, None)
 }
 
 /// Parse the `checks` tool parameter (🎯T83).
@@ -1026,6 +1043,7 @@ pub fn handle_retire(t: crate::tools::RetireTool) -> ToolResult {
             ..Default::default()
         },
         "achieve",
+        t.base.clone(),
     )
 }
 
@@ -1823,6 +1841,25 @@ pub fn apply_request(cwd: &str, req: crate::apply::ApplyRequest) -> ToolResult {
     apply_request_as(cwd, req, "apply")
 }
 
+fn mutation_error_retriable(e: &store::MutationError) -> bool {
+    matches!(
+        e,
+        store::MutationError::Conflict { .. } | store::MutationError::VerifyFailed { .. }
+    )
+}
+
+fn achieve_landed_on_disk(path: &Path, updated: &[String]) -> bool {
+    let file = match store::load(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    updated.iter().all(|id| {
+        file.targets
+            .get(id)
+            .is_some_and(|t| t.status == Status::Achieved)
+    })
+}
+
 /// [`apply_request`], reporting `op` in the result envelope.
 ///
 /// The eleven `commit --op` verbs are sugar over apply, but each keeps
@@ -1856,12 +1893,52 @@ pub fn apply_request_as(cwd: &str, req: crate::apply::ApplyRequest, op: &str) ->
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from(".")),
     );
-    let report = store::with_locked_mutation(&path, |file| {
-        crate::apply::apply_with_gate(file, &req, &historical, &gate_store)
-    });
-    let report = match report {
-        Ok(r) => r,
-        Err(e) => return Err(mutation_tool_err(e)),
+    let mut req = req;
+    const MAX_ATTEMPTS: usize = 8;
+    let mut last_conflict: Option<String> = None;
+    let report = {
+        let mut landed: Option<crate::apply::ApplyReport> = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            match store::with_locked_mutation(&path, |file| {
+                crate::apply::apply_with_gate(file, &req, &historical, &gate_store)
+            }) {
+                Ok(r) => {
+                    if op == "achieve"
+                        && !r.updated.is_empty()
+                        && !achieve_landed_on_disk(&path, &r.updated)
+                    {
+                        if attempt + 1 < MAX_ATTEMPTS {
+                            req.base = None;
+                            last_conflict = Some("achieve did not land on disk".to_string());
+                            continue;
+                        }
+                        return coded_err(
+                            api::ErrorCode::Conflict,
+                            "achieve reported success but the target is not achieved on disk — retry",
+                        );
+                    }
+                    landed = Some(r);
+                    break;
+                }
+                Err(e) if mutation_error_retriable(&e) && attempt + 1 < MAX_ATTEMPTS => {
+                    req.base = None;
+                    last_conflict = Some(e.to_string());
+                    continue;
+                }
+                Err(e) => return Err(mutation_tool_err(e)),
+            }
+        }
+        match landed {
+            Some(r) => r,
+            None => {
+                return coded_err(
+                    api::ErrorCode::Conflict,
+                    last_conflict.unwrap_or_else(|| {
+                        "ledger changed under concurrent writers — retry".to_string()
+                    }),
+                );
+            }
+        }
     };
 
     let mut lines: Vec<String> = Vec::new();
@@ -2144,6 +2221,7 @@ targets:
             retire_reason: None,
             tail: None,
             owner: None,
+            base: None,
         })
         .expect_err("re-achieve with a new attestation must be refused");
         let msg = format!("{err:?}");
@@ -2576,6 +2654,7 @@ targets:
             retire_reason: None,
             tail: None,
             owner: None,
+            base: None,
         })
     }
 

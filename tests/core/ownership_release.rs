@@ -142,6 +142,7 @@ fn t43_assign_and_unassign_via_commit() {
         retire_reason: None,
         tail: None,
         owner: Some("bob".to_string()),
+        base: None,
     })
     .expect("assign");
     let out = text_from_call_result(assign);
@@ -179,6 +180,7 @@ fn t43_assign_and_unassign_via_commit() {
         retire_reason: None,
         tail: None,
         owner: None,
+        base: None,
     })
     .expect("unassign");
     assert!(text_from_call_result(unassign).contains("op: unassign"));

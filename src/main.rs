@@ -506,6 +506,7 @@ const COMMIT_FLAGS: &[(&str, bool)] = &[
     ("--children-file", true),
     ("--retire-reason", true),
     ("--tail", true),
+    ("--base", true),
     ("--help", false),
 ];
 
@@ -517,7 +518,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
              \x20      [--checks YAML]  (executable checks, e.g.\n\
              \x20      '[{command: {run: cargo test --workspace}}]')\n\
              block:  --id ID --blocks T1[,T2]\n\
-             achieve: --id ID --attestation TEXT [--actual-cost N]\n\
+             achieve: --id ID --attestation TEXT [--actual-cost N] [--base sha256:…]\n\
              defer/reopen/rehash: --id ID --reason TEXT (rehash: reason only)\n\
              postpone: --id ID [--postponed-until YYYY-MM-DD] [--postpone-predicate TEXT]\n\
              wake: --id ID\n\
@@ -619,6 +620,7 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
         retire_reason: flag_value(args, "--retire-reason"),
         tail: None,
         owner: flag_value(args, "--owner"),
+        base: flag_value(args, "--base"),
     }))
 }
 

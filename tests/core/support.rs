@@ -541,6 +541,7 @@ pub fn t64_commit(cwd: &str, op: &str) -> bullseye::tools::CommitTool {
         retire_reason: None,
         tail: None,
         owner: None,
+        base: None,
     }
 }
 

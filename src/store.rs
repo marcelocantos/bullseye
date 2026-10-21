@@ -131,6 +131,28 @@ pub fn check_content_hash(raw: &str, file: &TargetsFile) -> HashCheck {
     }
 }
 
+/// Read the `content_hash` stamped in the on-disk banner without a full parse.
+/// Used for cache invalidation and write-path CAS (🎯T96 / jevons 🎯T1138):
+/// mtime alone is not enough when several writers land in the same second.
+pub(crate) fn read_disk_content_hash_line(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return None,
+    };
+    let mut buf = [0u8; 8192];
+    let n = match file.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return None,
+    };
+    let prefix = HASH_LINE_PREFIX;
+    let hay = &buf[..n];
+    let text = std::str::from_utf8(hay).ok()?;
+    text.lines().find_map(|l| {
+        l.strip_prefix(prefix).map(|h| h.trim().to_string())
+    })
+}
+
 /// Human warning for a direct-edit hash mismatch (🎯T41).
 pub fn hash_mismatch_warning(path: &Path, check: &HashCheck) -> Option<String> {
     match check {
@@ -151,6 +173,10 @@ pub fn hash_mismatch_warning(path: &Path, check: &HashCheck) -> Option<String> {
 struct CacheEntry {
     /// The mtime of the file at parse time.
     mtime: SystemTime,
+    /// Byte length at parse time — cheap extra guard when mtime is coarse.
+    file_len: u64,
+    /// Payload hash from the banner at parse time (🎯T96).
+    content_hash: String,
     /// When this entry was parsed. Correctness rests on `mtime`; the
     /// stamp bounds how long an untouched ledger sits in memory, and
     /// stops an unstattable file being served indefinitely (🎯T78.1).
@@ -500,8 +526,12 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
             // If the mtime is unchanged, return the cached copy. Either
             // way an expired entry is a miss: a file we cannot stat must
             // not be served from memory forever.
-            let usable = current_mtime.is_none() || current_mtime == Some(entry.mtime);
-            if usable && !crate::cache::expired(entry.stamped) {
+            let mtime_ok = current_mtime.is_none() || current_mtime == Some(entry.mtime);
+            let len_ok = std::fs::metadata(path)
+                .map(|m| m.len() == entry.file_len)
+                .unwrap_or(false);
+            let hash_ok = read_disk_content_hash_line(path).as_deref() == Some(&entry.content_hash);
+            if mtime_ok && len_ok && hash_ok && !crate::cache::expired(entry.stamped) {
                 return Ok(entry.file.clone());
             }
         }
@@ -516,10 +546,14 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
             let mut guard = PARSE_CACHE.lock().expect("parse cache mutex poisoned");
             let cache = guard.get_or_insert_with(HashMap::new);
             cache.retain(|_, e| !crate::cache::expired(e.stamped));
+            let content_hash = compute_content_hash(&file);
+            let file_len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             cache.insert(
                 key,
                 CacheEntry {
                     mtime,
+                    file_len,
+                    content_hash,
                     stamped: Instant::now(),
                     file: file.clone(),
                 },
@@ -532,13 +566,19 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
             Err(e)
         }
         Err(e) => {
-            // Soft error (I/O or parse failure). If we have a cached copy,
-            // serve it so the caller keeps working while the file is mid-edit.
+            // Soft error (I/O or parse failure). If we have a cached copy whose
+            // stamped hash still matches what is on disk, serve it so the caller
+            // keeps working while the file is mid-edit. If the hash moved, the
+            // cache is stale — surface the parse error instead (🎯T96).
             let guard = PARSE_CACHE.lock().expect("parse cache mutex poisoned");
             if let Some(cache) = guard.as_ref()
                 && let Some(entry) = cache.get(&key)
             {
-                return Ok(entry.file.clone());
+                match read_disk_content_hash_line(path) {
+                    None => return Ok(entry.file.clone()),
+                    Some(h) if h == entry.content_hash => return Ok(entry.file.clone()),
+                    Some(_) => {}
+                }
             }
             // No cached copy — propagate the error.
             Err(e)
@@ -655,14 +695,19 @@ fn directory_lock_key(dir: &Path) -> Result<String, MutationError> {
     Ok(format!("{:x}", h.finish()))
 }
 
-/// Snapshot `(mtime, len)` of `path`, or `None` if stat fails. Used
-/// for CAS checks bracketing the read-modify-write window — if either
-/// field changes between read and write, someone modified the file
-/// outside our advisory lock (e.g. a text editor that doesn't honour
-/// flock).
-fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+/// Snapshot of on-disk ledger identity for CAS inside [`with_locked_mutation`].
+/// Prefer the stamped `content_hash` line; fall back to `(mtime, len)` for
+/// legacy files without a hash banner.
+fn file_stamp(path: &Path) -> Option<String> {
+    if let Some(h) = read_disk_content_hash_line(path) {
+        return Some(h);
+    }
     let md = std::fs::metadata(path).ok()?;
-    Some((md.modified().ok()?, md.len()))
+    Some(format!(
+        "mtime-len:{}:{}",
+        md.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs(),
+        md.len()
+    ))
 }
 
 /// Structured error from [`with_locked_mutation`]. Each variant names
@@ -693,6 +738,13 @@ pub enum MutationError {
     Apply(CodedError),
     /// Serialising or writing the mutated yaml back failed.
     Save(String),
+    /// The file was written but the on-disk `content_hash` does not match
+    /// what we serialised — treat as a lost update / external clobber.
+    VerifyFailed {
+        path: PathBuf,
+        expected: String,
+        found: Option<String>,
+    },
 }
 
 impl MutationError {
@@ -702,7 +754,9 @@ impl MutationError {
     /// literal phrase `classify_message` looks for.
     pub fn code(&self) -> ErrorCode {
         match self {
-            MutationError::LockTimeout { .. } | MutationError::Conflict { .. } => {
+            MutationError::LockTimeout { .. }
+            | MutationError::Conflict { .. }
+            | MutationError::VerifyFailed { .. } => {
                 ErrorCode::Conflict
             }
             MutationError::Apply(e) => e.code,
@@ -735,6 +789,12 @@ impl std::fmt::Display for MutationError {
             ),
             MutationError::Apply(msg) => write!(f, "{msg}"),
             MutationError::Save(msg) => write!(f, "{msg}"),
+            MutationError::VerifyFailed { path, expected, found } => write!(
+                f,
+                "write to {} did not persist: expected content_hash {expected}, found {:?}",
+                path.display(),
+                found
+            ),
         }
     }
 }
@@ -850,6 +910,15 @@ where
     }
 
     save(path, &file).map_err(MutationError::Save)?;
+    let expected = compute_content_hash(&file);
+    let on_disk = read_disk_content_hash_line(path);
+    if on_disk.as_deref() != Some(&expected) {
+        return Err(MutationError::VerifyFailed {
+            path: path.to_path_buf(),
+            expected,
+            found: on_disk,
+        });
+    }
     // Lock released on drop of lock_file at end of scope.
     Ok(output)
 }

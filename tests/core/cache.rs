@@ -194,3 +194,133 @@ fn concurrent_mutations_do_not_lose_updates() {
 }
 
 // --- 🎯T18: set-aside disposition ---
+
+// --- 🎯T96 / jevons 🎯T1138: write persistence + cache honesty ---
+
+#[test]
+fn load_serves_fresh_disk_after_concurrent_achieve() {
+    use bullseye::apply::{ApplyRequest, Fragment};
+    use bullseye::handler::apply_request_as;
+    use bullseye::schema::Status;
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    const ITERS: usize = 8;
+    const WRITERS: usize = 3;
+
+    for iter in 0..ITERS {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bullseye.yaml");
+        write_yaml(&path, "Baseline");
+        let cwd = tmp.path().to_string_lossy().to_string();
+
+        for i in 0..WRITERS {
+            let id = format!("T{}", 2000 + i);
+            store::with_locked_mutation(&path, |file| {
+                file.targets.insert(
+                    id.clone(),
+                    bullseye::schema::Target {
+                        name: format!("Concurrent achieve {i}"),
+                        status: Status::Identified,
+                        value: 1.0,
+                        cost: 1.0,
+                        actual_cost: None,
+                        attestation: None,
+                        set_aside_reason: None,
+                        acceptance: vec!["done".to_string()],
+                        checks: Vec::new(),
+                        context: String::new(),
+                        gates: Vec::new(),
+                        depends_on: Vec::new(),
+                        cross_depends: Vec::new(),
+                        cross_enables: Vec::new(),
+                        tags: Vec::new(),
+                        strategy: None,
+                        origin: "concurrent-test".to_string(),
+                        discovered: chrono::Local::now().date_naive(),
+                        achieved: None,
+                        owned_by: None,
+                        postponed_until: None,
+                        postpone_predicate: None,
+                    },
+                );
+                Ok::<(), String>(())
+            })
+            .expect("seed target");
+        }
+
+        // Warm the parse cache in this process — the failure mode we close is
+        // "ok:true achieve" followed by a cached bullseye_get still showing identified.
+        let _ = store::load(&path);
+
+        let barrier = Arc::new(Barrier::new(WRITERS));
+        let handles: Vec<_> = (0..WRITERS)
+            .map(|i| {
+                let cwd = cwd.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let id = format!("T{}", 2000 + i);
+                    let mut targets = BTreeMap::new();
+                    targets.insert(
+                        id.clone(),
+                        Fragment {
+                            status: Some("achieved".to_string()),
+                            attestation: Some(format!("hermetic achieve {iter}/{i}")),
+                            ..Default::default()
+                        },
+                    );
+                    apply_request_as(
+                        &cwd,
+                        ApplyRequest {
+                            targets,
+                            ..Default::default()
+                        },
+                        "achieve",
+                    )
+                    .expect("achieve should persist");
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("writer panicked");
+        }
+
+        let seen = store::load(&path).expect("reload after achieves");
+        for i in 0..WRITERS {
+            let id = format!("T{}", 2000 + i);
+            let t = seen.targets.get(&id).expect("target must exist on disk");
+            assert_eq!(
+                t.status,
+                Status::Achieved,
+                "iter {iter}: {id} must be achieved on disk after ok:true write"
+            );
+        }
+    }
+}
+
+#[test]
+fn unlocked_save_after_locked_write_is_visible_on_next_load() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bullseye.yaml");
+    write_yaml(&path, "Baseline");
+    let before = store::load(&path).unwrap();
+
+    store::with_locked_mutation(&path, |file| {
+        file.targets.get_mut("T1").unwrap().name = "Locked rename".to_string();
+        Ok::<(), String>(())
+    })
+    .unwrap();
+
+    // Simulate a legacy/non-flocking writer clobbering with the pre-mutation snapshot.
+    store::save(&path, &before).unwrap();
+
+    let after = store::load(&path).unwrap();
+    assert_eq!(
+        after.targets["T1"].name,
+        "Baseline",
+        "unlocked clobber is visible — callers must retry on conflict/verify failures"
+    );
+}
