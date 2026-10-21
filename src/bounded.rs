@@ -250,6 +250,106 @@ pub fn git_query(dir: &Path, args: &[&str], timeout: Duration) -> Option<String>
     git_query_detailed(dir, args, timeout).ok()
 }
 
+/// Run `git -C <dir>` with optional environment overrides, bounded at `timeout`.
+///
+/// Used by commit-mode ledger writes that need a private `GIT_INDEX_FILE`
+/// without bypassing the wall-clock bound.
+pub fn git_run_detailed(
+    dir: &Path,
+    extra_env: &[(&str, &str)],
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, GitQueryError> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+    match bounded_output(&mut cmd, timeout) {
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if stderr.contains("not a git repository") {
+                Err(GitQueryError::NotARepo)
+            } else {
+                Err(GitQueryError::Failed(format!(
+                    "git {} failed: {}",
+                    args.join(" "),
+                    stderr.trim()
+                )))
+            }
+        }
+        Err(e @ BoundedError::TimedOut { .. }) => {
+            eprintln!(
+                "bullseye: `git {}` in {} {e}",
+                args.join(" "),
+                dir.display(),
+            );
+            Err(GitQueryError::Failed(e.to_string()))
+        }
+        Err(e) => Err(GitQueryError::Failed(e.to_string())),
+    }
+}
+
+/// Write `content` as a git blob in `dir` and return its object name.
+pub fn git_hash_object(
+    dir: &Path,
+    content: &[u8],
+    timeout: Duration,
+) -> Result<String, GitQueryError> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["hash-object", "-w", "--stdin"]);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| GitQueryError::Failed(e.to_string()))?;
+    let pid = child.id();
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(content)
+            .map_err(|e| GitQueryError::Failed(e.to_string()))?;
+    }
+    let (tx, rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) if output.status.success() => {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }
+        Ok(Ok(output)) => Err(GitQueryError::Failed(format!(
+            "git hash-object failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
+        Ok(Err(e)) => Err(GitQueryError::Failed(e.to_string())),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            signal_process_group(pid, "TERM");
+            if rx.recv_timeout(TERMINATION_GRACE).is_err() {
+                signal_process_group(pid, "KILL");
+                let _ = rx.recv_timeout(Duration::from_millis(200));
+            }
+            drop(waiter);
+            Err(GitQueryError::Failed(format!(
+                "timed out after {}s and was killed",
+                timeout.as_secs()
+            )))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(GitQueryError::Failed(
+            BoundedError::Disconnected.to_string(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,6 +9,7 @@ mod support;
 
 mod cache;
 mod commit;
+mod commit_mode;
 mod convergence;
 mod core_api;
 mod git_guard;
