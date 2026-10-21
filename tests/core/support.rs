@@ -386,6 +386,58 @@ pub fn t28_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Serialise 🎯T102 sentinel-env tests. `BULLSEYE_DATA_DIR` is process-wide,
+/// so only one test may redirect the default external root at a time.
+pub static T102_SENTINEL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn t102_sentinel_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    T102_SENTINEL_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// RAII override of a single environment variable (restores prior value on drop).
+pub struct ScopedEnvOverride {
+    key: &'static str,
+    prior: Option<String>,
+}
+
+impl ScopedEnvOverride {
+    pub fn set(key: &'static str, value: &str) -> Self {
+        let prior = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, value) };
+        Self { key, prior }
+    }
+}
+
+impl Drop for ScopedEnvOverride {
+    fn drop(&mut self) {
+        match &self.prior {
+            Some(v) => unsafe { std::env::set_var(self.key, v) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+/// Assert `dir` has no files or subdirectories (recursive).
+pub fn assert_directory_tree_empty(dir: &std::path::Path) {
+    if !dir.exists() {
+        return;
+    }
+    for entry in std::fs::read_dir(dir).expect("read sentinel dir") {
+        let entry = entry.expect("sentinel dir entry");
+        let path = entry.path();
+        if path.is_dir() {
+            assert_directory_tree_empty(&path);
+        } else {
+            panic!(
+                "🎯T102 sentinel external root must stay untouched; found {:?}",
+                path
+            );
+        }
+    }
+}
+
 /// Initialise a git repo with stable identity so commits don't depend
 /// on the developer's git config or wall clock for these tests.
 pub fn t28_git_init(dir: &std::path::Path) {
