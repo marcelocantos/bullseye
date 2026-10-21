@@ -1198,27 +1198,46 @@ async fn serve_http(addr: &str) -> SdkResult<()> {
 
 #[cfg(test)]
 mod commit_flag_tests {
+    use std::collections::BTreeSet;
+
     use super::{COMMIT_FLAGS, cli_commit};
 
-    #[test]
-    fn documented_assign_flags_are_accepted_by_commit_whitelist() {
+    fn flags_named_in_commit_help() -> BTreeSet<String> {
         let help = cli_commit(&["--help".to_string()]).expect("commit help");
-        let assign = help
-            .lines()
-            .find(|line| line.trim_start().starts_with("assign:"))
-            .expect("assign help line");
-        let flags: Vec<&str> = assign
-            .split_whitespace()
-            .filter(|word| word.starts_with("--"))
-            .collect();
+        let mut flags = BTreeSet::new();
+        for line in help.lines() {
+            // Example YAML embeds unrelated CLI flags (e.g. cargo test --workspace).
+            if line.contains("cargo test") {
+                continue;
+            }
+            for word in line.split_whitespace() {
+                if !word.starts_with("--") {
+                    continue;
+                }
+                let bare = word.trim_start_matches('-');
+                let end = bare
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                    .unwrap_or(bare.len());
+                let name = bare[..end].trim_end_matches('-');
+                if !name.is_empty() {
+                    flags.insert(format!("--{name}"));
+                }
+            }
+        }
+        flags
+    }
+
+    #[test]
+    fn every_flag_named_in_commit_help_is_accepted_by_commit_whitelist() {
+        let flags = flags_named_in_commit_help();
         assert!(
-            flags.contains(&"--owner"),
-            "assign help must document --owner"
+            flags.contains("--owner"),
+            "commit help must document --owner for assign"
         );
         for flag in flags {
             assert!(
                 COMMIT_FLAGS.iter().any(|(accepted, _)| *accepted == flag),
-                "assign help documents {flag} but COMMIT_FLAGS rejects it"
+                "commit help documents {flag} but COMMIT_FLAGS rejects it"
             );
         }
     }
