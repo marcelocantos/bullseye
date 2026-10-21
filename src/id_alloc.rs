@@ -48,7 +48,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
@@ -72,6 +72,24 @@ static ID_RE: OnceLock<Regex> = OnceLock::new();
 type CachedLedgerKeys = (Instant, (std::time::SystemTime, u64), HashSet<String>);
 
 static WORKTREE_CACHE: Mutex<Option<HashMap<PathBuf, CachedLedgerKeys>>> = Mutex::new(None);
+
+/// One history scan per repo at a time so a burst of MCP writes does not
+/// each spawn a full `git log -p --all --remotes` against the same object
+/// store (🎯T101).
+static REPO_HISTORY_LOCKS: Mutex<Option<HashMap<PathBuf, Arc<Mutex<()>>>>> = Mutex::new(None);
+
+fn repo_history_lock(repo_top: &Path) -> Arc<Mutex<()>> {
+    let key = repo_top
+        .canonicalize()
+        .unwrap_or_else(|_| repo_top.to_path_buf());
+    let mut guard = REPO_HISTORY_LOCKS
+        .lock()
+        .expect("id_alloc repo history lock map poisoned");
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 static KEY_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -197,6 +215,11 @@ fn git_history_ids(
     timeout: Duration,
 ) -> Result<HashSet<String>, HistoricalIdsError> {
     let repo_top = repo_top.to_path_buf();
+    let scan_lock = repo_history_lock(&repo_top);
+    let _scan_guard = scan_lock
+        .lock()
+        .expect("id_alloc repo history lock poisoned");
+
     let current_tips = match ref_tips(&repo_top, timeout) {
         Ok(t) => t,
         Err(GitQueryError::NotARepo) => return Ok(HashSet::new()),
@@ -223,6 +246,16 @@ fn git_history_ids(
     }
 
     let full_scan = prior_tips.is_empty();
+    if !full_scan {
+        let prior_set: HashSet<&String> = prior_tips.iter().collect();
+        let has_new_tips = current_tips.iter().any(|t| !prior_set.contains(t));
+        if !has_new_tips {
+            // Ref tips shrank (deleted refs only) — grow-only history is unchanged.
+            save_persisted(&repo_top, &ids, &current_tips)?;
+            cache_put(repo_top, current_tips, ids.clone());
+            return Ok(ids);
+        }
+    }
     let body = match run_history_log(
         &repo_top,
         full_scan,
@@ -339,7 +372,13 @@ fn run_history_log(
         owned.push("--all".into());
         owned.push("--remotes".into());
     } else {
-        owned.extend(current_tips.iter().cloned());
+        let prior_set: HashSet<&String> = prior_tips.iter().collect();
+        let new_tips: Vec<String> = current_tips
+            .iter()
+            .filter(|t| !prior_set.contains(t))
+            .cloned()
+            .collect();
+        owned.extend(new_tips);
         owned.push("--not".into());
         owned.extend(prior_tips.iter().cloned());
     }

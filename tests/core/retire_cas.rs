@@ -48,7 +48,8 @@ fn concurrent_retire_achievements_all_land_on_disk() {
     seed_three_targets(&path);
     let cwd = tmp.path().to_string_lossy().to_string();
     let shadow_tmp = tempfile::tempdir().unwrap();
-    config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
+    let shadow_root = shadow_tmp.path().to_path_buf();
+    config::set_external_root_override(Some(shadow_root.clone()));
 
     const WRITERS: usize = 3;
     let barrier = Arc::new(Barrier::new(WRITERS));
@@ -56,8 +57,10 @@ fn concurrent_retire_achievements_all_land_on_disk() {
         .map(|n| {
             let cwd = cwd.clone();
             let barrier = Arc::clone(&barrier);
+            let shadow_root = shadow_root.clone();
             let id = format!("T{n}");
             thread::spawn(move || {
+                config::set_external_root_override(Some(shadow_root));
                 barrier.wait();
                 handle_retire(RetireTool {
                     cwd,

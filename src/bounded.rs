@@ -78,20 +78,25 @@ impl std::fmt::Display for BoundedError {
 const TERMINATION_GRACE: Duration = Duration::from_secs(2);
 
 /// Signal the process group led by `pid`. Children are spawned with
-/// `process_group(0)`, so `pid` is also the group id and `kill -<sig>
-/// -<pid>` reaches the whole tree — a `go test` stuck on a DB connection
-/// under `make`, or the `sleep` inside a `pre-commit` hook under `git
-/// commit`, not just the direct child. Shelling out to `kill` keeps this
-/// dependency-free; bullseye already shells to git. Best-effort and
-/// Unix-only — elsewhere the bound still returns and the orphan is left
-/// to the OS.
+/// `process_group(0)`, so `pid` is also the group id and `killpg` reaches
+/// the whole tree — a `go test` stuck on a DB connection under `make`, or
+/// the `sleep` inside a `pre-commit` hook under `git commit`, not just the
+/// direct child. Uses `libc::killpg` directly — supervisord-served
+/// bullseye logged `kill: -<pid>: Operation not permitted` when shelling
+/// out to `/usr/bin/kill`, leaving wedged `git log` children to pile up
+/// (🎯T101).
 fn signal_process_group(pid: u32, sig: &str) {
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
-            .arg(format!("-{sig}"))
-            .arg(format!("-{pid}"))
-            .status();
+        let signum = match sig {
+            "TERM" => libc::SIGTERM,
+            "KILL" => libc::SIGKILL,
+            _ => return,
+        };
+        let pgid = pid as libc::pid_t;
+        if unsafe { libc::killpg(pgid, signum) } != 0 {
+            unsafe { libc::kill(pgid, signum) };
+        }
     }
     #[cfg(not(unix))]
     {

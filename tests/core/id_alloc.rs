@@ -460,6 +460,15 @@ fn id_history_incremental_scan_after_new_commit() {
         !incr_args.iter().any(|a| a == "--all"),
         "incremental scan must not use --all: {incr_args:?}"
     );
+    let not_pos = incr_args
+        .iter()
+        .position(|a| *a == "--not")
+        .expect("--not in incremental args");
+    let positive_refs = not_pos.saturating_sub(3);
+    assert_eq!(
+        positive_refs, 1,
+        "incremental scan must walk only new ref tips, not every ref: {incr_args:?}"
+    );
 
     config::set_external_root_override(None);
 }
