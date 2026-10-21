@@ -148,9 +148,8 @@ pub(crate) fn read_disk_content_hash_line(path: &Path) -> Option<String> {
     let prefix = HASH_LINE_PREFIX;
     let hay = &buf[..n];
     let text = std::str::from_utf8(hay).ok()?;
-    text.lines().find_map(|l| {
-        l.strip_prefix(prefix).map(|h| h.trim().to_string())
-    })
+    text.lines()
+        .find_map(|l| l.strip_prefix(prefix).map(|h| h.trim().to_string()))
 }
 
 /// Human warning for a direct-edit hash mismatch (🎯T41).
@@ -705,7 +704,11 @@ fn file_stamp(path: &Path) -> Option<String> {
     let md = std::fs::metadata(path).ok()?;
     Some(format!(
         "mtime-len:{}:{}",
-        md.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs(),
+        md.modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
         md.len()
     ))
 }
@@ -756,9 +759,7 @@ impl MutationError {
         match self {
             MutationError::LockTimeout { .. }
             | MutationError::Conflict { .. }
-            | MutationError::VerifyFailed { .. } => {
-                ErrorCode::Conflict
-            }
+            | MutationError::VerifyFailed { .. } => ErrorCode::Conflict,
             MutationError::Apply(e) => e.code,
             // No structural code fits an I/O, parse, or serialise
             // failure yet — `InvalidArgs` is the same default the
@@ -789,7 +790,11 @@ impl std::fmt::Display for MutationError {
             ),
             MutationError::Apply(msg) => write!(f, "{msg}"),
             MutationError::Save(msg) => write!(f, "{msg}"),
-            MutationError::VerifyFailed { path, expected, found } => write!(
+            MutationError::VerifyFailed {
+                path,
+                expected,
+                found,
+            } => write!(
                 f,
                 "write to {} did not persist: expected content_hash {expected}, found {:?}",
                 path.display(),

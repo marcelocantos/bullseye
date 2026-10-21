@@ -319,8 +319,7 @@ fn unlocked_save_after_locked_write_is_visible_on_next_load() {
 
     let after = store::load(&path).unwrap();
     assert_eq!(
-        after.targets["T1"].name,
-        "Baseline",
+        after.targets["T1"].name, "Baseline",
         "unlocked clobber is visible — callers must retry on conflict/verify failures"
     );
 }
