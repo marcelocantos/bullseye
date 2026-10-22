@@ -10,6 +10,7 @@ mod support;
 mod cache;
 mod commit;
 mod commit_mode;
+mod commit_mode_concurrency;
 mod commit_mode_optin;
 mod convergence;
 mod core_api;
