@@ -139,6 +139,15 @@ the server with `bullseye --default-location external`. Per-call
 `location` on init/open/import still overrides. Without a default,
 create tools prompt for `in_repo` or `external` as before.
 
+**Commit mode (opt-in, 🎯T100).** Off by default. Set `BULLSEYE_COMMIT=1`
+(and optionally `BULLSEYE_INTEGRATION_REF=refs/heads/master`) for one-shot
+CLI use, or start the MCP server with the same env or
+`bullseye --commit-mode serve`. Process-wide only — not per MCP call.
+External shadow-tree ledgers always use file mode even when commit mode
+is on. This is **not** the removed 🎯T72 yaml-only auto-commit: commit
+mode moves a named git ref via private-index CAS and keeps the
+working-tree `bullseye.yaml` clean.
+
 **Ledger durability (🎯T73).** Mutating tools write `bullseye.yaml` and
 leave it dirty — bullseye does not create `Update bullseye.yaml`
 commits. Standing invariants (`make bullseye`) ignore ledger dirt so a

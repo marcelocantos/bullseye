@@ -203,6 +203,23 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
+/// True when `path` lives under the external shadow tree (🎯T100.4).
+pub fn is_external_ledger_path(path: &Path) -> bool {
+    let root = external_root();
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.clone());
+    if path.starts_with(&root) || path.starts_with(&root_canon) {
+        return true;
+    }
+    path.canonicalize()
+        .map(|p| p.starts_with(&root_canon))
+        .unwrap_or(false)
+}
+
+/// Commit mode applies only to in-repo ledgers when the process opted in (🎯T100.4).
+pub fn persist_enabled_for(path: &Path) -> bool {
+    persist_enabled() && !is_external_ledger_path(path)
+}
+
 /// Integration ref tip for commit-mode cache keys and reads (🎯T100.3).
 fn integration_ref_tip_for_load(path: &Path) -> Result<String, LoadError> {
     let repo = git_toplevel_for_ledger(path).map_err(|e| LoadError::Io(e.to_string()))?;
@@ -212,7 +229,7 @@ fn integration_ref_tip_for_load(path: &Path) -> Result<String, LoadError> {
 
 /// Ledger text: working-tree file (default) or ref tip in commit mode.
 fn read_ledger_text(path: &Path) -> Result<String, LoadError> {
-    if persist_enabled() {
+    if persist_enabled_for(path) {
         let repo = git_toplevel_for_ledger(path).map_err(|e| LoadError::Io(e.to_string()))?;
         let ref_name = integration_ref_name();
         return crate::commit_mode::read_ledger_at_ref(&repo, &ref_name, path)
@@ -638,7 +655,7 @@ pub fn load(path: &Path) -> Result<TargetsFile, LoadError> {
     // Canonicalise to a stable cache key. If canonicalisation fails (broken
     // symlink, etc.), fall back to the raw path — load will fail anyway.
     let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let commit_mode = persist_enabled();
+    let commit_mode = persist_enabled_for(path);
     let current_ref_tip = if commit_mode {
         Some(integration_ref_tip_for_load(path)?)
     } else {
@@ -1041,7 +1058,7 @@ fn integration_parent_sha(path: &Path) -> Result<String, MutationError> {
 
 /// Persist mutated ledger bytes: working-tree save (default) or ref CAS (commit mode).
 fn persist_locked_targets(path: &Path, file: &TargetsFile) -> Result<(), MutationError> {
-    if persist_enabled() {
+    if persist_enabled_for(path) {
         let repo = git_toplevel_for_ledger(path)?;
         let bytes = render_file_text(file).map_err(MutationError::Save)?;
         let ref_name = integration_ref_name();
@@ -1098,7 +1115,7 @@ where
 
     // --- Critical section: flock held. ---
     let mut file = parse_file_raw(path).map_err(MutationError::Load)?;
-    let commit_mode = persist_enabled();
+    let commit_mode = persist_enabled_for(path);
     let parent_before = if commit_mode {
         Some(integration_parent_sha(path)?)
     } else {

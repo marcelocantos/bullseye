@@ -105,6 +105,8 @@ async fn main() -> SdkResult<()> {
                  \n\
                  Start the HTTP MCP server. Endpoint: /mcp\n\
                  Default address: {DEFAULT_SERVE_ADDR} (override with --addr or BULLSEYE_ADDR)\n\
+                 Commit mode (process-wide): BULLSEYE_COMMIT=1 and optional\n\
+                 BULLSEYE_INTEGRATION_REF=refs/heads/master, or --commit-mode before serve.\n\
                  \n\
                  This is the only MCP transport; a bare `bullseye` invocation is a\n\
                  stale stdio registration and exits with instructions.\n\
@@ -276,6 +278,11 @@ fn split_server_flags(args: &[String]) -> (Vec<String>, Vec<String>) {
             i += 1;
             continue;
         }
+        if a == "--commit-mode" {
+            flags.push(a.clone());
+            i += 1;
+            continue;
+        }
         // First non-server-flag token starts the subcommand / remaining args.
         rest.extend_from_slice(&args[i..]);
         break;
@@ -290,6 +297,9 @@ fn apply_server_flags(flags: &[String]) {
         eprintln!("--default-location: {e}");
         process::exit(1);
     }
+    if flags.iter().any(|f| f == "--commit-mode") {
+        bullseye::commit_mode::set_process_commit_mode(true);
+    }
 }
 
 fn print_help() {
@@ -302,6 +312,9 @@ fn print_help() {
     println!("    bullseye serve [--addr HOST:PORT]");
     println!("                               Start the HTTP MCP server (default 127.0.0.1:18743,");
     println!("                               endpoint /mcp; env BULLSEYE_ADDR)");
+    println!(
+        "    bullseye --commit-mode serve   # or BULLSEYE_COMMIT=1 — process-wide commit mode"
+    );
     println!("    bullseye open [--cwd DIR] [--location in_repo|external]");
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
     println!("    bullseye apply [--cwd DIR] (-f FILE | - | --id ID --set k=v ...)");
@@ -1183,6 +1196,7 @@ async fn serve_http(addr: &str) -> SdkResult<()> {
         "bullseye {} serving MCP on http://{host}:{port}/mcp",
         bullseye::version::VERSION
     );
+    eprintln!("{}", bullseye::commit_mode::startup_status_line());
 
     let server = hyper_server::create_server(
         server_details(),

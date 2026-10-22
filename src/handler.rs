@@ -343,7 +343,13 @@ fn discover_path(cwd: &str) -> Result<std::path::PathBuf, CallToolError> {
 fn ensure_mutation_allowed(targets_path: &Path, cwd: &str) -> Result<(), CallToolError> {
     let repo_root = targets_path.parent().unwrap_or(Path::new("."));
     repo_guard::check_mutation_allowed(repo_root)
-        .map_err(|guard| tool_err(guard.message(Path::new(cwd))))
+        .map_err(|guard| tool_err(guard.message(Path::new(cwd))))?;
+    if store::persist_enabled_for(targets_path) {
+        let ref_name = crate::commit_mode::integration_ref_name();
+        repo_guard::check_commit_mode_integration_ref(repo_root, &ref_name)
+            .map_err(|guard| tool_err(guard.message(Path::new(cwd))))?;
+    }
+    Ok(())
 }
 
 // ─── Core surface (🎯T45) ─────────────────────────────────────────────

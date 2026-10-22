@@ -61,6 +61,13 @@ pub enum MutationGuard {
         /// SHA otherwise).
         current_sha: String,
     },
+    /// Commit mode is on but [`crate::commit_mode::integration_ref_name`]
+    /// is not a movable branch ref (bare SHA / short branch name / missing ref).
+    DetachedIntegrationRef {
+        repo_root: PathBuf,
+        ref_name: String,
+        reason: String,
+    },
 }
 
 impl MutationGuard {
@@ -124,6 +131,24 @@ impl MutationGuard {
                 sha = current_sha,
                 cwd = cwd.display(),
             ),
+            MutationGuard::DetachedIntegrationRef {
+                repo_root,
+                ref_name,
+                reason,
+            } => format!(
+                "bullseye refuses commit-mode mutation: integration ref `{ref}` is not \
+                 usable ({reason}). Commit mode moves a named git ref via CAS; set \
+                 {env}=refs/heads/master (or another full refs/… name that exists in \
+                 this repo), not a bare commit SHA or short branch name.\n\
+                 \n\
+                 cwd was: {cwd}\n\
+                 repo:    {repo}",
+                ref = ref_name,
+                reason = reason,
+                env = crate::commit_mode::INTEGRATION_REF_ENV,
+                cwd = cwd.display(),
+                repo = repo_root.display(),
+            ),
         }
     }
 }
@@ -174,6 +199,32 @@ pub fn check_mutation_allowed(repo_root: &Path) -> Result<(), MutationGuard> {
         });
     }
 
+    Ok(())
+}
+
+/// When commit mode would persist, refuse an integration ref that is not a
+/// movable `refs/…` name or does not resolve in `repo_root` (🎯T100.4).
+pub fn check_commit_mode_integration_ref(
+    repo_root: &Path,
+    ref_name: &str,
+) -> Result<(), MutationGuard> {
+    if !is_git_repo(repo_root) {
+        return Ok(());
+    }
+    if let Err(reason) = crate::commit_mode::integration_ref_allowed(ref_name) {
+        return Err(MutationGuard::DetachedIntegrationRef {
+            repo_root: repo_root.to_path_buf(),
+            ref_name: ref_name.to_string(),
+            reason,
+        });
+    }
+    if let Err(e) = crate::commit_mode::integration_ref_resolves(repo_root, ref_name) {
+        return Err(MutationGuard::DetachedIntegrationRef {
+            repo_root: repo_root.to_path_buf(),
+            ref_name: ref_name.to_string(),
+            reason: e.to_string(),
+        });
+    }
     Ok(())
 }
 

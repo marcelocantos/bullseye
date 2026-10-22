@@ -40,6 +40,16 @@ Changes affecting the interaction surface, newest first:
   edge is `depends_on`. Docs that called `add` "parent untouched" or
   `child_of` ID-only are updated.
 
+- **Commit mode is opt-in** (🎯T100.4). Off by default everywhere,
+  including external shadow-tree ledgers (`location: external`). When
+  enabled process-wide (`BULLSEYE_COMMIT=1`, `bullseye --commit-mode serve`,
+  or the same env for one-shot CLI), in-repo mutations CAS-move
+  `BULLSEYE_INTEGRATION_REF` (default `refs/heads/master`) and refresh
+  the working-tree mirror — not a restoration of the retired 🎯T72
+  yaml-only auto-commit/amend rail (ref move + clean mirror is a
+  different guarantee). Integration ref must be a full `refs/…` name;
+  bare SHAs are refused.
+
 - **Bullseye does not commit `bullseye.yaml`** (🎯T73; 🎯T22/T72)
   auto-commit rail retired). Mutating tools write the file and leave
   it dirty. `bullseye_convergence` does not `git commit` before

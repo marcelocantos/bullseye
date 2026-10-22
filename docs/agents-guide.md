@@ -1083,6 +1083,15 @@ the old failure, the installed binary is older than this guide —
   load; `op=rehash` persists the repair. Reads degrade (banner +
   `INVALID` annotations); only `view=validate` hard-fails. See
   [api-v1-core.md](api-v1-core.md).
+- **Commit mode (opt-in, 🎯T100).** Default is file-mode: mutating
+tools write `bullseye.yaml` and leave it dirty (🎯T73). To opt in for
+a fleet/shared clone, set `BULLSEYE_COMMIT=1` and optionally
+`BULLSEYE_INTEGRATION_REF=refs/heads/master` on the CLI or on
+`bullseye serve` (or `bullseye --commit-mode serve`). Process-wide
+only — there is no per-call commit mode on the MCP API. External
+shadow-tree repos (`location: external`) never use commit mode even
+when the env is set. Not a restoration of 🎯T72 auto-commit: commit
+mode CAS-moves the integration ref and refreshes the worktree mirror.
 - **Yaml-only `Update bullseye.yaml` commits (🎯T73).** Bullseye does
   not commit the ledger. A dirty in-repo `bullseye.yaml` is staged by
   `/commit` and refused by `/push` if still dirty. Standing

@@ -9,6 +9,7 @@
 //! silent clobber or false success.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bounded::{
@@ -36,12 +37,60 @@ thread_local! {
     static PERSIST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
+/// Process-wide opt-in from `bullseye serve --commit-mode` (🎯T100.4).
+/// Env [`COMMIT_ENV`] is the default source; the flag forces commit mode on
+/// for the whole server process.
+static PROCESS_COMMIT_MODE: OnceLock<bool> = OnceLock::new();
+
+/// Record commit mode from CLI `--commit-mode` at process startup (idempotent).
+pub fn set_process_commit_mode(enabled: bool) {
+    let _ = PROCESS_COMMIT_MODE.set(enabled);
+}
+
 /// Whether commit-mode persist is active for this process.
 pub fn persist_enabled() -> bool {
     if let Some(v) = PERSIST_OVERRIDE.get() {
         return v;
     }
+    if PROCESS_COMMIT_MODE.get() == Some(&true) {
+        return true;
+    }
     env_truthy(std::env::var(COMMIT_ENV).ok().as_deref())
+}
+
+/// One-line summary for `serve` startup logging (🎯T100.4).
+pub fn startup_status_line() -> String {
+    if !persist_enabled() {
+        return "commit mode: off (set BULLSEYE_COMMIT=1 or --commit-mode to enable)".to_string();
+    }
+    format!(
+        "commit mode: on (integration ref {})",
+        integration_ref_name()
+    )
+}
+
+/// Integration ref must be a movable git ref name, not a detached commit SHA (🎯T100.4).
+pub fn integration_ref_allowed(ref_name: &str) -> Result<(), String> {
+    let trimmed = ref_name.trim();
+    if trimmed.is_empty() {
+        return Err("integration ref name is empty".into());
+    }
+    if !trimmed.starts_with("refs/") {
+        return Err(format!(
+            "integration ref `{trimmed}` must be a full ref name starting with \
+             refs/ (e.g. {DEFAULT_REF}), not a bare branch name or commit SHA"
+        ));
+    }
+    Ok(())
+}
+
+/// Verify the integration ref exists in `repo` before commit-mode writes.
+pub fn integration_ref_resolves(repo: &Path, ref_name: &str) -> Result<(), WriteError> {
+    integration_ref_allowed(ref_name).map_err(WriteError::Git)?;
+    let spec = format!("{ref_name}^{{commit}}");
+    git_query_detailed(repo, &["rev-parse", "--verify", &spec], GIT_QUERY_TIMEOUT)
+        .map_err(git_err)?;
+    Ok(())
 }
 
 /// Force commit-mode on/off on this thread (integration tests only).
