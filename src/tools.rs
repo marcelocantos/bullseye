@@ -1037,7 +1037,7 @@ pub struct SyncPrioritiesTool {
         predict the next ID by scanning the file). Optional top-level `base: sha256:…` is \
         a CAS token: a mismatch is code=conflict, meaning the ledger moved under you. \
         Patchable fields: name, status, value, cost, actual_cost, acceptance, checks, context, \
-        tags, depends_on, blocks, origin, child_of, attestation, reason, owner, \
+        context_append, context_replace, tags, depends_on, blocks, origin, child_of, attestation, reason, owner, \
         postponed_until, postpone_predicate, `clear` (a list of fields to reset to empty — \
         omitting a field means leave it alone, so `clear` is how a field becomes nothing), \
         and `if_status` (a precondition: refuse unless the target currently has that \

@@ -1070,6 +1070,14 @@ fn apply_help() -> String {
     s
 }
 
+fn parse_cli_bool(value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        other => Err(format!("expected true or false, got `{other}`")),
+    }
+}
+
 /// Build a one-target request from `--id` plus repeated `--set k=v`.
 ///
 /// Values are typed by field rather than by parsing each as YAML:
@@ -1095,6 +1103,11 @@ fn fragment_from_sets(sets: &[String]) -> Result<bullseye::apply::Fragment, Stri
             // Repeatable: each --set acceptance=… appends one criterion,
             // because criteria contain commas and must not be split.
             "acceptance" => acceptance.push(Value::from(value)),
+            "context_replace" => {
+                let b = parse_cli_bool(value)
+                    .map_err(|e| format!("--set context_replace={value}: {e}"))?;
+                map.insert(Value::from(key), Value::from(b));
+            }
             "tags" | "depends_on" | "blocks" => {
                 let items: Vec<Value> = value
                     .split(',')

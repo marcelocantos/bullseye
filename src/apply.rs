@@ -66,7 +66,14 @@ pub struct Fragment {
     /// Why this target matters, how it was discovered. Markdown.
     /// Downstream renderers interpret HTML. Cite tags as entities or
     /// code spans. Bullseye stores the text as written and does not escape.
+    /// Replaces the stored context (see `context_replace` when shrinking).
     pub context: Option<String>,
+    /// Add prose after the existing context without replacing it (🎯T104).
+    /// Mutually exclusive with `context` in the same fragment.
+    pub context_append: Option<String>,
+    /// Acknowledge overwriting context that does not contain the existing
+    /// body. Required when `context` would drop prose (🎯T104).
+    pub context_replace: Option<bool>,
     /// Freeform tags. Replaces the list.
     pub tags: Option<Vec<String>>,
     /// Hard blocking dependencies. Replaces the list.
@@ -153,7 +160,15 @@ pub const FIELD_HELP: &[FieldHelp] = &[
     },
     FieldHelp {
         name: "context",
-        blurb: "why this matters. Markdown. Downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape",
+        blurb: "why this matters (replaces). Markdown. Downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape",
+    },
+    FieldHelp {
+        name: "context_append",
+        blurb: "add prose after existing context without replacing it (🎯T104)",
+    },
+    FieldHelp {
+        name: "context_replace",
+        blurb: "set true to allow `context` to overwrite when the new text does not contain the existing body",
     },
     FieldHelp {
         name: "tags",
@@ -252,6 +267,7 @@ pub const UNOBLIGED_FIELDS: &[&str] = &[
     "acceptance",
     "checks",
     "context",
+    "context_append",
     "tags",
     "value",
     "cost",
@@ -343,6 +359,77 @@ fn append_context_audit(target: &mut Target, entry: String) {
         target.context.push_str("\n\n");
         target.context.push_str(&entry);
     }
+}
+
+/// Refuse a `context` replace that would drop existing prose unless the
+/// caller set `context_replace: true` or the new text still contains the
+/// old body (🎯T104).
+pub fn refuse_destructive_context_replace(
+    id: &str,
+    existing: &str,
+    new: &str,
+    allow_replace: bool,
+) -> Result<(), ApplyError> {
+    if existing.is_empty() || new == existing {
+        return Ok(());
+    }
+    if new.contains(existing) {
+        return Ok(());
+    }
+    if allow_replace {
+        return Ok(());
+    }
+    let lost = existing.chars().count();
+    Err(ApplyError::new(
+        ErrorCode::Validation,
+        format!(
+            "apply rejected for 🎯{id}: replacing context would drop {lost} characters of existing prose — \
+             use `context_append` to add a note, or set `context_replace: true` to overwrite explicitly"
+        ),
+    ))
+}
+
+fn apply_context_fields(id: &str, target: &mut Target, frag: &Fragment) -> Result<(), ApplyError> {
+    if frag.context.is_some() && frag.context_append.is_some() {
+        return Err(ApplyError::new(
+            ErrorCode::InvalidArgs,
+            format!(
+                "apply rejected for 🎯{id}: set `context` or `context_append`, not both in one fragment"
+            ),
+        ));
+    }
+    if let Some(append) = &frag.context_append {
+        if !append.is_empty() {
+            append_context_audit(target, append.clone());
+        }
+        return Ok(());
+    }
+    if let Some(new) = &frag.context {
+        refuse_destructive_context_replace(
+            id,
+            &target.context,
+            new,
+            frag.context_replace == Some(true),
+        )?;
+        target.context = new.clone();
+    }
+    Ok(())
+}
+
+/// Initial context for a newly created target from fragment fields.
+fn context_for_create(id: &str, frag: &Fragment) -> Result<String, ApplyError> {
+    if frag.context.is_some() && frag.context_append.is_some() {
+        return Err(ApplyError::new(
+            ErrorCode::InvalidArgs,
+            format!(
+                "apply rejected for 🎯{id}: set `context` or `context_append`, not both in one fragment"
+            ),
+        ));
+    }
+    if let Some(append) = &frag.context_append {
+        return Ok(append.clone());
+    }
+    Ok(frag.context.clone().unwrap_or_default())
 }
 
 fn parse_status(s: &str) -> Result<Status, ApplyError> {
@@ -588,7 +675,23 @@ fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
     if frag.checks.as_ref().is_some_and(|v| v != &target.checks) {
         return true;
     }
-    if frag.context.as_ref().is_some_and(|v| v != &target.context) {
+    if frag
+        .context_append
+        .as_ref()
+        .is_some_and(|append| !append.is_empty())
+    {
+        return true;
+    }
+    if let Some(new) = &frag.context
+        && new != &target.context
+        && refuse_destructive_context_replace(
+            "_",
+            &target.context,
+            new,
+            frag.context_replace == Some(true),
+        )
+        .is_ok()
+    {
         return true;
     }
     if frag.tags.as_ref().is_some_and(|v| v != &target.tags) {
@@ -841,6 +944,7 @@ pub fn apply_with_gate(
             refuse_non_finite(&id, "value", value)?;
             let cost = frag.cost.unwrap_or(0.0);
             refuse_non_finite(&id, "cost", cost)?;
+            let initial_context = context_for_create(&id, frag)?;
             let mut target = Target {
                 name,
                 status: to,
@@ -853,7 +957,7 @@ pub fn apply_with_gate(
                 attestation: attestation.clone(),
                 acceptance,
                 checks: frag.checks.clone().unwrap_or_default(),
-                context: frag.context.clone().unwrap_or_default(),
+                context: initial_context,
                 gates: Vec::new(),
                 depends_on: frag.depends_on.clone().unwrap_or_default(),
                 cross_depends: Vec::new(),
@@ -920,9 +1024,7 @@ pub fn apply_with_gate(
             if let Some(v) = &frag.checks {
                 target.checks = v.clone();
             }
-            if let Some(v) = &frag.context {
-                target.context = v.clone();
-            }
+            apply_context_fields(&id, target, frag)?;
             if let Some(v) = &frag.tags {
                 target.tags = v.clone();
             }
@@ -2322,5 +2424,147 @@ targets:
             assert_eq!(file.targets["T1"].value, 0.0);
             assert_eq!(file.targets["T1"].cost, 0.0);
         }
+    }
+
+    #[test]
+    fn t104_context_append_adds_after_existing_body() {
+        let mut file = base_file();
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some("long historical context about the target.".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("seed context");
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context_append: Some("PO recon note.".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("append");
+        let ctx = &file.targets["T1"].context;
+        assert!(
+            ctx.starts_with("long historical context"),
+            "original body preserved: {ctx}"
+        );
+        assert!(ctx.ends_with("PO recon note."), "append landed: {ctx}");
+        assert!(ctx.contains("\n\n"), "append uses audit separator: {ctx}");
+    }
+
+    #[test]
+    fn t104_context_replace_without_flag_refuses_shrink() {
+        let mut file = base_file();
+        let existing = "x".repeat(52);
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some(existing.clone()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("seed");
+        let err = apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some("one-line recon note".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect_err("destructive replace must be refused");
+        assert_eq!(err.code, ErrorCode::Validation);
+        assert!(
+            err.message.contains("🎯T1"),
+            "must name target: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("52 characters"),
+            "must quantify lost prose: {}",
+            err.message
+        );
+        assert_eq!(file.targets["T1"].context, existing);
+    }
+
+    #[test]
+    fn t104_context_replace_flag_allows_overwrite() {
+        let mut file = base_file();
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some("historical body".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("seed");
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some("replacement".into()),
+                    context_replace: Some(true),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("explicit replace");
+        assert_eq!(file.targets["T1"].context, "replacement");
+    }
+
+    #[test]
+    fn t104_context_expansion_containing_existing_body_allowed_without_flag() {
+        let mut file = base_file();
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some("keep this paragraph".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("seed");
+        apply(
+            &mut file,
+            &one(
+                "T1",
+                Fragment {
+                    context: Some("keep this paragraph\n\nplus more detail".into()),
+                    ..Default::default()
+                },
+            ),
+            &no_history(),
+        )
+        .expect("expansion containing old body");
+        assert_eq!(
+            file.targets["T1"].context,
+            "keep this paragraph\n\nplus more detail"
+        );
     }
 }
