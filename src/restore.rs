@@ -7,8 +7,11 @@
 
 use chrono::Local;
 
+use std::path::Path;
+
 use crate::api::{CodedError, ErrorCode};
-use crate::schema::{Target, TargetsFile};
+use crate::bounded::{GIT_QUERY_TIMEOUT, GitQueryError, git_query_detailed};
+use crate::schema::TargetsFile;
 
 /// Caller-supplied restore parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +28,87 @@ pub struct RestoreRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreReport {
     pub restored: Vec<String>,
+}
+
+
+
+/// Resolve `rev` to a commit OID and refuse unrelated histories (🎯T105).
+///
+/// Uses `--end-of-options` so untrusted revision strings cannot inject
+/// extra git arguments. Requires a non-empty `merge-base` between
+/// `HEAD` and the source commit so a fetched foreign-repo object cannot
+/// be used as a restore source.
+pub fn resolve_pinned_source_revision(repo: &Path, rev: &str) -> Result<String, CodedError> {
+    let trimmed = rev.trim();
+    let spec = format!("{trimmed}^{{commit}}");
+    let source_sha = match git_query_detailed(
+        repo,
+        &["rev-parse", "--verify", "--end-of-options", &spec],
+        GIT_QUERY_TIMEOUT,
+    ) {
+        Ok(sha) => sha.trim().to_string(),
+        Err(GitQueryError::NotARepo) => {
+            return Err(CodedError::new(
+                ErrorCode::UnsafeRepo,
+                "ledger is not inside a git repository",
+            ));
+        }
+        Err(GitQueryError::Failed(reason)) => {
+            return Err(CodedError::new(
+                ErrorCode::Validation,
+                format!("source revision `{trimmed}` does not resolve: {reason}"),
+            ));
+        }
+    };
+
+    let head = match git_query_detailed(
+        repo,
+        &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+        GIT_QUERY_TIMEOUT,
+    ) {
+        Ok(h) => h.trim().to_string(),
+        Err(GitQueryError::NotARepo) => {
+            return Err(CodedError::new(
+                ErrorCode::UnsafeRepo,
+                "ledger is not inside a git repository",
+            ));
+        }
+        Err(GitQueryError::Failed(reason)) => {
+            return Err(CodedError::new(
+                ErrorCode::Validation,
+                format!("cannot resolve HEAD for history check: {reason}"),
+            ));
+        }
+    };
+
+    match git_query_detailed(
+        repo,
+        &[
+            "merge-base",
+            "--end-of-options",
+            &head,
+            &source_sha,
+        ],
+        GIT_QUERY_TIMEOUT,
+    ) {
+        Ok(base) if !base.trim().is_empty() => Ok(source_sha),
+        Ok(_) => Err(CodedError::new(
+            ErrorCode::Validation,
+            format!(
+                "source revision `{trimmed}` shares no git history with the current ledger                  branch (HEAD) — refusing restore from an unrelated object"
+            ),
+        )),
+        Err(GitQueryError::NotARepo) => Err(CodedError::new(
+            ErrorCode::UnsafeRepo,
+            "ledger is not inside a git repository",
+        )),
+        Err(GitQueryError::Failed(_)) => Err(CodedError::new(
+            ErrorCode::Validation,
+            format!(
+                "source revision `{trimmed}` shares no git history with the current ledger                  branch (HEAD) — refusing restore from an unrelated object"
+            ),
+        )),
+    }
 }
 
 /// Validate request shape before any git I/O.
@@ -103,7 +187,7 @@ pub fn restore_absent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::Status;
+    use crate::schema::{Status, Target};
 
     fn sample_target(name: &str) -> Target {
         Target {

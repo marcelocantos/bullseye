@@ -1863,23 +1863,6 @@ pub fn apply_request(cwd: &str, req: crate::apply::ApplyRequest) -> ToolResult {
     apply_request_as(cwd, req, "apply")
 }
 
-fn resolve_source_revision(repo: &Path, rev: &str) -> Result<String, api::CodedError> {
-    use crate::bounded::{GIT_QUERY_TIMEOUT, GitQueryError, git_query_detailed};
-    let trimmed = rev.trim();
-    let spec = format!("{trimmed}^{{commit}}");
-    match git_query_detailed(repo, &["rev-parse", "--verify", &spec], GIT_QUERY_TIMEOUT) {
-        Ok(sha) => Ok(sha.trim().to_string()),
-        Err(GitQueryError::NotARepo) => Err(api::CodedError::new(
-            api::ErrorCode::UnsafeRepo,
-            "ledger is not inside a git repository",
-        )),
-        Err(GitQueryError::Failed(reason)) => Err(api::CodedError::new(
-            api::ErrorCode::Validation,
-            format!("source revision `{trimmed}` does not resolve: {reason}"),
-        )),
-    }
-}
-
 /// Re-insert targets absent live but present at a pinned git revision (🎯T105).
 pub fn restore_request(cwd: &str, req: crate::restore::RestoreRequest) -> ToolResult {
     if let Err(e) = crate::restore::validate_request(&req) {
@@ -1901,7 +1884,7 @@ pub fn restore_request(cwd: &str, req: crate::restore::RestoreRequest) -> ToolRe
             );
         }
     };
-    let source_rev = match resolve_source_revision(&repo, &req.source_rev) {
+    let source_rev = match crate::restore::resolve_pinned_source_revision(&repo, &req.source_rev) {
         Ok(r) => r,
         Err(e) => return coded_err(e.code, e.message),
     };
