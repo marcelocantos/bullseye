@@ -475,7 +475,7 @@ fn finish_parsed_file(mut file: TargetsFile, path: &Path) -> Result<TargetsFile,
 
 /// Strict whole-file deserialize — used on mutation paths that must not
 /// silently drop broken target blocks (🎯T82 / 🎯T99).
-fn parse_targets_content_strict(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
+pub(crate) fn parse_targets_content_strict(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
     probe_schema_version(content, path)?;
     let file: TargetsFile = serde_yaml_ng::from_str(content)
         .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
@@ -1040,7 +1040,7 @@ fn acquire_lock(yaml_path: &Path) -> Result<std::fs::File, MutationError> {
 }
 
 /// Git repo root for commit-mode persist (`git rev-parse --show-toplevel`).
-fn git_toplevel_for_ledger(path: &Path) -> Result<PathBuf, MutationError> {
+pub(crate) fn git_toplevel_for_ledger(path: &Path) -> Result<PathBuf, MutationError> {
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

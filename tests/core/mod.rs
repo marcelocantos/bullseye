@@ -23,6 +23,7 @@ mod portfolio;
 mod query;
 mod reshape;
 mod resolve;
+mod restore;
 mod retire_cas;
 mod startup_summary;
 mod store;

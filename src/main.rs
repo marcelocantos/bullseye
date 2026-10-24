@@ -151,6 +151,7 @@ async fn main() -> SdkResult<()> {
             "query" => cli_exit(cli_query(&rest[1..])),
             "commit" => cli_exit(cli_commit(&rest[1..])),
             "apply" => cli_exit(cli_apply(&rest[1..])),
+            "restore" => cli_exit(cli_restore(&rest[1..])),
             "plan-checks" => cli_exit(cli_plan_checks(&rest[1..])),
             "run-checks" => process::exit(cli_run_checks(&rest[1..])),
             "convergence" => cli_exit(cli_convergence(&rest[1..])),
@@ -318,6 +319,7 @@ fn print_help() {
     println!("    bullseye open [--cwd DIR] [--location in_repo|external]");
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
     println!("    bullseye apply [--cwd DIR] (-f FILE | - | --id ID --set k=v ...)");
+    println!("    bullseye restore --from REV --id ID[,ID] --reason TEXT [--cwd DIR]");
     println!("                               The single write verb — see bullseye apply --help");
     println!("    bullseye commit --op OP [flags]   # sugar over apply; see commit --help");
     println!("    bullseye plan-checks --id ID [--cwd DIR]");
@@ -1127,6 +1129,50 @@ fn fragment_from_sets(sets: &[String]) -> Result<bullseye::apply::Fragment, Stri
     }
     // serde's own error already enumerates the legal fields.
     serde_yaml_ng::from_value(Value::Mapping(map)).map_err(|e| e.to_string())
+}
+
+
+const RESTORE_FLAGS: &[(&str, bool)] = &[
+    ("--cwd", true),
+    ("--from", true),
+    ("--id", true),
+    ("--reason", true),
+    ("--help", false),
+];
+
+fn restore_help() -> String {
+    "bullseye restore --from REV --id ID[,ID] --reason TEXT [--cwd DIR]\n\
+     Re-insert target rows absent from the live ledger but present at REV\n\
+     (commit SHA or ref) of bullseye.yaml. Refuses to overwrite live ids.\n\
+     Routes through the locked atomic writer (commit mode when enabled).\n"
+        .to_string()
+}
+
+fn cli_restore(args: &[String]) -> Result<String, String> {
+    if has_flag(args, "--help") || args.is_empty() {
+        return Ok(restore_help());
+    }
+    reject_unknown_flags(args, RESTORE_FLAGS, "restore")?;
+    let from = flag_value(args, "--from")
+        .ok_or_else(|| "restore requires --from REV (source git revision)".to_string())?;
+    let id_raw = flag_value(args, "--id")
+        .ok_or_else(|| "restore requires --id ID or ID,ID,...".to_string())?;
+    let reason = flag_value(args, "--reason")
+        .ok_or_else(|| "restore requires --reason TEXT".to_string())?;
+    let ids: Vec<String> = id_raw
+        .split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Err("restore requires at least one id in --id".to_string());
+    }
+    let req = bullseye::restore::RestoreRequest {
+        source_rev: from,
+        ids,
+        reason,
+    };
+    tool_result_text(bullseye::handler::restore_request(&default_cwd(args), req))
 }
 
 fn cli_apply(args: &[String]) -> Result<String, String> {

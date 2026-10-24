@@ -22,6 +22,7 @@ pub mod portfolio;
 pub mod priorities;
 pub mod repo_guard;
 pub mod resolve;
+pub mod restore;
 pub mod schema;
 pub mod store;
 pub mod tools;

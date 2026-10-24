@@ -1863,6 +1863,110 @@ pub fn apply_request(cwd: &str, req: crate::apply::ApplyRequest) -> ToolResult {
     apply_request_as(cwd, req, "apply")
 }
 
+fn resolve_source_revision(repo: &Path, rev: &str) -> Result<String, api::CodedError> {
+    use crate::bounded::{GIT_QUERY_TIMEOUT, GitQueryError, git_query_detailed};
+    let trimmed = rev.trim();
+    let spec = format!("{trimmed}^{{commit}}");
+    match git_query_detailed(repo, &["rev-parse", "--verify", &spec], GIT_QUERY_TIMEOUT) {
+        Ok(sha) => Ok(sha.trim().to_string()),
+        Err(GitQueryError::NotARepo) => Err(api::CodedError::new(
+            api::ErrorCode::UnsafeRepo,
+            "ledger is not inside a git repository",
+        )),
+        Err(GitQueryError::Failed(reason)) => Err(api::CodedError::new(
+            api::ErrorCode::Validation,
+            format!("source revision `{trimmed}` does not resolve: {reason}"),
+        )),
+    }
+}
+
+/// Re-insert targets absent live but present at a pinned git revision (🎯T105).
+pub fn restore_request(cwd: &str, req: crate::restore::RestoreRequest) -> ToolResult {
+    if let Err(e) = crate::restore::validate_request(&req) {
+        return coded_err(e.code, e.message);
+    }
+    let path = discover_path(cwd)?;
+    ensure_mutation_allowed(&path, cwd)?;
+    for (i, id) in req.ids.iter().enumerate() {
+        check_explicit_target_id(&format!("id[{i}]"), id).map_err(tool_err)?;
+    }
+    check_persisted_string("reason", req.reason.trim()).map_err(tool_err)?;
+
+    let repo = match store::git_toplevel_for_ledger(&path) {
+        Ok(r) => r,
+        Err(e) => {
+            return coded_err(
+                api::ErrorCode::UnsafeRepo,
+                format!("cannot locate git repository for ledger: {e}"),
+            );
+        }
+    };
+    let source_rev = match resolve_source_revision(&repo, &req.source_rev) {
+        Ok(r) => r,
+        Err(e) => return coded_err(e.code, e.message),
+    };
+    let source_text = match crate::commit_mode::read_ledger_at_ref(&repo, &source_rev, &path) {
+        Ok(t) => t,
+        Err(e) => {
+            return coded_err(
+                api::ErrorCode::NotFound,
+                format!("cannot read ledger at `{source_rev}`: {e}"),
+            );
+        }
+    };
+    let source_file = match store::parse_targets_content_strict(&source_text, &path) {
+        Ok(f) => f,
+        Err(e) => return coded_err(api::ErrorCode::Validation, e.to_string()),
+    };
+
+    const MAX_ATTEMPTS: usize = 8;
+    let mut last_conflict: Option<String> = None;
+    let report = {
+        let mut landed: Option<crate::restore::RestoreReport> = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            match store::with_locked_mutation(&path, |file| {
+                crate::restore::restore_absent(
+                    file,
+                    &source_file,
+                    &source_rev,
+                    &req.ids,
+                    &req.reason,
+                )
+            }) {
+                Ok(r) => {
+                    landed = Some(r);
+                    break;
+                }
+                Err(e) if mutation_error_retriable(&e) && attempt + 1 < MAX_ATTEMPTS => {
+                    last_conflict = Some(e.to_string());
+                    continue;
+                }
+                Err(e) => return Err(mutation_tool_err(e)),
+            }
+        }
+        match landed {
+            Some(r) => r,
+            None => {
+                return coded_err(
+                    api::ErrorCode::Conflict,
+                    last_conflict.unwrap_or_else(|| {
+                        "ledger changed under concurrent writers — retry".to_string()
+                    }),
+                );
+            }
+        }
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    for id in &report.restored {
+        let name = read_target_name(&path, id);
+        lines.push(format!("Restored 🎯{id}{name} from `{source_rev}`"));
+    }
+    lines.push(format!("Reason: {}", req.reason.trim()));
+    lines.push(format!("File: {}", path.display()));
+    mutation_text(&path, "restore", &report.restored, &report.restored, lines.join("\n"))
+}
+
 fn mutation_error_retriable(e: &store::MutationError) -> bool {
     matches!(
         e,
