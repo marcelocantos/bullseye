@@ -188,6 +188,11 @@ pub const CLI_ONLY: &[CliOnly] = &[
         feature_gated: true,
     },
     CliOnly {
+        subcommand: "repair-context-indent",
+        reason: "emergency surgical fix for unloadable ledgers where a `context: |` continuation line dedented and breaks YAML parse; not a general editor (🎯T106)",
+        feature_gated: false,
+    },
+    CliOnly {
         subcommand: "run-checks",
         reason: "executes commands declared in bullseye.yaml (🎯T85). The ledger is a \
                  checked-in file agents write, so running strings from it must be an act \

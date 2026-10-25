@@ -12,6 +12,7 @@ mod commit;
 mod commit_mode;
 mod commit_mode_concurrency;
 mod commit_mode_optin;
+mod context_indent_repair;
 mod convergence;
 mod core_api;
 mod git_guard;

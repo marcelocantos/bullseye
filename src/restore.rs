@@ -30,8 +30,6 @@ pub struct RestoreReport {
     pub restored: Vec<String>,
 }
 
-
-
 /// Resolve `rev` to a commit OID and refuse unrelated histories (🎯T105).
 ///
 /// Uses `--end-of-options` so untrusted revision strings cannot inject
@@ -83,12 +81,7 @@ pub fn resolve_pinned_source_revision(repo: &Path, rev: &str) -> Result<String, 
 
     match git_query_detailed(
         repo,
-        &[
-            "merge-base",
-            "--end-of-options",
-            &head,
-            &source_sha,
-        ],
+        &["merge-base", "--end-of-options", &head, &source_sha],
         GIT_QUERY_TIMEOUT,
     ) {
         Ok(base) if !base.trim().is_empty() => Ok(source_sha),
@@ -162,15 +155,11 @@ pub fn restore_absent(
         let Some(src) = source.targets.get(id) else {
             return Err(CodedError::new(
                 ErrorCode::NotFound,
-                format!(
-                    "🎯{id} is not present in the ledger at source revision `{source_rev}`"
-                ),
+                format!("🎯{id} is not present in the ledger at source revision `{source_rev}`"),
             ));
         };
         let mut target = src.clone();
-        let audit = format!(
-            "Restored from git revision {source_rev} on {today}: {reason}"
-        );
+        let audit = format!("Restored from git revision {source_rev} on {today}: {reason}");
         if target.context.is_empty() {
             target.context = audit;
         } else {
@@ -246,14 +235,8 @@ mod tests {
         live.targets.insert("T9".into(), sample_target("live"));
         let mut source = TargetsFile::default();
         source.targets.insert("T9".into(), sample_target("old"));
-        let err = restore_absent(
-            &mut live,
-            &source,
-            "deadbeef",
-            &["T9".into()],
-            "reason",
-        )
-        .expect_err("must refuse");
+        let err = restore_absent(&mut live, &source, "deadbeef", &["T9".into()], "reason")
+            .expect_err("must refuse");
         assert_eq!(err.code, ErrorCode::Conflict);
     }
 
@@ -261,14 +244,8 @@ mod tests {
     fn refuses_missing_in_source() {
         let mut live = TargetsFile::default();
         let source = TargetsFile::default();
-        let err = restore_absent(
-            &mut live,
-            &source,
-            "deadbeef",
-            &["T99".into()],
-            "reason",
-        )
-        .expect_err("must refuse");
+        let err = restore_absent(&mut live, &source, "deadbeef", &["T99".into()], "reason")
+            .expect_err("must refuse");
         assert_eq!(err.code, ErrorCode::NotFound);
     }
 }

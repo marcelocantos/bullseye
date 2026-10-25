@@ -1947,7 +1947,69 @@ pub fn restore_request(cwd: &str, req: crate::restore::RestoreRequest) -> ToolRe
     }
     lines.push(format!("Reason: {}", req.reason.trim()));
     lines.push(format!("File: {}", path.display()));
-    mutation_text(&path, "restore", &report.restored, &report.restored, lines.join("\n"))
+    mutation_text(
+        &path,
+        "restore",
+        &report.restored,
+        &report.restored,
+        lines.join("\n"),
+    )
+}
+
+pub fn context_indent_repair_request(
+    cwd: &str,
+    req: crate::context_indent_repair::ContextIndentRepairRequest,
+) -> ToolResult {
+    if let Err(e) = crate::context_indent_repair::validate_request(&req) {
+        return coded_err(e.code, e.message);
+    }
+    let path = discover_path(cwd)?;
+    ensure_mutation_allowed(&path, cwd)?;
+    check_persisted_string("reason", req.reason.trim()).map_err(tool_err)?;
+
+    let raw = std::fs::read_to_string(&path).map_err(|e| tool_err(e.to_string()))?;
+    let (repaired, lines, file) =
+        match crate::context_indent_repair::prepare_repaired_ledger(&raw, &req.pre_repair_sha256) {
+            Ok(v) => v,
+            Err(e) => return coded_err(e.code, e.message),
+        };
+    let post_hash = crate::context_indent_repair::sha256_hex(repaired.as_bytes());
+    let target_count = file.targets.len();
+
+    if req.dry_run {
+        let body = format!(
+            "Dry-run context-indent repair: would fix lines {:?}
+pre-repair sha256={}
+post-repair sha256={}
+reason={}
+targets={}",
+            lines,
+            req.pre_repair_sha256.trim(),
+            post_hash,
+            req.reason.trim(),
+            target_count,
+        );
+        return text_result(body);
+    }
+
+    store::with_locked_raw_ledger_write(&path, &req.pre_repair_sha256, &repaired)
+        .map_err(mutation_tool_err)?;
+
+    let body = format!(
+        "Repaired context literal indentation on lines {:?}
+pre-repair sha256={}
+post-repair sha256={}
+reason={}
+targets={}
+File: {}",
+        lines,
+        req.pre_repair_sha256.trim(),
+        post_hash,
+        req.reason.trim(),
+        target_count,
+        path.display(),
+    );
+    mutation_text(&path, "repair-context-indent", &[], &[], body)
 }
 
 fn mutation_error_retriable(e: &store::MutationError) -> bool {

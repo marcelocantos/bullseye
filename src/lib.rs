@@ -8,6 +8,7 @@ pub mod cache;
 pub mod cli;
 pub mod commit_mode;
 pub mod config;
+pub mod context_indent_repair;
 pub mod convergence;
 pub mod gatecheck;
 pub mod github;

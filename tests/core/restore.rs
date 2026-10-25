@@ -158,7 +158,10 @@ fn restore_preserves_live_metadata_and_unrelated_targets() {
 
     std::fs::write(&path, LIVE_AFTER_DROP).unwrap();
     git(tmp.path(), &["add", LEDGER_PATH]);
-    git(tmp.path(), &["commit", "-q", "-m", "drop T1216 and evolve live T1"]);
+    git(
+        tmp.path(),
+        &["commit", "-q", "-m", "drop T1216 and evolve live T1"],
+    );
 
     let live_before = load(&path).expect("live snapshot");
     assert_eq!(live_before.last_evaluated.as_deref(), Some("2026-10-24"));
@@ -178,7 +181,11 @@ fn restore_preserves_live_metadata_and_unrelated_targets() {
     let source_parsed = load(&snap).expect("parse source");
     let source_t1 = source_parsed.targets.get("T1").expect("source T1");
     assert_ne!(t1_before.name, source_t1.name, "fixture must differ on T1");
-    let source_t1216 = source_parsed.targets.get("T1216").expect("source T1216").clone();
+    let source_t1216 = source_parsed
+        .targets
+        .get("T1216")
+        .expect("source T1216")
+        .clone();
 
     let cwd = tmp.path().to_string_lossy().to_string();
     restore_request(

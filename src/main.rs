@@ -152,6 +152,7 @@ async fn main() -> SdkResult<()> {
             "commit" => cli_exit(cli_commit(&rest[1..])),
             "apply" => cli_exit(cli_apply(&rest[1..])),
             "restore" => cli_exit(cli_restore(&rest[1..])),
+            "repair-context-indent" => cli_exit(cli_repair_context_indent(&rest[1..])),
             "plan-checks" => cli_exit(cli_plan_checks(&rest[1..])),
             "run-checks" => process::exit(cli_run_checks(&rest[1..])),
             "convergence" => cli_exit(cli_convergence(&rest[1..])),
@@ -320,6 +321,9 @@ fn print_help() {
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
     println!("    bullseye apply [--cwd DIR] (-f FILE | - | --id ID --set k=v ...)");
     println!("    bullseye restore --from REV --id ID[,ID] --reason TEXT [--cwd DIR]");
+    println!(
+        "    bullseye repair-context-indent --pre-repair-sha256 HEX --reason TEXT [--cwd DIR] [--dry-run]"
+    );
     println!("                               The single write verb — see bullseye apply --help");
     println!("    bullseye commit --op OP [flags]   # sugar over apply; see commit --help");
     println!("    bullseye plan-checks --id ID [--cwd DIR]");
@@ -1131,7 +1135,6 @@ fn fragment_from_sets(sets: &[String]) -> Result<bullseye::apply::Fragment, Stri
     serde_yaml_ng::from_value(Value::Mapping(map)).map_err(|e| e.to_string())
 }
 
-
 const RESTORE_FLAGS: &[(&str, bool)] = &[
     ("--cwd", true),
     ("--from", true),
@@ -1157,8 +1160,8 @@ fn cli_restore(args: &[String]) -> Result<String, String> {
         .ok_or_else(|| "restore requires --from REV (source git revision)".to_string())?;
     let id_raw = flag_value(args, "--id")
         .ok_or_else(|| "restore requires --id ID or ID,ID,...".to_string())?;
-    let reason = flag_value(args, "--reason")
-        .ok_or_else(|| "restore requires --reason TEXT".to_string())?;
+    let reason =
+        flag_value(args, "--reason").ok_or_else(|| "restore requires --reason TEXT".to_string())?;
     let ids: Vec<String> = id_raw
         .split(',')
         .map(|p| p.trim().to_string())
@@ -1173,6 +1176,44 @@ fn cli_restore(args: &[String]) -> Result<String, String> {
         reason,
     };
     tool_result_text(bullseye::handler::restore_request(&default_cwd(args), req))
+}
+
+const REPAIR_CONTEXT_INDENT_FLAGS: &[(&str, bool)] = &[
+    ("--cwd", true),
+    ("--pre-repair-sha256", true),
+    ("--reason", true),
+    ("--dry-run", false),
+    ("--help", false),
+];
+
+fn repair_context_indent_help() -> String {
+    "bullseye repair-context-indent --pre-repair-sha256 HEX --reason TEXT [--cwd DIR] [--dry-run]
+     Re-indent dedented lines inside `context: |` literal blocks so a unloadable
+     bullseye.yaml parses again without a whole-file rewrite. Records pre/post
+     file SHA256 and refuses when the on-disk hash does not match --pre-repair-sha256.
+"
+    .to_string()
+}
+
+fn cli_repair_context_indent(args: &[String]) -> Result<String, String> {
+    if has_flag(args, "--help") || args.is_empty() {
+        return Ok(repair_context_indent_help());
+    }
+    reject_unknown_flags(args, REPAIR_CONTEXT_INDENT_FLAGS, "repair-context-indent")?;
+    let pre = flag_value(args, "--pre-repair-sha256")
+        .ok_or_else(|| "repair-context-indent requires --pre-repair-sha256 HEX".to_string())?;
+    let reason = flag_value(args, "--reason")
+        .ok_or_else(|| "repair-context-indent requires --reason TEXT".to_string())?;
+    let dry_run = has_flag(args, "--dry-run");
+    let req = bullseye::context_indent_repair::ContextIndentRepairRequest {
+        pre_repair_sha256: pre,
+        reason,
+        dry_run,
+    };
+    tool_result_text(bullseye::handler::context_indent_repair_request(
+        &default_cwd(args),
+        req,
+    ))
 }
 
 fn cli_apply(args: &[String]) -> Result<String, String> {

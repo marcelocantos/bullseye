@@ -475,7 +475,10 @@ fn finish_parsed_file(mut file: TargetsFile, path: &Path) -> Result<TargetsFile,
 
 /// Strict whole-file deserialize — used on mutation paths that must not
 /// silently drop broken target blocks (🎯T82 / 🎯T99).
-pub(crate) fn parse_targets_content_strict(content: &str, path: &Path) -> Result<TargetsFile, LoadError> {
+pub(crate) fn parse_targets_content_strict(
+    content: &str,
+    path: &Path,
+) -> Result<TargetsFile, LoadError> {
     probe_schema_version(content, path)?;
     let file: TargetsFile = serde_yaml_ng::from_str(content)
         .map_err(|e| LoadError::Parse(format!("failed to parse {}: {e}", path.display())))?;
@@ -1103,6 +1106,46 @@ fn persist_locked_targets(path: &Path, file: &TargetsFile) -> Result<(), Mutatio
 pub fn with_locked_write(path: &Path, file: &TargetsFile) -> Result<(), MutationError> {
     let _lock = acquire_lock(path)?;
     persist_locked_targets(path, file)?;
+    Ok(())
+}
+
+/// Write raw ledger bytes under the project lock when parse fails until a
+/// surgical text fix lands (🎯T106). Re-checks `expected_pre_sha256` inside
+/// the critical section so concurrent writers cannot race the repair.
+pub fn with_locked_raw_ledger_write(
+    path: &Path,
+    expected_pre_sha256: &str,
+    new_content: &str,
+) -> Result<(), MutationError> {
+    let _lock = acquire_lock(path)?;
+    let current = read_ledger_text(path).map_err(MutationError::Load)?;
+    let actual = crate::context_indent_repair::sha256_hex(current.as_bytes());
+    if actual != expected_pre_sha256.trim().to_lowercase() {
+        return Err(MutationError::Save(format!(
+            "pre-repair SHA256 changed under lock (expected {}, found {})",
+            expected_pre_sha256, actual
+        )));
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut tmp = NamedTempFile::new_in(parent)
+        .map_err(|e| MutationError::Save(format!("failed to create tempfile: {e}")))?;
+    tmp.as_file_mut()
+        .write_all(new_content.as_bytes())
+        .map_err(|e| MutationError::Save(format!("failed to write tempfile: {e}")))?;
+    tmp.as_file_mut()
+        .sync_all()
+        .map_err(|e| MutationError::Save(format!("failed to fsync tempfile: {e}")))?;
+    tmp.persist(path).map_err(|e| {
+        MutationError::Save(format!(
+            "failed to rename tempfile to {}: {}",
+            path.display(),
+            e.error
+        ))
+    })?;
+    evict_cache(path);
     Ok(())
 }
 
