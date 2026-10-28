@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Pre-push owner gate (think 🎯T8). Executes `make gate` and refuses the push
-# on a non-zero exit. The hook runs the oracle; it never reads a "tests
-# passed" claim. Agents must not pass --no-verify; the owner's emergency
-# bypass is `git push --no-verify`.
+# Pre-push owner gate (think 🎯T8). The oracle is `make gate`, which on
+# success writes .git/gate-attestation naming the tree it measured
+# (scripts/gate-attest.sh). This hook does not re-run the gate: git opens the
+# SSH connection before the hook runs, and GitHub closes an idle connection
+# before a slow gate finishes. It runs a fast sanity check and refuses the
+# push unless a clean attestation names the tree of each pushed tip — only
+# the tip; the commits behind it are not checked. Agents must not pass
+# --no-verify; the owner's emergency bypass is `git push --no-verify`.
 #
 # Wired by `make hooks` (core.hooksPath=scripts/hooks). That setting makes git
 # read THIS directory instead of .git/hooks, so anything that used to live
@@ -24,6 +28,7 @@ cat > "$refs"
 
 zero_sha="0000000000000000000000000000000000000000"
 updates=0
+tips=""
 while read -r local_ref local_sha remote_ref remote_sha || [[ -n "${local_ref:-}" ]]; do
 	[[ -z "${local_ref:-}" ]] && continue
 	if [[ "$local_sha" == "$zero_sha" ]]; then
@@ -31,6 +36,7 @@ while read -r local_ref local_sha remote_ref remote_sha || [[ -n "${local_ref:-}
 		continue
 	fi
 	updates=$((updates + 1))
+	tips="$tips $local_sha"
 	echo "pre-push: $local_ref -> $remote/${remote_ref#refs/heads/} (${local_sha:0:7})"
 done < "$refs"
 
@@ -46,16 +52,30 @@ nogit() {
 		-u GIT_QUARANTINE_PATH -u GIT_PUSH_CERT_NONCE -u GIT_REFLOG_ACTION "$@"
 }
 
+refuse() {
+	echo "pre-push: $1 — push to $remote refused." >&2
+	echo "pre-push: --no-verify is the owner's bypass, not an agent's." >&2
+	exit 1
+}
+
 if [[ "$updates" -gt 0 ]]; then
 	cd "$(nogit git rev-parse --show-toplevel)"
-	echo "pre-push: running make gate"
-	if ! nogit make gate; then
-		echo "" >&2
-		echo "pre-push: make gate FAILED — push to $remote refused." >&2
-		echo "pre-push: fix the failure and push again. --no-verify is the owner's bypass, not an agent's." >&2
-		exit 1
-	fi
-	echo "pre-push: gate green — pushing"
+	nogit cargo fmt --check >/dev/null 2>&1 || refuse "cargo fmt --check failed"
+	echo "pre-push: ✓ fmt"
+
+	att="$(nogit git rev-parse --absolute-git-dir)/gate-attestation"
+	[[ -f "$att" ]] || refuse "no gate attestation in this clone; run make gate, then push"
+	tree="$(sed -n 's/^tree=//p' "$att")"
+	dirty="$(sed -n 's/^dirty=//p' "$att")"
+	at="$(sed -n 's/^at=//p' "$att")"
+	[[ "${dirty:-1}" == 0 ]] ||
+		refuse "the last make gate ($at) ran with ${dirty:-?} uncommitted change(s); commit, run make gate, then push"
+	for sha in $tips; do
+		pushed="$(nogit git rev-parse "$sha^{tree}")"
+		[[ "$pushed" == "$tree" ]] ||
+			refuse "make gate last attested tree ${tree:0:12} ($at), but ${sha:0:7} has tree ${pushed:0:12}; run make gate on it, then push"
+	done
+	echo "pre-push: ✓ gate attestation covers the pushed tree ($at)"
 fi
 
 # git always passes <remote name> <remote url>; a bare `git hook run pre-push`

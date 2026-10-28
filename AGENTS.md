@@ -11,7 +11,7 @@ cargo test <name>    # Run a single test by name substring
 cargo test --lib     # Unit tests only
 cargo clippy         # Lint
 cargo fmt --check    # Check formatting
-make gate            # fmt + clippy + tests + declared checks (pre-push)
+make gate            # fmt + clippy + tests + declared checks; attests the tree for pre-push
 make tla             # TLC on formal/BullseyeConvergence (~13–22 min)
 make hooks           # core.hooksPath=scripts/hooks
 
@@ -134,8 +134,12 @@ so the flock + CAS + `content_hash` machinery stays load-bearing.
 Committed to master. Work lands as ordinary commits on `master` — no
 pull requests, no merge commits, no CI gate.
 
-`make gate` is the push oracle (`scripts/hooks/pre-push`): fmt, clippy,
-tests, and declared ledger checks. `make bullseye` is that plus the
+`make gate` is the push oracle: fmt, clippy, tests, and declared ledger
+checks. On success it writes `.git/gate-attestation` naming the tree it
+measured (`scripts/gate-attest.sh`). `scripts/hooks/pre-push` does not
+re-run the gate; it runs `cargo fmt --check` and refuses a push unless a
+clean attestation names the tree of each pushed tip. So: commit, run
+`make gate`, push. `make bullseye` is that plus the
 in-repo TLA+ Convergence check (`./formal/check`, ~13–22 min) and the
 advisory dirty-tree report. Nothing about "green" is expressible only
 on a server. Each step prints its diagnostic on failure rather than a

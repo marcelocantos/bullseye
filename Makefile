@@ -20,9 +20,15 @@
 #   5. TLA+       (~13–22 min: mutants first, then the faithful config)
 #   6. dirty tree (warning only — leftover WIP is the normal /cv state)
 #
-# Steps 1–4 are `gate` — the oracle scripts/hooks/pre-push runs before
-# every push. TLC stays on `bullseye` / `tla`, not on the push hook.
+# Steps 1–4 are `gate`, the push oracle. On success it attests the tree it
+# measured (scripts/gate-attest.sh); scripts/hooks/pre-push checks that
+# attestation rather than re-running the gate. TLC stays on `bullseye` /
+# `tla`, not on the push path. `gate-checks` runs the same steps without
+# attesting.
 gate:
+	@scripts/gate-attest.sh $(MAKE) --no-print-directory gate-checks
+
+gate-checks:
 	@log=$$(mktemp); \
 	  if cargo fmt --check >"$$log" 2>&1; then echo "✓ fmt"; \
 	  else echo "✗ fmt"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
@@ -114,4 +120,4 @@ clean:
 	cargo clean
 	rm -rf dist
 
-.PHONY: gate hooks tla bullseye test check fmt lint build release release-dist release-tap reachability clean
+.PHONY: gate gate-checks hooks tla bullseye test check fmt lint build release release-dist release-tap reachability clean
