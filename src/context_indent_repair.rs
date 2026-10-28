@@ -160,17 +160,18 @@ pub fn repair_dedented_context_literal_lines(raw: &str) -> (String, Vec<usize>) 
                 continue;
             }
 
-            if let Some(expected) = content_indent {
-                if indent < expected && !line_body.trim().is_empty() {
-                    let pad = " ".repeat(expected - indent);
-                    repaired_lines.push(line_no);
-                    out.push_str(&pad);
-                    out.push_str(line_body);
-                    if line.ends_with('\n') {
-                        out.push('\n');
-                    }
-                    continue;
+            if let Some(expected) = content_indent
+                && indent < expected
+                && !line_body.trim().is_empty()
+            {
+                let pad = " ".repeat(expected - indent);
+                repaired_lines.push(line_no);
+                out.push_str(&pad);
+                out.push_str(line_body);
+                if line.ends_with('\n') {
+                    out.push('\n');
                 }
+                continue;
             }
         }
 
