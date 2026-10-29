@@ -6,11 +6,12 @@
 use std::process::Command;
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use bullseye::commit_mode::{DEFAULT_REF, LEDGER_PATH, ref_tip, set_persist_override_for_tests};
 use bullseye::handler::handle_retire;
 use bullseye::schema::Status;
-use bullseye::store::{load, with_locked_mutation};
+use bullseye::store::{MutationError, load, with_locked_mutation};
 use bullseye::tools::RetireTool;
 
 struct PersistOverrideGuard;
@@ -25,6 +26,27 @@ impl PersistOverrideGuard {
 impl Drop for PersistOverrideGuard {
     fn drop(&mut self) {
         set_persist_override_for_tests(None);
+    }
+}
+
+/// How long one writer may keep retrying a lock timeout (🎯T109). A
+/// `LockTimeout` means the writer never got the lock, so nothing was
+/// written and retrying is what a real caller does. Under heavy host load
+/// the serialized writes in these tests can outlast one 5 s `LOCK_WAIT`
+/// (eight writes at load ~65 did). These oracles are about lost updates,
+/// not lock latency; this bound still fails a writer that is truly starved.
+const CONTENDED_WRITE_BUDGET: Duration = Duration::from_secs(120);
+
+fn retry_lock_timeouts<T, E>(
+    mut write: impl FnMut() -> Result<T, E>,
+    is_lock_timeout: impl Fn(&E) -> bool,
+) -> Result<T, E> {
+    let deadline = Instant::now() + CONTENDED_WRITE_BUDGET;
+    loop {
+        match write() {
+            Err(e) if is_lock_timeout(&e) && Instant::now() < deadline => continue,
+            result => return result,
+        }
     }
 }
 
@@ -137,11 +159,16 @@ fn concurrent_commit_mode_tag_writes_all_reach_ref_tip() {
                 set_persist_override_for_tests(Some(true));
                 let marker = format!("commit-mode-tag-{i}");
                 barrier.wait();
-                with_locked_mutation(&path, |file| {
-                    let t = file.targets.get_mut("T1").expect("T1");
-                    t.tags.push(marker.clone());
-                    Ok::<(), String>(())
-                })
+                retry_lock_timeouts(
+                    || {
+                        with_locked_mutation(&path, |file| {
+                            let t = file.targets.get_mut("T1").expect("T1");
+                            t.tags.push(marker.clone());
+                            Ok::<(), String>(())
+                        })
+                    },
+                    |e| matches!(e, MutationError::LockTimeout { .. }),
+                )
                 .expect("commit-mode mutation must succeed under contention");
                 let commit_sha = ref_tip(&repo, DEFAULT_REF).expect("tip after write");
                 landed
@@ -241,13 +268,20 @@ fn concurrent_commit_mode_retire_achievements_all_land_on_ref() {
             thread::spawn(move || {
                 set_persist_override_for_tests(Some(true));
                 barrier.wait();
-                handle_retire(RetireTool {
-                    cwd,
-                    id: id.clone(),
-                    attestation: format!("commit-mode retire-cas T{n}"),
-                    actual_cost: None,
-                    base: None,
-                })
+                // The handler's error is a rendered MCP error, so the lock
+                // timeout is recognised by MutationError's Display text.
+                retry_lock_timeouts(
+                    || {
+                        handle_retire(RetireTool {
+                            cwd: cwd.clone(),
+                            id: id.clone(),
+                            attestation: format!("commit-mode retire-cas T{n}"),
+                            actual_cost: None,
+                            base: None,
+                        })
+                    },
+                    |e| e.to_string().contains("waiting for exclusive lock"),
+                )
                 .expect("retire should succeed under commit-mode contention");
                 let commit_sha = ref_tip(&repo, DEFAULT_REF).expect("tip after retire");
                 landed.lock().expect("landed lock").push(LandedWrite {
