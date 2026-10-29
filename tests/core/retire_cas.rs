@@ -4,18 +4,12 @@
 //! 🎯T96 — retire/achieve must not report ok:true on a lost update under
 //! concurrent ledger writers.
 //!
-//! 🎯T102 — On 2026-10-22 the owner found test-shaped `id-history` JSON under
-//! the real `~/.local/share/bullseye/` because spawned worker threads did not
-//! inherit the parent thread's `set_external_root_override`. Prevention is
-//! tested by redirecting the process default (`BULLSEYE_DATA_DIR`) to a
-//! sentinel tempdir and asserting it stays empty after concurrent retire.
+//! 🎯T102's external-root sentinel lives in its own binary,
+//! `tests/external_root_sentinel_test.rs` (🎯T110).
 
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use super::support::{
-    ScopedEnvOverride, assert_directory_tree_empty, t28_git, t28_git_init, t102_sentinel_env_lock,
-};
 use bullseye::config::{self, Location};
 use bullseye::handler::{handle_commit, handle_retire};
 use bullseye::schema::Status;
@@ -95,55 +89,6 @@ fn concurrent_retire_achievements_all_land_on_disk() {
             "🎯{id} must be achieved on disk after concurrent retire"
         );
     }
-}
-
-#[test]
-fn concurrent_retire_does_not_touch_production_external_root_sentinel() {
-    let _env_guard = t102_sentinel_env_lock();
-    let sentinel = tempfile::tempdir().unwrap();
-    let _data_dir = ScopedEnvOverride::set("BULLSEYE_DATA_DIR", sentinel.path().to_str().unwrap());
-
-    let tmp = tempfile::tempdir().unwrap();
-    t28_git_init(tmp.path());
-    let path = tmp.path().join("bullseye.yaml");
-    seed_three_targets(&path);
-    t28_git(tmp.path(), &["add", "bullseye.yaml"]);
-    t28_git(tmp.path(), &["commit", "-q", "-m", "seed"]);
-
-    let cwd = tmp.path().to_string_lossy().to_string();
-    let shadow_tmp = tempfile::tempdir().unwrap();
-    let shadow_root = shadow_tmp.path().to_path_buf();
-    config::set_external_root_override(Some(shadow_root.clone()));
-
-    const WRITERS: usize = 3;
-    let barrier = Arc::new(Barrier::new(WRITERS));
-    let handles: Vec<_> = (1..=WRITERS)
-        .map(|n| {
-            let cwd = cwd.clone();
-            let barrier = Arc::clone(&barrier);
-            let shadow_root = shadow_root.clone();
-            let id = format!("T{n}");
-            thread::spawn(move || {
-                config::set_external_root_override(Some(shadow_root));
-                barrier.wait();
-                handle_retire(RetireTool {
-                    cwd,
-                    id,
-                    attestation: format!("oracle retire-cas sentinel T{n}"),
-                    actual_cost: None,
-                    base: None,
-                })
-                .expect("retire should succeed under contention");
-            })
-        })
-        .collect();
-
-    for h in handles {
-        h.join().expect("thread joins");
-    }
-
-    assert_directory_tree_empty(sentinel.path());
-    config::set_external_root_override(None);
 }
 
 #[test]
