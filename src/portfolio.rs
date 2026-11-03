@@ -117,6 +117,8 @@ pub enum RepoWarningKind {
     VersionMismatch,
     /// Any other load failure (parse error, I/O error).
     LoadError,
+    /// Entry intentionally excluded from recursive discovery.
+    DiscoverySkipped,
 }
 
 /// Result of scanning a workspace root for repos with targets.
@@ -184,17 +186,29 @@ pub fn discover_repos(root: &Path, max_depth: usize, momentum: &[Momentum]) -> P
             && let Ok(entries) = std::fs::read_dir(&dir)
         {
             for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with('.')
+                    || matches!(name_str.as_ref(), "node_modules" | "target" | "vendor")
+                {
+                    continue;
+                }
                 let path = entry.path();
-                if path.is_dir() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if !name_str.starts_with('.')
-                        && name_str != "node_modules"
-                        && name_str != "target"
-                        && name_str != "vendor"
-                    {
-                        dirs.push((path, depth + 1));
-                    }
+                // DirEntry::file_type does not follow symlinks. Path::is_dir
+                // does, which can leave the workspace and block on cloud
+                // hydration before a portfolio response can be returned.
+                match entry.file_type() {
+                    Ok(kind) if kind.is_symlink() => scan.warnings.push(RepoWarning {
+                        repo: repo_name_from_path(&path),
+                        path: path.clone(),
+                        kind: RepoWarningKind::DiscoverySkipped,
+                        message: format!(
+                            "symlink not followed: {}; scan it explicitly with --root if needed",
+                            path.display()
+                        ),
+                    }),
+                    Ok(kind) if kind.is_dir() => dirs.push((path, depth + 1)),
+                    _ => {}
                 }
             }
         }
@@ -468,7 +482,19 @@ pub fn format_portfolio(scan: &PortfolioScan) -> String {
             .filter(|w| w.kind == RepoWarningKind::LoadError)
             .collect();
 
+        let skipped: Vec<&RepoWarning> = warnings
+            .iter()
+            .filter(|w| w.kind == RepoWarningKind::DiscoverySkipped)
+            .collect();
+
         out.push_str("## ⚠ Warnings\n\n");
+        if !skipped.is_empty() {
+            out.push_str("**Discovery exclusions — portfolio coverage is partial:**\n\n");
+            for w in &skipped {
+                out.push_str(&format!("- {}\n", w.message));
+            }
+            out.push('\n');
+        }
         if !version_mismatches.is_empty() {
             out.push_str("**Schema version mismatch — upgrade bullseye to read these repos:**\n\n");
             for w in &version_mismatches {
