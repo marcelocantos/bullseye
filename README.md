@@ -6,8 +6,8 @@ frontier computation.
 
 Targets live in `bullseye.yaml` (source of truth). Each repo chooses —
 once, at `bullseye_init` time — whether its `bullseye.yaml` lives
-**in-repo** (committed alongside the code) or **external** (in a shadow
-tree under `~/.local/share/bullseye/` mirroring the cwd's absolute path).
+**in-repo** (committed alongside the code) or **external** (under `~/.local/share/bullseye/`, keyed by the repo's
+`origin` remote, or by the cwd's absolute path when there is none).
 Discovery checks both locations and uses whichever already exists. See
 [Storage locations](#storage-locations) below.
 
@@ -120,11 +120,17 @@ create may use a server `default_location` when per-call `location` is omitted.
 | Location | Where `bullseye.yaml` lives | Use when |
 |----------|-----------------------------|----------|
 | `in_repo` | Inside the repo, discovered by walking up from `cwd`. | You own the repo and the team has adopted bullseye. |
-| `external` | Shadow tree under `~/.local/share/bullseye/` mirroring the cwd's absolute path. Discovery walks up the shadow tree the same way it walks up the real tree. | Repo is read-only to you (corporate repos where bullseye isn't adopted), or targets are personal to you. |
+| `external` | Under `~/.local/share/bullseye/`: `by-remote/<host>/<owner>/<repo>/` when the checkout has a parseable `origin`, otherwise a shadow tree mirroring the cwd's absolute path. Discovery walks up either tree the same way it walks up the real one. | Repo is read-only to you (corporate repos where bullseye isn't adopted), or targets are personal to you. |
 
-External mode is purely path-driven — no assumptions about git remotes
-or `host/org/repo` layouts — so monorepos, non-git directories, and
-unconventional workspaces all resolve identically.
+External ledgers are keyed by the `origin` remote first, so every clone
+and worktree of a repo shares one ledger wherever it is checked out
+(🎯T113). The remote key is lowercased with `.git` stripped, and a
+subdirectory of the work tree keeps its own ledger under the same key, so
+monorepo subprojects stay separate. A fork's `origin` is the fork, so a
+fork has its own ledger. Checkouts with no git repo, no `origin`, or an
+unparseable URL fall back to the path-keyed shadow tree. A path-keyed
+ledger at or below a repo's root moves to the remote key the first time
+it is discovered; one above the root covers several repos and stays put.
 
 **Discovery is automatic after init.** Every target-operating tool calls
 `discover_anywhere(cwd)`, which checks the in-repo walk-up first and

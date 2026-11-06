@@ -33,7 +33,8 @@ project states (targets) as testable properties, with dependency tracking,
 frontier computation, and claim lifecycle (achieve / defer / reopen).
 
 Targets live in `bullseye.yaml` (YAML source of truth). Discovery walks
-up from `cwd` (in-repo) and the external shadow tree.
+up from `cwd` (in-repo), then the external tree keyed by the `origin`
+remote (`repo_identity.rs`), then the path-keyed shadow tree.
 
 **Core agent surface** (prefer): `bullseye_open`, `bullseye_query`,
 `bullseye_commit`, `bullseye_plan_checks`. Contract: `docs/api-v1-core.md`.
@@ -58,6 +59,7 @@ convergence.rs         — Convergence checks and report
 gatecheck.rs           — Cited gate/attestation validation at achieve time
 github.rs / github_issues.rs — GitHub issue integrations
 bounded.rs / cache.rs / repo_guard.rs — Bounds, caching and repo guardrails
+repo_identity.rs       — Remote-derived repo identity for external ledgers
 import.rs / version.rs — Markdown import and version support
 ```
 

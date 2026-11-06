@@ -16,6 +16,7 @@ use crate::commit_mode::{
     PERSIST_CONFLICT_ATTEMPTS, WriteError, integration_ref_name, persist_enabled,
 };
 use crate::config::{Location, external_root};
+use crate::repo_identity::{self, RepoIdentity};
 use sha2::{Digest, Sha256};
 
 use crate::schema::{
@@ -331,16 +332,34 @@ pub fn shadow_path(root: &Path, cwd: &Path) -> PathBuf {
     shadow
 }
 
-/// External (shadow-tree) discovery: walk up from `shadow_path(root, cwd)`
-/// the same way [`discover`] walks up the real tree. Stops at `root`.
-pub fn discover_external(root: &Path, cwd: &Path) -> Option<PathBuf> {
-    let mut dir = shadow_path(root, cwd);
+/// Subdirectory of the external root that holds repo-keyed ledgers
+/// (🎯T113), kept apart from the path-keyed tree so the two can never
+/// alias each other.
+pub const REPO_KEYED_SUBDIR: &str = "by-remote";
+
+/// Root of the repo-keyed shadow for `ident`:
+/// `<root>/by-remote/<host>/<owner>/<repo>`.
+pub fn repo_shadow_root(root: &Path, ident: &RepoIdentity) -> PathBuf {
+    let mut dir = root.join(REPO_KEYED_SUBDIR);
+    dir.extend(&ident.segments);
+    dir
+}
+
+/// Shadow directory for the queried directory itself: the repo root
+/// plus its prefix inside the work tree.
+pub fn repo_shadow_dir(root: &Path, ident: &RepoIdentity) -> PathBuf {
+    repo_shadow_root(root, ident).join(&ident.prefix)
+}
+
+/// Walk up from `start` looking for `bullseye.yaml`, never above `stop`.
+fn walk_up_within(start: PathBuf, stop: &Path) -> Option<PathBuf> {
+    let mut dir = start;
     for _ in 0..MAX_DISCOVER_DEPTH {
         let path = dir.join("bullseye.yaml");
         if path.is_file() {
             return Some(path);
         }
-        if dir == root || !dir.starts_with(root) {
+        if dir == stop || !dir.starts_with(stop) {
             return None;
         }
         if !dir.pop() {
@@ -348,6 +367,112 @@ pub fn discover_external(root: &Path, cwd: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// External discovery. Checkouts with a parseable `origin` look first
+/// in the repo-keyed tree, so every clone and worktree of a remote
+/// shares one ledger (🎯T113); then, for everyone, in the path-keyed
+/// shadow tree. A path-keyed ledger belonging to a single repo is moved
+/// to the repo-keyed location when found (see [`adopt_path_keyed`]).
+pub fn discover_external(root: &Path, cwd: &Path) -> Option<PathBuf> {
+    let ident = repo_identity::identify(cwd);
+    if let Some(ident) = &ident
+        && let Some(found) =
+            walk_up_within(repo_shadow_dir(root, ident), &repo_shadow_root(root, ident))
+    {
+        return Some(found);
+    }
+    let legacy = walk_up_within(shadow_path(root, cwd), root)?;
+    match &ident {
+        Some(ident) => Some(adopt_path_keyed(root, ident, cwd, legacy)),
+        None => Some(legacy),
+    }
+}
+
+/// Move a path-keyed ledger to its repo-keyed home, returning wherever
+/// the ledger now lives.
+///
+/// Only a ledger at or below the checkout's root moves. One above it
+/// (say, a single ledger for `~/work`) covers several repos and has no
+/// single remote, so it stays where it is.
+///
+/// Any failure leaves the ledger in place and returns its old path:
+/// discovery must not fail because a tidy-up did.
+fn adopt_path_keyed(root: &Path, ident: &RepoIdentity, cwd: &Path, legacy: PathBuf) -> PathBuf {
+    let Some(dest) = adoption_destination(root, ident, cwd, &legacy) else {
+        return legacy;
+    };
+    match move_ledger(root, &legacy, &dest) {
+        Ok(()) => dest,
+        Err(e) => {
+            eprintln!(
+                "bullseye: keeping path-keyed ledger {} (could not move to {}): {e}",
+                legacy.display(),
+                dest.display()
+            );
+            legacy
+        }
+    }
+}
+
+fn adoption_destination(
+    root: &Path,
+    ident: &RepoIdentity,
+    cwd: &Path,
+    legacy: &Path,
+) -> Option<PathBuf> {
+    let legacy_dir = legacy.parent()?;
+    // Legacy files were keyed on the cwd exactly as callers passed it,
+    // which may differ from git's resolved toplevel (`/tmp` versus
+    // `/private/tmp` on macOS), so try both spellings of the root.
+    let mut cwd_top = cwd.to_path_buf();
+    let depth = ident.prefix.components().count();
+    for _ in 0..depth {
+        if !cwd_top.pop() {
+            break;
+        }
+    }
+    for top in [&ident.toplevel, &cwd_top] {
+        if let Ok(rel) = legacy_dir.strip_prefix(shadow_path(root, top)) {
+            return Some(
+                repo_shadow_root(root, ident)
+                    .join(rel)
+                    .join("bullseye.yaml"),
+            );
+        }
+    }
+    None
+}
+
+/// Move `from` to `to` under `from`'s ledger lock, so the move cannot
+/// interleave with a mutation of the old file. Hard link then unlink
+/// rather than rename: the link fails if `to` already exists, which
+/// rename would silently clobber when two clones migrate at once.
+fn move_ledger(root: &Path, from: &Path, to: &Path) -> Result<(), String> {
+    let _lock = acquire_lock(from).map_err(|e| e.to_string())?;
+    if !from.is_file() {
+        // Another process moved it while we waited for the lock.
+        return if to.is_file() {
+            Ok(())
+        } else {
+            Err("ledger vanished during migration".into())
+        };
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    std::fs::hard_link(from, to).map_err(|e| format!("link: {e}"))?;
+    std::fs::remove_file(from).map_err(|e| format!("remove old copy: {e}"))?;
+    // Drop the now-empty path-keyed directories; `remove_dir` refuses
+    // non-empty ones, which ends the climb.
+    let mut dir = from.parent().map(Path::to_path_buf);
+    while let Some(d) = dir {
+        if d == root || !d.starts_with(root) || std::fs::remove_dir(&d).is_err() {
+            break;
+        }
+        dir = d.parent().map(Path::to_path_buf);
+    }
+    Ok(())
 }
 
 /// Per-repo discovery (v0.16.0+). Checks both possible locations and
@@ -375,7 +500,13 @@ pub fn discover_anywhere(cwd: &Path) -> Option<PathBuf> {
 pub fn target_path_for_new(cwd: &Path, location: Location) -> PathBuf {
     match location {
         Location::InRepo => cwd.join("bullseye.yaml"),
-        Location::External => shadow_path(&external_root(), cwd).join("bullseye.yaml"),
+        Location::External => {
+            let root = external_root();
+            match repo_identity::identify(cwd) {
+                Some(ident) => repo_shadow_dir(&root, &ident).join("bullseye.yaml"),
+                None => shadow_path(&root, cwd).join("bullseye.yaml"),
+            }
+        }
     }
 }
 

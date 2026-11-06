@@ -100,16 +100,22 @@ targets file is discovered depends on the configured storage mode.
 Each repo’s ledger lives in one of two places on disk:
 
 - `in_repo` — inside the project. Discovery walks up from `cwd`.
-- `external` — in a shadow tree under `~/.local/share/bullseye/`
-  mirroring the absolute `cwd`, so
+- `external` — under `~/.local/share/bullseye/`, keyed by the
+  checkout's `origin` remote (🎯T113): a clone of
+  `git@github.com:acme/api.git` maps to
+  `~/.local/share/bullseye/by-remote/github.com/acme/api/bullseye.yaml`
+  from any clone or worktree. Without a parseable `origin` it falls back
+  to a shadow tree mirroring the absolute `cwd`, so
   `/Users/alice/work/acme/api` maps to
   `~/.local/share/bullseye/Users/alice/work/acme/api/bullseye.yaml`.
-  Path-driven — no git-remote or layout assumptions.
 
 Every read/mutate tool calls `discover_anywhere(cwd)`, which:
 
 1. Walks up from `cwd` for an in-repo `bullseye.yaml`.
-2. Else walks the external shadow tree under the data root.
+2. Else walks the repo-keyed tree, from the cwd's prefix inside the
+   work tree up to the repo's root.
+3. Else walks the path-keyed shadow tree. A hit at or below the repo's
+   root is moved to the repo key; one above it is used in place.
 
 **Collision policy (v0.16):** if both exist (edge case), **in-repo wins**.
 An explicit committed file is always authoritative. Discovery does **not**

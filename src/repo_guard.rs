@@ -302,46 +302,13 @@ fn suggested_canonical_path(dir: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    let (host, owner_repo) = parse_remote_url(url)?;
-    let (owner, repo) = owner_repo.split_once('/')?;
-    if owner.is_empty() || repo.is_empty() {
-        return None;
-    }
-    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    let segments = crate::repo_identity::remote_segments(url)?;
 
     let home = std::env::var("HOME").ok()?;
     let mut path = PathBuf::from(home);
     path.push("work");
-    path.push(host);
-    path.push(owner);
-    path.push(repo);
+    path.extend(&segments);
     Some(path)
-}
-
-/// Parse a git remote URL into `(host, "owner/repo")` so the canonical
-/// path can be assembled under `~/work/`. Returns `None` for shapes we
-/// don't recognise — callers fall back to omitting the suggestion.
-fn parse_remote_url(url: &str) -> Option<(&str, &str)> {
-    // SSH form: `git@host:owner/repo[.git]`.
-    if let Some(rest) = url.strip_prefix("git@")
-        && let Some((host, path)) = rest.split_once(':')
-    {
-        return Some((host, path));
-    }
-
-    // HTTPS / HTTP / git protocol: strip the scheme, then peel the
-    // first component as host and the remainder as `owner/repo[.git]`.
-    for scheme in ["https://", "http://", "ssh://", "git://"] {
-        if let Some(rest) = url.strip_prefix(scheme) {
-            // ssh URLs may carry `user@host/...` — drop the user part.
-            let rest = rest.split_once('@').map(|(_, r)| r).unwrap_or(rest);
-            if let Some((host, path)) = rest.split_once('/') {
-                return Some((host, path));
-            }
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]
@@ -417,37 +384,6 @@ mod tests {
             }
             other => panic!("expected DetachedHead, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn parse_remote_url_ssh() {
-        assert_eq!(
-            parse_remote_url("git@github.com:marcelocantos/bullseye.git"),
-            Some(("github.com", "marcelocantos/bullseye.git")),
-        );
-        assert_eq!(
-            parse_remote_url("git@github.com:marcelocantos/bullseye"),
-            Some(("github.com", "marcelocantos/bullseye")),
-        );
-    }
-
-    #[test]
-    fn parse_remote_url_https() {
-        assert_eq!(
-            parse_remote_url("https://github.com/marcelocantos/bullseye.git"),
-            Some(("github.com", "marcelocantos/bullseye.git")),
-        );
-        assert_eq!(
-            parse_remote_url("https://gitlab.com/group/project"),
-            Some(("gitlab.com", "group/project")),
-        );
-    }
-
-    #[test]
-    fn parse_remote_url_unknown_returns_none() {
-        assert_eq!(parse_remote_url("file:///some/path"), None);
-        assert_eq!(parse_remote_url("not-a-url"), None);
-        assert_eq!(parse_remote_url(""), None);
     }
 
     #[test]

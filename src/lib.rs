@@ -22,6 +22,7 @@ pub mod portfolio;
 #[cfg(feature = "sqlite")]
 pub mod priorities;
 pub mod repo_guard;
+pub mod repo_identity;
 pub mod resolve;
 pub mod restore;
 pub mod schema;

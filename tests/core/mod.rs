@@ -22,6 +22,7 @@ mod init_location;
 mod ownership_release;
 mod portfolio;
 mod query;
+mod repo_identity;
 mod reshape;
 mod resolve;
 mod restore;
