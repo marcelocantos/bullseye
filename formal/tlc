@@ -7,7 +7,8 @@
 #
 # Finds tla2tools.jar via $TLA2TOOLS_JAR, then ./tools/, then ~/.local/lib/.
 # One worker by default so output matches the recorded oracle; override
-# with TLC_WORKERS. Default metadir is ./states/<config>; override with
+# with TLC_WORKERS. Java: $TLC_JAVA, else macOS java_home -v 11+, else PATH.
+# Default metadir is ./states/<config>; override with
 # TLC_METADIR so concurrent runs of the same spec do not collide.
 set -euo pipefail
 
@@ -40,7 +41,26 @@ fi
 metadir="${TLC_METADIR:-$here/states/$cfg}"
 mkdir -p "$metadir"
 
-exec java -XX:+UseParallelGC -cp "$jar" tlc2.TLC \
+# Pick the JDK explicitly rather than trusting `java` on PATH. On this
+# fleet that is usually a jenv shim, which resolves the user's *global*
+# Java choice; when that entry dangles (Homebrew removed the Cellar path
+# it named), every TLC run dies with "version `21' is not installed"
+# and the gate reads as a model failure. TLC 2.19 needs Java 11+.
+# Order: $TLC_JAVA, then macOS java_home, then `java` on PATH.
+if [[ -n "${TLC_JAVA:-}" ]]; then
+    java="$TLC_JAVA"
+elif [[ -x /usr/libexec/java_home ]] && jhome="$(/usr/libexec/java_home -v 11+ 2>/dev/null)"; then
+    java="$jhome/bin/java"
+else
+    java="java"
+fi
+if ! "$java" -version >/dev/null 2>&1; then
+    echo "tlc: $java cannot start a JVM; set TLC_JAVA to a Java 11+ binary" >&2
+    "$java" -version >&2 || true
+    exit 1
+fi
+
+exec "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC \
     -workers "${TLC_WORKERS:-1}" \
     -metadir "$metadir" \
     -config "$here/$cfg.cfg" \

@@ -7,7 +7,7 @@
 # check is known to discriminate rather than ageing as a green stamp.
 #
 # Usage: ./check
-# Env: TLA2TOOLS_JAR, TLC_WORKERS (see ./tlc).
+# Env: TLA2TOOLS_JAR, TLC_WORKERS, TLC_JAVA (see ./tlc).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"

@@ -13,6 +13,7 @@ cargo clippy         # Lint
 cargo fmt --check    # Check formatting
 make gate            # fmt + clippy + tests + declared checks; attests the tree for pre-push
 make tla             # TLC on formal/BullseyeConvergence (~13–22 min)
+                     # JDK: $TLC_JAVA, else macOS java_home -v 11+, else java on PATH
 make hooks           # core.hooksPath=scripts/hooks
 
 # Slim clean rebuild without compiling bundled SQLite (~6s saved cold):
