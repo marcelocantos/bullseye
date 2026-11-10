@@ -552,6 +552,11 @@ pub fn validate_issues(file: &TargetsFile) -> Vec<ValidationIssue> {
         }
 
         // Strategy validation: command and trigger must be non-empty.
+        if let Some(models) = &t.models {
+            for message in models.validation_errors() {
+                push(message);
+            }
+        }
         if let Some(ref strategy) = t.strategy {
             if strategy.command.trim().is_empty() {
                 push("strategy.command must not be empty".to_string());

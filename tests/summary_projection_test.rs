@@ -8,6 +8,8 @@ use bullseye::tools::QueryTool;
 
 fn mcp_text(cwd: &str, full: bool) -> String {
     let response = handle_query(QueryTool {
+        model_class: None,
+        format: None,
         cwd: cwd.into(),
         view: Some("summary".into()),
         id: None,

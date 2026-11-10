@@ -52,6 +52,32 @@ Agents plan; bullseye records, unblocks, and hardens claims.
 | `graph` | Mermaid dependency graph (default: whole **active** graph; optional `scope` / `nodes` / `seeds` / `expand` — 🎯T57) |
 | `validate` | Schema / graph errors only |
 
+#### Structured model preferences (🎯T107)
+
+`target` and `frontier` also accept `format: json` (CLI `--format json`). The
+former returns `{file,id,target,issues}`; the latter returns
+`{file,targets:[{id,fanout,target}],issues,excluded}`. A record's optional
+`target.models` block has separate `execute`/`review` preferences, each with
+`class: economy|standard|frontier`, optional `effort: low|medium|high|max`, and
+optional `pins: {provider: model-id-or-alias}`. These are planner preferences
+for dispatchers; Bullseye never selects or executes a model (🎯T107).
+
+The frontier accepts `model_class` (CLI `--model-class`) as the executor's
+available capability: it retains targets whose minimum execution class is
+at most that class, including unspecified execution preferences. It does not
+bypass dependencies, ownership, postponement or validation. Other views
+refuse `model_class`; views other than target/frontier refuse JSON format.
+
+Set preferences with `commit op=track models=<YAML/JSON string>` or an apply
+fragment's structured `models` block. Updates replace the block; use
+`clear: [models]` to remove it. First adoption requires explicit
+`adopt_model_preferences: true` on the apply request or commit (CLI
+`--adopt-model-preferences`), because containing preferences stamps schema v7.
+`commit op=migrate-model-tags` is an explicit ledger-wide representation
+migration, including historical rows, under the same lock and adoption guard.
+See [the model-preference contract](model-preferences.md) for precedence,
+provider aliases and migration guarantees.
+
 #### Reads degrade; only `validate` hard-fails (🎯T64)
 
 Every blocking validation error bullseye produces is attributed to a

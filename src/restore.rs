@@ -195,6 +195,7 @@ mod tests {
             cross_enables: vec![],
             tags: vec![],
             strategy: None,
+            models: None,
             actual_cost: None,
             set_aside_reason: None,
             attestation: None,

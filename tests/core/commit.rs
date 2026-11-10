@@ -476,6 +476,8 @@ fn retire_refuses_open_dependencies_same_as_achieve() {
 
     let attestation = "green on abc — this must not land while T1 is open";
     let achieve = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd: cwd.clone(),
         op: "achieve".into(),
         id: Some("T8".into()),
@@ -910,6 +912,8 @@ fn achieve_requires_and_persists_attestation() {
         Some("OK"),
     ] {
         let result = handle_commit(CommitTool {
+            models: None,
+            adopt_model_preferences: false,
             cwd: cwd.clone(),
             op: "achieve".into(),
             id: Some("T1".into()),
@@ -996,6 +1000,8 @@ fn achieve_requires_and_persists_attestation() {
 
     // view=target / list / summary surface the note.
     let get = handle_query(QueryTool {
+        model_class: None,
+        format: None,
         cwd: cwd.clone(),
         view: Some("target".into()),
         id: Some("T1".into()),
@@ -1027,6 +1033,8 @@ fn achieve_requires_and_persists_attestation() {
     );
 
     let summary = handle_query(QueryTool {
+        model_class: None,
+        format: None,
         cwd: cwd.clone(),
         view: Some("summary".into()),
         id: None,

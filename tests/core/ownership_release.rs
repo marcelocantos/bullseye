@@ -30,6 +30,7 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
             cross_enables: vec![],
             tags: vec![],
             strategy: None,
+            models: None,
             origin: "manual".into(),
             discovered: today,
             achieved: None,
@@ -61,6 +62,7 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
             cross_enables: vec![],
             tags: vec![],
             strategy: None,
+            models: None,
             origin: "manual".into(),
             discovered: today,
             achieved: None,
@@ -118,6 +120,8 @@ fn t43_assign_and_unassign_via_commit() {
 
     // Starter creates T1 active.
     let assign = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd: cwd.clone(),
         op: "assign".to_string(),
         id: Some("T1".to_string()),
@@ -157,6 +161,8 @@ fn t43_assign_and_unassign_via_commit() {
     assert!(graph::frontier(&file).iter().all(|t| t.id != "T1"));
 
     let unassign = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd,
         op: "unassign".to_string(),
         id: Some("T1".to_string()),

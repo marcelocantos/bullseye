@@ -247,6 +247,7 @@ fn summary_stale_parent_all_children_achieved() {
                 cross_enables: vec![],
                 tags: vec![],
                 strategy: None,
+                models: None,
 
                 origin: "test".to_string(),
                 discovered: date,
@@ -294,6 +295,7 @@ fn summary_shows_grouped_children() {
             cross_enables: vec![],
             tags: vec![],
             strategy: None,
+            models: None,
 
             origin: "test".to_string(),
             discovered: date,

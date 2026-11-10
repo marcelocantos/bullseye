@@ -1,0 +1,218 @@
+{
+  "source": "golang/go external ledger, captured 2026-11-10",
+  "source_sha256": "a24fcadda300a5a9785b71f499304812762e87eb19647b9139020ff06659bd51",
+  "targets": {
+    "T1.1.1": [
+      "kernel",
+      "model:fable",
+      "review:opus"
+    ],
+    "T1.1.2": [
+      "kernel",
+      "model:fable"
+    ],
+    "T1.1.3": [
+      "kernel",
+      "model:fable",
+      "review:opus"
+    ],
+    "T1.2.1": [
+      "kernel",
+      "model:opus",
+      "review:fable"
+    ],
+    "T1.2.2": [
+      "kernel",
+      "model:sonnet",
+      "conformance"
+    ],
+    "T1.2.3": [
+      "kernel",
+      "model:sonnet",
+      "conformance"
+    ],
+    "T1.2.4": [
+      "kernel",
+      "model:sonnet",
+      "review:opus",
+      "conformance"
+    ],
+    "T1.2.5": [
+      "kernel",
+      "model:fable",
+      "review:opus",
+      "conformance"
+    ],
+    "T1.3.1": [
+      "kernel",
+      "model:sonnet",
+      "review:opus"
+    ],
+    "T1.3.2": [
+      "kernel",
+      "model:opus"
+    ],
+    "T1.3.3": [
+      "kernel",
+      "model:sonnet"
+    ],
+    "T1.3.4": [
+      "kernel",
+      "model:fable",
+      "review:opus"
+    ],
+    "T1.3.5": [
+      "kernel",
+      "model:sonnet"
+    ],
+    "T1.4.1": [
+      "kernel",
+      "model:opus"
+    ],
+    "T1.4.10": [
+      "kernel",
+      "model:fable"
+    ],
+    "T1.4.11": [
+      "kernel",
+      "model:sonnet",
+      "review:opus"
+    ],
+    "T1.4.12": [
+      "kernel",
+      "model:opus"
+    ],
+    "T1.4.2": [
+      "kernel",
+      "model:sonnet",
+      "review:opus"
+    ],
+    "T1.4.3": [
+      "kernel",
+      "model:fable"
+    ],
+    "T1.4.4": [
+      "kernel",
+      "model:opus"
+    ],
+    "T1.4.5": [
+      "kernel",
+      "model:sonnet"
+    ],
+    "T1.4.6": [
+      "kernel",
+      "model:opus",
+      "review:fable"
+    ],
+    "T1.4.7": [
+      "kernel",
+      "model:sonnet"
+    ],
+    "T1.4.8": [
+      "kernel",
+      "model:sonnet"
+    ],
+    "T1.4.9": [
+      "kernel",
+      "model:opus"
+    ],
+    "T1.5.1": [
+      "kernel",
+      "model:opus",
+      "sync"
+    ],
+    "T1.5.2": [
+      "kernel",
+      "model:sonnet",
+      "runtime"
+    ],
+    "T1.5.3": [
+      "kernel",
+      "model:opus",
+      "compiler"
+    ],
+    "T1.5.4": [
+      "kernel",
+      "model:opus",
+      "compiler"
+    ],
+    "T1.5.5": [
+      "kernel",
+      "model:sonnet",
+      "stdlib"
+    ],
+    "T1.5.6": [
+      "kernel",
+      "model:sonnet",
+      "stdlib"
+    ],
+    "T1.5.7": [
+      "kernel",
+      "model:sonnet",
+      "stdlib"
+    ],
+    "T1.5.8": [
+      "kernel",
+      "model:haiku",
+      "ratchet"
+    ],
+    "T1.5.9": [
+      "kernel",
+      "model:sonnet",
+      "runtime"
+    ],
+    "T1.6.1": [
+      "kernel",
+      "model:sonnet",
+      "ci",
+      "gate"
+    ],
+    "T1.6.2": [
+      "kernel",
+      "model:sonnet",
+      "ci",
+      "gate",
+      "conformance"
+    ],
+    "T1.6.3": [
+      "kernel",
+      "model:haiku",
+      "ci",
+      "gate"
+    ],
+    "T1.6.4": [
+      "kernel",
+      "model:sonnet",
+      "perf",
+      "gate"
+    ],
+    "T1.6.5": [
+      "kernel",
+      "model:sonnet",
+      "gate"
+    ],
+    "T1.6.6": [
+      "kernel",
+      "model:fable",
+      "review:opus",
+      "review",
+      "gate"
+    ],
+    "T1.6.7": [
+      "kernel",
+      "model:haiku",
+      "journey"
+    ],
+    "T1.6.7.1": [
+      "playground",
+      "model:opus",
+      "review:sonnet",
+      "journey"
+    ],
+    "T1.6.8": [
+      "kernel",
+      "model:sonnet",
+      "perf"
+    ]
+  }
+}

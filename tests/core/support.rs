@@ -344,6 +344,7 @@ pub fn subdivide_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
                 cross_enables: vec![],
                 tags: vec![],
                 strategy: None,
+                models: None,
                 origin: "test".to_string(),
                 discovered: today,
                 achieved: None,
@@ -474,6 +475,7 @@ pub fn t28_repo_with_branched_id() -> tempfile::TempDir {
                     cross_enables: vec![],
                     tags: vec![],
                     strategy: None,
+                    models: None,
                     origin: "test".to_string(),
                     discovered: today,
                     achieved: None,
@@ -516,6 +518,8 @@ pub fn t29_workspace(root: &std::path::Path, repos: &[&str]) {
 /// only what it exercises.
 pub fn t64_commit(cwd: &str, op: &str) -> bullseye::tools::CommitTool {
     bullseye::tools::CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd: cwd.to_string(),
         op: op.to_string(),
         id: None,

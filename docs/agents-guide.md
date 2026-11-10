@@ -1197,3 +1197,26 @@ All project tools take `cwd` = project root. Mutation results include
 `ids`, `changed`, and a refreshed `frontier` header. Errors include a
 stable `code=` token.
 ````
+## Executor and reviewer preferences (🎯T107)
+
+Use the optional `models` block for dispatcher-readable preferences:
+`execute` and `review` each carry `class: economy|standard|frontier`, optional
+`effort: low|medium|high|max`, and optional `pins: {provider: model-id-or-alias}`.
+Bullseye stores these and never routes work. Explicit caller pins win.
+See [the decision and migration contract](model-preferences.md).
+
+Set it with `commit --op track --id T1 --models '{execute: {class: standard}}'`
+or an apply fragment's structured `models` field; updates replace the whole
+block and `clear: [models]` removes it. The first adoption requires
+`--adopt-model-preferences` (apply: `adopt_model_preferences: true`) after
+upgrading every consumer to schema v7 support. Unannotated ledgers retain
+their existing v5/v6 compatibility.
+
+`query --view frontier --model-class standard --format json` gives dispatchers
+complete structured records whose minimum execution capability is at most
+`standard`, including unspecified preferences. `query --view target --id T1
+--format json` reads a single record. The MCP parameters are `model_class`
+and `format`; models are in `target.models`. Both surfaces share handlers.
+`commit --op migrate-model-tags --adopt-model-preferences` explicitly converts
+the known legacy families while preserving their names as provider alias pins,
+including on historical rows; it never reopens or re-achieves them.

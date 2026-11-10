@@ -19,6 +19,7 @@ mod git_guard;
 mod github;
 mod id_alloc;
 mod init_location;
+mod model_preferences;
 mod ownership_release;
 mod portfolio;
 mod query;

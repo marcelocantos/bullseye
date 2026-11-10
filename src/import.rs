@@ -160,6 +160,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 cross_enables: Vec::new(),
                 tags: fields.tags,
                 strategy: None,
+                models: None,
                 origin: fields.origin.unwrap_or_else(|| "manual".to_string()),
                 discovered: fields
                     .discovered

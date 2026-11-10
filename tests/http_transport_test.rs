@@ -160,6 +160,145 @@ fn http_transport_serves_mcp_and_advertises_every_registered_tool() {
     assert!(listed.contains("bullseye_apply"), "got:\n{listed}");
 }
 
+/// 🎯T107 product journey: planner writes over CLI and MCP, dispatcher reads
+/// typed preferences over both surfaces, and the real ledger preserves them.
+#[test]
+fn model_preferences_cli_and_live_mcp_share_persistence_and_filtering() {
+    use serde_json::{Value, json};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().join("repo");
+    std::fs::create_dir(&cwd).unwrap();
+    let cli = |args: &[&str]| {
+        Command::new(BIN)
+            .args(args)
+            .arg("--cwd")
+            .arg(&cwd)
+            .env("BULLSEYE_DATA_DIR", tmp.path().join("data"))
+            .env("HOME", tmp.path())
+            .env_remove("BULLSEYE_COMMIT")
+            .output()
+            .unwrap()
+    };
+    assert!(cli(&["open", "--location", "in_repo"]).status.success());
+    for (id, models) in [
+        ("T1", "{execute: {class: economy}}"),
+        (
+            "T2",
+            "{execute: {class: frontier}, review: {class: standard}}",
+        ),
+    ] {
+        let output = cli(&[
+            "commit",
+            "--op",
+            "track",
+            "--id",
+            id,
+            "--name",
+            "Contract test",
+            "--acceptance",
+            "Preserves preferences",
+            "--models",
+            models,
+            "--adopt-model-preferences",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut server = Server(
+        Command::new(BIN)
+            .args(["serve", "--addr", &format!("127.0.0.1:{port}")])
+            .env("BULLSEYE_DATA_DIR", tmp.path().join("data"))
+            .env("HOME", tmp.path())
+            .env_remove("BULLSEYE_COMMIT")
+            .env_remove("BULLSEYE_T3_PLUGIN")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(server.0.try_wait().unwrap().is_none(), "daemon exited");
+        assert!(Instant::now() < deadline, "daemon never listened");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let (_, session) = initialize(port);
+    let call = |name: &str, mut arguments: Value| -> Value {
+        arguments["cwd"] = json!(cwd);
+        let request = json!({"jsonrpc":"2.0","id":107,"method":"tools/call","params":{"name":name,"arguments":arguments}});
+        let (body, _) = post_with_session(port, &request.to_string(), Some(&session));
+        let payload = body
+            .lines()
+            .find_map(|l| l.strip_prefix("data: "))
+            .unwrap_or(&body);
+        let response: Value = serde_json::from_str(payload).unwrap();
+        assert!(response.get("error").is_none(), "{response}");
+        assert_ne!(response["result"]["isError"], true, "{response}");
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(content).unwrap_or_else(|_| json!(content))
+    };
+    let query = json!({"view":"frontier","model_class":"standard","format":"json"});
+    let mcp = call("bullseye_query", query.clone());
+    let cli_result = cli(&[
+        "query",
+        "--view",
+        "frontier",
+        "--model-class",
+        "standard",
+        "--format",
+        "json",
+    ]);
+    assert!(cli_result.status.success());
+    let cli_json: Value = serde_json::from_slice(&cli_result.stdout).unwrap();
+    assert_eq!(mcp, cli_json);
+    assert_eq!(mcp["targets"].as_array().unwrap().len(), 1);
+    assert_eq!(mcp["targets"][0]["id"], "T1");
+    assert_eq!(
+        mcp["targets"][0]["target"]["models"]["execute"]["class"],
+        "economy"
+    );
+
+    let preferences = json!({"execute":{"class":"standard","effort":"high","pins":{"codex":"owner-selected-id"}},"review":{"class":"frontier"}});
+    call(
+        "bullseye_commit",
+        json!({"op":"track","id":"T2","models":preferences.to_string()}),
+    );
+    let frontier = call("bullseye_query", query);
+    assert_eq!(frontier["targets"].as_array().unwrap().len(), 2);
+    let target = call(
+        "bullseye_query",
+        json!({"view":"target","id":"T2","format":"json"}),
+    );
+    assert_eq!(target["target"]["models"], preferences);
+    let stored = bullseye::store::load(&cwd.join("bullseye.yaml")).unwrap();
+    assert_eq!(
+        serde_json::to_value(stored.targets["T2"].models.as_ref().unwrap()).unwrap(),
+        preferences
+    );
+
+    call(
+        "bullseye_apply",
+        json!({"fragment":json!({"targets":{"T2":{"clear":["models"]}}}).to_string()}),
+    );
+    let cleared = cli(&[
+        "query", "--view", "target", "--id", "T2", "--format", "json",
+    ]);
+    let cleared: Value = serde_json::from_slice(&cleared.stdout).unwrap();
+    assert!(cleared["target"].get("models").is_none());
+}
+
 #[test]
 fn serve_rejects_a_malformed_address_rather_than_binding_something_unexpected() {
     let out = Command::new(BIN)

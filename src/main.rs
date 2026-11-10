@@ -466,6 +466,8 @@ fn cli_query(args: &[String]) -> Result<String, String> {
         return Ok(
             "bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter active|achieved|set_aside|all]\n\
              views: context|frontier|target|list|summary|graph|validate\n\
+             frontier: [--model-class economy|standard|frontier] (minimum capability)\n\
+             target/frontier: [--format text|json] (structured target records for dispatchers)\n\
              summary: --frontier-details (full unbounded summary with frontier detail)\n\
              graph (🎯T57): [--scope active|all|achieved|set_aside] [--nodes ID,ID]\n\
                            [--seeds ID,ID] [--expand ancestors,descendants,children,parents,frontier]\n\
@@ -493,6 +495,8 @@ fn cli_query(args: &[String]) -> Result<String, String> {
             .collect::<Vec<_>>()
     });
     tool_result_text(handle_query(QueryTool {
+        model_class: flag_value(args, "--model-class"),
+        format: flag_value(args, "--format"),
         cwd: default_cwd(args),
         view: flag_value(args, "--view"),
         id: flag_value(args, "--id"),
@@ -511,6 +515,8 @@ fn cli_query(args: &[String]) -> Result<String, String> {
 /// Declared for the same reason as [`APPLY_FLAGS`]: an unrecognised
 /// flag must fail rather than return `ok: true` (🎯T76).
 const COMMIT_FLAGS: &[(&str, bool)] = &[
+    ("--models", true),
+    ("--adopt-model-preferences", false),
     ("--cwd", true),
     ("--op", true),
     ("--id", true),
@@ -552,6 +558,8 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
              \x20      [--checks YAML]  (executable checks, e.g.\n\
              \x20      '[{command: {run: cargo test --workspace}}]')\n\
              \x20      [--due YYYY-MM-DD]  (calendar deadline; --due '' clears)\n\
+             \x20      [--models YAML] [--adopt-model-preferences] (execute/review preferences; '' clears)\n\
+             migrate-model-tags: [--adopt-model-preferences] (lossless legacy model/review tag migration)\n\
              block:  --id ID --blocks T1[,T2]\n\
              achieve: --id ID --attestation TEXT [--actual-cost N] [--base sha256:…]\n\
              defer/reopen/rehash: --id ID --reason TEXT (rehash: reason only)\n\
@@ -614,6 +622,8 @@ fn cli_commit(args: &[String]) -> Result<String, String> {
             .collect::<Vec<_>>()
     });
     tool_result_text(handle_commit(CommitTool {
+        models: flag_value(args, "--models"),
+        adopt_model_preferences: has_flag(args, "--adopt-model-preferences"),
         cwd: default_cwd(args),
         op,
         id: flag_value(args, "--id"),
@@ -986,6 +996,7 @@ fn cli_resolve(args: &[String]) -> Result<String, String> {
 /// write — a documented reason agents gave up on the CLI and edited
 /// the YAML by hand (🎯T76).
 const APPLY_FLAGS: &[(&str, bool)] = &[
+    ("--adopt-model-preferences", false),
     ("--cwd", true),
     ("--file", true),
     ("-f", true),
@@ -1265,6 +1276,9 @@ fn cli_apply(args: &[String]) -> Result<String, String> {
     };
 
     // Flags layer over a fragment so `-f frag.yaml --base <hash>` works.
+    if has_flag(args, "--adopt-model-preferences") {
+        req.adopt_model_preferences = true;
+    }
     if let Some(base) = flag_value(args, "--base") {
         req.base = Some(base);
     }

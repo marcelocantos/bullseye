@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+pub use crate::models::ModelPreferences;
+
 /// Current schema version written by this build of bullseye.
 ///
 /// Bumped whenever a breaking schema change lands (new required field,
@@ -63,7 +65,12 @@ use serde::{Deserialize, Serialize};
 ///   HAS adopted it fails on an old binary with the actionable
 ///   "schema_version too new, upgrade bullseye" error instead of an
 ///   opaque `data did not match any variant of untagged enum Check`.
-pub const CURRENT_SCHEMA_VERSION: u32 = 6;
+/// - **v7** (🎯T107) adds optional `models` preferences. Stamped only
+///   when a block is present, so old writers cannot silently erase it.
+pub const CURRENT_SCHEMA_VERSION: u32 = 7;
+
+/// Optional executor/reviewer model preferences (🎯T107).
+pub const MODEL_PREFERENCES_SCHEMA_VERSION: u32 = 7;
 
 /// Schema version at which the `command` check kind was introduced.
 pub const COMMAND_CHECK_SCHEMA_VERSION: u32 = 6;
@@ -77,6 +84,9 @@ pub const COMMAND_CHECK_SCHEMA_VERSION: u32 = 6;
 /// used anything new. A ledger pays the compatibility cost only when it
 /// actually adopts the feature that requires it.
 pub fn required_schema_version(file: &TargetsFile) -> u32 {
+    if file.targets.values().any(|t| t.models.is_some()) {
+        return MODEL_PREFERENCES_SCHEMA_VERSION;
+    }
     let uses_command_check = file
         .targets
         .values()
@@ -299,6 +309,10 @@ pub struct Target {
     /// automation contract alongside their acceptance criteria.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy: Option<Strategy>,
+
+    /// Planner preferences for dispatchers; Bullseye never chooses or runs a model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<ModelPreferences>,
 
     /// How this target was created.
     #[serde(default = "default_origin")]

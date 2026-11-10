@@ -60,6 +60,7 @@ pub(crate) mod test_support {
             cross_enables: vec![],
             tags: vec![],
             strategy: None,
+            models: None,
             origin: "test".into(),
             discovered: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             achieved: None,

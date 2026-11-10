@@ -131,6 +131,7 @@ pub fn target_from_issue(issue: &MasterIssue, today: NaiveDate) -> (String, Targ
         cross_enables: Vec::new(),
         tags: labels_from_json(&issue.labels_json),
         strategy: None,
+        models: None,
         origin: event_origin(issue.repo_id, issue.number),
         discovered: today,
         achieved,

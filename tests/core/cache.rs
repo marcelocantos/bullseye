@@ -152,6 +152,7 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 cross_enables: Vec::new(),
                                 tags: Vec::new(),
                                 strategy: None,
+                                models: None,
 
                                 origin: "concurrent-test".to_string(),
                                 discovered: chrono::Local::now().date_naive(),
@@ -238,6 +239,7 @@ fn load_serves_fresh_disk_after_concurrent_achieve() {
                         cross_enables: Vec::new(),
                         tags: Vec::new(),
                         strategy: None,
+                        models: None,
                         origin: "concurrent-test".to_string(),
                         discovered: chrono::Local::now().date_naive(),
                         achieved: None,

@@ -206,6 +206,8 @@ fn mutation_does_not_create_yaml_only_git_commit() {
     let head_before = t73_git(tmp.path(), &["rev-parse", "HEAD"]);
 
     let result = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd,
         op: "track".into(),
         id: None,

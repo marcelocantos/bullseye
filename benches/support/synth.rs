@@ -349,6 +349,7 @@ pub fn ledger(seed: u64, shape: &Shape) -> TargetsFile {
                     Vec::new()
                 },
                 strategy: None,
+                models: None,
                 origin: "synth".to_string(),
                 discovered,
                 achieved: (st == Status::Achieved).then(|| date(&mut rng)),

@@ -37,6 +37,7 @@ fn classified_fields(target: &Target) -> ([&'static str; 6], Vec<&'static str>) 
         cross_enables: _,
         tags: _,
         strategy: _,
+        models: _,
         origin: _,
         discovered: _,
         achieved: _,
@@ -54,6 +55,7 @@ fn classified_fields(target: &Target) -> ([&'static str; 6], Vec<&'static str>) 
         "postpone_predicate",
     ];
     let stable = vec![
+        "models",
         "name",
         "status",
         "value",
@@ -91,6 +93,7 @@ fn all_persisted_fields_classified_and_status_fields_share_the_schema_table() {
     });
     target.cross_enables = target.cross_depends.clone();
     target.tags.push("tag".into());
+    target.models = Some(serde_yaml_ng::from_str("execute: {class: frontier}").unwrap());
     target.strategy = Some(crate::schema::Strategy {
         command: "true".into(),
         trigger: "manual".into(),

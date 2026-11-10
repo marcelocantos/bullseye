@@ -366,6 +366,8 @@ targets:
     let before = store::load(&path).unwrap();
 
     let result = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd,
         op: "track".to_string(),
         id: Some("T2".to_string()),

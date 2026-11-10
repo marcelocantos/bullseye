@@ -535,6 +535,7 @@ fn new_target(repo: &str, issue: &Issue, today: NaiveDate) -> Target {
         cross_enables: Vec::new(),
         tags: issue.labels.clone(),
         strategy: None,
+        models: None,
         origin: origin_for(repo, issue.number),
         discovered: today,
         achieved: None,

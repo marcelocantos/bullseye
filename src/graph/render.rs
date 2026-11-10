@@ -95,6 +95,7 @@ pub fn startup_context(file: &TargetsFile, file_path: &str, recent_days: u32) ->
             if !ft.tags.is_empty() {
                 out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
             }
+            crate::models::render_preferences(&mut out, file.targets[&ft.id].models.as_ref());
         }
         out.push('\n');
     }
@@ -329,6 +330,8 @@ pub fn summary(
             ));
             if frontier_details {
                 render_frontier_detail(&mut out, &ft.id, all_targets);
+            } else {
+                crate::models::render_preferences(&mut out, all_targets[&ft.id].models.as_ref());
             }
         }
     }
@@ -534,6 +537,7 @@ pub fn bounded_summary(file: &TargetsFile, file_path: &str) -> String {
             rf.target.status,
             rf.fanout
         ));
+        crate::models::render_preferences(&mut out, file.targets[&rf.target.id].models.as_ref());
     }
     if ranked.len() > FRONTIER {
         out.push_str(&format!(
@@ -621,6 +625,7 @@ fn render_frontier_detail(
     let Some(t) = all_targets.get(id) else {
         return;
     };
+    crate::models::render_preferences(out, t.models.as_ref());
     if !t.acceptance.is_empty() {
         out.push_str("    Acceptance:\n");
         for line in &t.acceptance {

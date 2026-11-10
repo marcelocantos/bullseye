@@ -63,6 +63,8 @@ pub struct Fragment {
     /// Executable checks. Replaces the list (🎯T83). Acceptance is prose
     /// a human adjudicates; this is what a machine can run unattended.
     pub checks: Option<Vec<Check>>,
+    /// Executor/reviewer preferences; replaces the whole block. Clear with `clear: [models]`.
+    pub models: Option<crate::models::ModelPreferences>,
     /// Why this target matters, how it was discovered. Markdown.
     /// Downstream renderers interpret HTML. Cite tags as entities or
     /// code spans. Bullseye stores the text as written and does not escape.
@@ -114,6 +116,7 @@ pub struct Fragment {
 
 /// Fields `clear` accepts, and what clearing each one means.
 pub const CLEARABLE_FIELDS: &[&str] = &[
+    "models",
     "owner",
     "postponed_until",
     "postpone_predicate",
@@ -133,6 +136,10 @@ pub struct FieldHelp {
 
 /// The complete patchable field set, in help-display order.
 pub const FIELD_HELP: &[FieldHelp] = &[
+    FieldHelp {
+        name: "models",
+        blurb: "executor/reviewer preferences: execute/review {class: economy|standard|frontier, effort?: low|medium|high|max, pins?: {provider: model}}; replaces the whole block",
+    },
     FieldHelp {
         name: "name",
         blurb: "short assertion of the desired state. Markdown. Downstream renderers interpret HTML. Cite tags as entities or code spans. Bullseye stores the text as written and does not escape",
@@ -270,6 +277,7 @@ pub const POLICY: &[Obligation] = &[
 /// an active target. Documented here so the absence is deliberate
 /// rather than an oversight.
 pub const UNOBLIGED_FIELDS: &[&str] = &[
+    "models",
     "name",
     "acceptance",
     "checks",
@@ -324,6 +332,9 @@ impl ApplyReport {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyRequest {
+    /// Acknowledge that the first models block requires every ledger consumer to support v7.
+    #[serde(default)]
+    pub adopt_model_preferences: bool,
     /// Optional CAS token — the `content_hash` the caller believes the
     /// file has. A mismatch is [`ErrorCode::Conflict`], which is what
     /// makes the hash load-bearing on the write path instead of a
@@ -657,6 +668,13 @@ fn introduces_first_command_check(file: &TargetsFile, req: &ApplyRequest) -> boo
 /// achieved row even though it is only *applied* on a status
 /// transition to achieved.
 fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
+    if frag
+        .models
+        .as_ref()
+        .is_some_and(|v| target.models.as_ref() != Some(v))
+    {
+        return true;
+    }
     if frag.name.as_ref().is_some_and(|v| v != &target.name) {
         return true;
     }
@@ -732,6 +750,7 @@ fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
     if let Some(fields) = &frag.clear {
         for field in fields {
             let occupied = match field.as_str() {
+                "models" => target.models.is_some(),
                 "owner" => target.owned_by.is_some(),
                 "postponed_until" => target.postponed_until.is_some(),
                 "postpone_predicate" => target.postpone_predicate.is_some(),
@@ -768,6 +787,22 @@ pub fn apply_with_gate(
     historical: &HashSet<String>,
     gate: &dyn GateStore,
 ) -> Result<ApplyReport, ApplyError> {
+    crate::models::require_adoption(
+        file,
+        req.targets.values().any(|f| f.models.is_some()),
+        req.adopt_model_preferences,
+    )?;
+    for (id, frag) in &req.targets {
+        if let Some(models) = &frag.models {
+            let errors = models.validation_errors();
+            if !errors.is_empty() {
+                return Err(ApplyError::new(
+                    ErrorCode::Validation,
+                    format!("🎯{id}: {}", errors.join("; ")),
+                ));
+            }
+        }
+    }
     // Rollout gate before anything is touched (🎯T86). Adopting the
     // `command` kind stamps the ledger schema_version 6, after which
     // every older bullseye refuses to read the WHOLE file — other
@@ -975,6 +1010,7 @@ pub fn apply_with_gate(
                 cross_enables: Vec::new(),
                 tags: frag.tags.clone().unwrap_or_default(),
                 strategy: None,
+                models: frag.models.clone(),
                 origin: frag.origin.clone().unwrap_or_else(|| "manual".to_string()),
                 discovered: today,
                 achieved: (to == Status::Achieved).then_some(today),
@@ -1036,6 +1072,9 @@ pub fn apply_with_gate(
             if let Some(v) = &frag.checks {
                 target.checks = v.clone();
             }
+            if let Some(v) = &frag.models {
+                target.models = Some(v.clone());
+            }
             apply_context_fields(&id, target, frag)?;
             if let Some(v) = &frag.tags {
                 target.tags = v.clone();
@@ -1089,6 +1128,7 @@ pub fn apply_with_gate(
             if let Some(fields) = &frag.clear {
                 for field in fields {
                     match field.as_str() {
+                        "models" => target.models = None,
                         "owner" => target.owned_by = None,
                         "postponed_until" => target.postponed_until = None,
                         "postpone_predicate" => target.postpone_predicate = None,
@@ -1242,6 +1282,7 @@ targets:
             targets,
             remove: Vec::new(),
             adopt_command_checks: false,
+            adopt_model_preferences: false,
         }
     }
 

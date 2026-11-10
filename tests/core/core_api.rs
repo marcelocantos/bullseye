@@ -17,6 +17,8 @@ fn t45_commit_track_returns_envelope_and_frontier() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let result = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd,
         op: "track".to_string(),
         id: None,
@@ -72,6 +74,8 @@ fn t45_query_default_view_is_context() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let result = handle_query(QueryTool {
+        model_class: None,
+        format: None,
         cwd,
         view: None,
         id: None,
@@ -133,6 +137,8 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
     config::set_external_root_override(Some(shadow_tmp.path().to_path_buf()));
 
     let created = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd: cwd.clone(),
         op: "track".to_string(),
         id: Some("T9".to_string()),
@@ -168,6 +174,8 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
     assert!(created_text.contains("ids: T9"), "{created_text}");
 
     let achieved = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd: cwd.clone(),
         op: "achieve".to_string(),
         id: Some("T9".to_string()),
@@ -202,6 +210,8 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
     assert!(text_from_call_result(achieved).contains("op: achieve"));
 
     let reopened = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd,
         op: "reopen".to_string(),
         id: Some("T9".to_string()),

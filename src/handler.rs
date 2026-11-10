@@ -389,12 +389,30 @@ pub fn handle_open(t: crate::tools::OpenTool) -> ToolResult {
 /// Unified read path.
 pub fn handle_query(t: crate::tools::QueryTool) -> ToolResult {
     let view = t.view.as_deref().unwrap_or("context");
+    let format = t.format.as_deref().unwrap_or("text");
+    if !matches!(format, "text" | "json") {
+        return coded_err(api::ErrorCode::InvalidArgs, "format must be text or json");
+    }
+    if t.model_class.is_some() && view != "frontier" {
+        return coded_err(
+            api::ErrorCode::InvalidArgs,
+            "model_class requires view=frontier",
+        );
+    }
+    if format == "json" && !matches!(view, "frontier" | "target") {
+        return coded_err(
+            api::ErrorCode::InvalidArgs,
+            "format=json requires view=target or frontier",
+        );
+    }
+    if view == "frontier" || format == "json" {
+        return handle_model_query(&t);
+    }
     match view {
         "context" => handle_startup_context(crate::tools::StartupContextTool {
             cwd: t.cwd,
             recent_days: t.recent_days,
         }),
-        "frontier" => handle_frontier(crate::tools::FrontierTool { cwd: t.cwd }),
         "target" => {
             let id = t.id.ok_or_else(|| {
                 tool_err(api::format_error(
@@ -428,6 +446,83 @@ pub fn handle_query(t: crate::tools::QueryTool) -> ToolResult {
             ),
         ),
     }
+}
+
+/// Machine-readable preference contract, sharing graph computation with the text views.
+fn handle_model_query(t: &crate::tools::QueryTool) -> ToolResult {
+    let available: Option<crate::models::ModelClass> = t
+        .model_class
+        .as_ref()
+        .map(|s| serde_json::from_value(serde_json::Value::String(s.clone())))
+        .transpose()
+        .map_err(|e| tool_err(format!("invalid model_class: {e}")))?;
+    let (path, file) = load_file(&t.cwd)?;
+    let json = t.format.as_deref() == Some("json");
+    if t.view.as_deref() == Some("target") {
+        let id =
+            t.id.as_ref()
+                .ok_or_else(|| tool_err("view=target requires id"))?;
+        if let Some(failure) = file.load_parse_failures.get(id) {
+            return coded_err(api::ErrorCode::Validation, format!("🎯{id}: {failure}"));
+        }
+        let target = file
+            .targets
+            .get(id)
+            .ok_or_else(|| tool_err(format!("target {id} not found")))?;
+        return text_result(serde_json::to_string(&serde_json::json!({"file": path, "id": id, "target": target,
+            "issues": graph::validate_issues(&file).iter().filter(|i| &i.target == id).map(ToString::to_string).collect::<Vec<_>>()
+        })).map_err(|e| tool_err(e.to_string()))?);
+    }
+    let tolerant = graph::frontier_tolerant(&file);
+    let ranked = graph::rank_frontier(&file, &tolerant.targets);
+    let selected: Vec<_> = ranked
+        .iter()
+        .filter(|rf| {
+            available.is_none_or(|class| {
+                file.targets[&rf.target.id]
+                    .models
+                    .as_ref()
+                    .is_none_or(|m| m.accepts(class))
+            })
+        })
+        .collect();
+    if json {
+        return text_result(serde_json::to_string(&serde_json::json!({
+            "file": path,
+            "targets": selected.iter().map(|rf| serde_json::json!({"id": rf.target.id, "fanout": rf.fanout, "target": file.targets[&rf.target.id]})).collect::<Vec<_>>(),
+            "issues": tolerant.issues.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "excluded": tolerant.excluded,
+        })).map_err(|e| tool_err(e.to_string()))?);
+    }
+    let mut out = format!("# Frontier\nFile: {}\n\n", path.display());
+    out.push_str(&graph::degraded_read_banner(&tolerant));
+    out.push_str(graph::REPO_SCOPE_BANNER);
+    if let Some(class) = available {
+        out.push_str(&format!(
+            "Available executor class: {} (minimum capability filter)\n\n",
+            serde_json::to_value(class)
+                .expect("enum serializes")
+                .as_str()
+                .expect("enum string")
+        ));
+    }
+    if selected.is_empty() {
+        out.push_str("(no targets ready for work)\n");
+    }
+    for rf in &selected {
+        let ft = rf.target;
+        out.push_str(&format!(
+            "🎯{} {}  [{:?}] — fanout={}\n",
+            ft.id, ft.name, ft.status, rf.fanout
+        ));
+        if !ft.tags.is_empty() {
+            out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
+        }
+        crate::models::render_preferences(&mut out, file.targets[&ft.id].models.as_ref());
+        out.push('\n');
+    }
+    out.push_str(&format!("{} target(s) ready for work", selected.len()));
+    text_result(out)
 }
 
 /// Build and run a single-target apply, reporting `op` in the envelope.
@@ -479,8 +574,43 @@ fn require_id(id: Option<String>, op: &str) -> Result<String, CallToolError> {
 
 /// Unified mutation path: the named verbs, each sugar over `apply`.
 pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
+    if t.models.is_some() && t.op != "track" {
+        return coded_err(api::ErrorCode::InvalidArgs, "models requires op=track");
+    }
+    if t.op == "migrate-model-tags" && (t.id.is_some() || t.child_of.is_some()) {
+        return coded_err(
+            api::ErrorCode::InvalidArgs,
+            "migrate-model-tags is ledger-wide; omit id and child_of",
+        );
+    }
     match t.op.as_str() {
-        "track" => handle_put_due(
+        "migrate-model-tags" => {
+            let path = discover_path(&t.cwd)?;
+            ensure_mutation_allowed(&path, &t.cwd)?;
+            let changed = store::with_locked_mutation(&path, |file| {
+                let changed = crate::models::migrate_tags(file, t.adopt_model_preferences)?;
+                let issues = graph::validate_blocking(file);
+                if !issues.is_empty() {
+                    return Err(api::CodedError::new(
+                        api::ErrorCode::Validation,
+                        issues.join("\n"),
+                    ));
+                }
+                Ok::<_, api::CodedError>(changed)
+            })
+            .map_err(mutation_tool_err)?;
+            mutation_text(
+                &path,
+                "migrate-model-tags",
+                &[],
+                &changed,
+                format!(
+                    "Migrated model/review tags on {} target(s); lifecycle and prose preserved.",
+                    changed.len()
+                ),
+            )
+        }
+        "track" => handle_track(
             crate::tools::PutTool {
                 reason: t.reason.clone(),
                 cwd: t.cwd,
@@ -500,6 +630,8 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
                 tags: t.tags,
             },
             t.due.as_deref(),
+            t.models.as_deref(),
+            t.adopt_model_preferences,
         ),
         "block" => {
             let id = t.id.ok_or_else(|| {
@@ -712,7 +844,7 @@ pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
         other => coded_err(
             api::ErrorCode::InvalidArgs,
             format!(
-                "unknown op: {other} (use track, block, split, achieve, defer, reopen, assign, unassign, postpone, wake, rehash)"
+                "unknown op: {other} (use track, block, split, achieve, defer, reopen, assign, unassign, postpone, wake, rehash, migrate-model-tags)"
             ),
         ),
     }
@@ -963,13 +1095,18 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
 }
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
-    handle_put_due(t, None)
+    handle_track(t, None, None, false)
 }
 
 /// `track` with the commit-only `due` parameter (🎯T116): `None` leaves
 /// the date alone, an empty string clears it, anything else must be a
 /// calendar date.
-fn handle_put_due(t: crate::tools::PutTool, due: Option<&str>) -> ToolResult {
+fn handle_track(
+    t: crate::tools::PutTool,
+    due: Option<&str>,
+    models: Option<&str>,
+    adopt_model_preferences: bool,
+) -> ToolResult {
     // Sugar over `apply` (🎯T76). `track` was always an upsert; the
     // engine is now the only thing that knows how to perform one, so
     // this reduces to naming the target and forwarding the fields.
@@ -1005,9 +1142,21 @@ fn handle_put_due(t: crate::tools::PutTool, due: Option<&str>) -> ToolResult {
         ..Default::default()
     };
     let mut frag = frag;
+    if let Some(raw) = models {
+        if raw.trim().is_empty() {
+            frag.clear
+                .get_or_insert_with(Vec::new)
+                .push("models".into());
+        } else {
+            frag.models = Some(
+                serde_yaml_ng::from_str(raw)
+                    .map_err(|e| tool_err(format!("invalid models block: {e}")))?,
+            );
+        }
+    }
     match due.map(str::trim) {
         None => {}
-        Some("") => frag.clear = Some(vec!["due".to_string()]),
+        Some("") => frag.clear.get_or_insert_with(Vec::new).push("due".into()),
         Some(s) => {
             frag.due = Some(
                 chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
@@ -1019,7 +1168,16 @@ fn handle_put_due(t: crate::tools::PutTool, due: Option<&str>) -> ToolResult {
             )
         }
     }
-    commit_sugar_adopting(&t.cwd, key, frag, "track", t.adopt_command_checks, None)
+    apply_request_as(
+        &t.cwd,
+        crate::apply::ApplyRequest {
+            targets: std::collections::BTreeMap::from([(key, frag)]),
+            adopt_command_checks: t.adopt_command_checks,
+            adopt_model_preferences,
+            ..Default::default()
+        },
+        "track",
+    )
 }
 
 /// Parse the `checks` tool parameter (🎯T83).
@@ -1353,38 +1511,21 @@ pub fn handle_subdivide(t: crate::tools::SubdivideTool) -> ToolResult {
 }
 
 fn handle_frontier(t: crate::tools::FrontierTool) -> ToolResult {
-    let (path, file) = load_file(&t.cwd)?;
-
-    // 🎯T64: a validation error on one target names that target and
-    // drops it from the ready set — it does not replace the answer.
-    // Returning only the errors here is what made a one-field mistake
-    // in the jevons ledger brick every read the PO had.
-    let tolerant = graph::frontier_tolerant(&file);
-    let ranked = graph::rank_frontier(&file, &tolerant.targets);
-
-    let mut out = format!("# Frontier\nFile: {}\n\n", path.display());
-    out.push_str(&graph::degraded_read_banner(&tolerant));
-    out.push_str(graph::REPO_SCOPE_BANNER);
-    if ranked.is_empty() {
-        out.push_str("(no targets ready for work)\n");
-    }
-    for rf in &ranked {
-        let ft = rf.target;
-        out.push_str(&format!(
-            "🎯{id} {name}  [{status:?}] — fanout={fan}\n",
-            id = ft.id,
-            name = ft.name,
-            status = ft.status,
-            fan = rf.fanout,
-        ));
-        if !ft.tags.is_empty() {
-            out.push_str(&format!("  tags: {}\n", ft.tags.join(", ")));
-        }
-        out.push('\n');
-    }
-    out.push_str(&format!("{} target(s) ready for work", ranked.len()));
-
-    text_result(out)
+    handle_model_query(&crate::tools::QueryTool {
+        model_class: None,
+        format: None,
+        cwd: t.cwd,
+        view: Some("frontier".into()),
+        id: None,
+        filter: None,
+        recent_days: None,
+        momentum: None,
+        frontier_details: None,
+        scope: None,
+        nodes: None,
+        seeds: None,
+        expand: None,
+    })
 }
 
 fn handle_validate(t: crate::tools::ValidateTool) -> ToolResult {
@@ -2393,6 +2534,8 @@ targets:
     fn re_achieve_with_differing_attestation_is_refused_not_reported_as_no_change() {
         let (_tmp, _cfg, cwd) = fixture();
         let err = handle_commit(crate::tools::CommitTool {
+            models: None,
+            adopt_model_preferences: false,
             cwd: cwd.clone(),
             op: "achieve".to_string(),
             id: Some("T1".to_string()),
@@ -2722,6 +2865,7 @@ targets:
             cross_enables: Vec::new(),
             tags: Vec::new(),
             strategy: None,
+            models: None,
             origin: "manual".into(),
             discovered: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             achieved: None,
@@ -2828,6 +2972,8 @@ targets:
 
     fn achieve_commit(cwd: &str, id: &str, attestation: &str) -> ToolResult {
         handle_commit(crate::tools::CommitTool {
+            models: None,
+            adopt_model_preferences: false,
             cwd: cwd.to_string(),
             op: "achieve".to_string(),
             id: Some(id.to_string()),

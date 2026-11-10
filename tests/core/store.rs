@@ -586,6 +586,8 @@ fn t99_missing_required_field_does_not_brick_other_reads() {
     let query = |view: &str, id: Option<&str>| {
         text_from_call_result(
             handle_query(QueryTool {
+                model_class: None,
+                format: None,
                 cwd: cwd.clone(),
                 view: Some(view.to_string()),
                 id: id.map(str::to_string),
@@ -643,6 +645,8 @@ fn t64_one_invalid_target_does_not_brick_other_reads() {
     let query = |view: &str, id: Option<&str>| {
         text_from_call_result(
             handle_query(QueryTool {
+                model_class: None,
+                format: None,
                 cwd: cwd.clone(),
                 view: Some(view.to_string()),
                 id: id.map(str::to_string),

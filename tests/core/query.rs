@@ -190,6 +190,8 @@ fn query_graph_view_accepts_subgraph_params() {
 
     // Default whole active graph — fenced.
     let result = handle_query(QueryTool {
+        model_class: None,
+        format: None,
         cwd: cwd.clone(),
         view: Some("graph".into()),
         id: None,
@@ -213,6 +215,8 @@ fn query_graph_view_accepts_subgraph_params() {
 
     // Explicit nodes via query params.
     let sub = handle_query(QueryTool {
+        model_class: None,
+        format: None,
         cwd: cwd.clone(),
         view: Some("graph".into()),
         id: None,
@@ -235,6 +239,8 @@ fn query_graph_view_accepts_subgraph_params() {
 
     // Seeds + expand ancestors.
     let exp = handle_query(QueryTool {
+        model_class: None,
+        format: None,
         cwd,
         view: Some("graph".into()),
         id: None,
@@ -330,6 +336,7 @@ fn validate_flags_active_parent_missing_dotted_child() {
             cross_enables: vec![],
             tags: vec![],
             strategy: None,
+            models: None,
             origin: "test".to_string(),
             discovered: date,
             achieved: None,

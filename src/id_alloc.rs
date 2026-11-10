@@ -600,6 +600,7 @@ mod top_level_id_tests {
                 cross_enables: vec![],
                 tags: vec![],
                 strategy: None,
+                models: None,
                 origin: "test".into(),
                 discovered: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
                 achieved: None,

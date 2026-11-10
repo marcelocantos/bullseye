@@ -102,6 +102,8 @@ fn achieve_with_stale_base_refuses_and_leaves_target_identified() {
 
     let stale_base = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     let err = handle_commit(CommitTool {
+        models: None,
+        adopt_model_preferences: false,
         cwd: cwd.clone(),
         op: "achieve".into(),
         id: Some("T1".into()),

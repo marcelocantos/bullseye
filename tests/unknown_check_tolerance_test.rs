@@ -361,10 +361,12 @@ fn a_too_new_ledger_says_upgrade_rather_than_naming_an_enum() {
     // stamps, which is why raising the stamp alone did not fix the
     // trap. This test pins the order so the next bump is legible.
     let tmp = tempfile::tempdir().unwrap();
+    let future = bullseye::schema::CURRENT_SCHEMA_VERSION + 1;
     std::fs::write(
         tmp.path().join("bullseye.yaml"),
-        r#"
-schema_version: 7
+        format!(
+            r#"
+schema_version: {future}
 targets:
   T1:
     name: Uses a kind from two versions ahead
@@ -378,14 +380,15 @@ targets:
     checks:
     - quantum_entanglement:
         qubits: 12
-"#,
+"#
+        ),
     )
     .unwrap();
 
     let (code, out) = run(tmp.path(), &["query", "--view", "list"]);
     assert_ne!(code, 0, "a too-new ledger must fail:\n{out}");
     assert!(
-        out.contains("schema_version 7") && out.contains("only supports up to"),
+        out.contains(&format!("schema_version {future}")) && out.contains("only supports up to"),
         "the error must name the version gap:\n{out}",
     );
     assert!(

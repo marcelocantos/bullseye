@@ -42,11 +42,20 @@ pub struct OpenTool {
     description = "Core: read the intent ledger. `view` selects the projection: \
         context (default — session snapshot), frontier, target (requires id), list \
         (optional filter), summary (bounded; frontier_details=true for full), graph (Mermaid; optional scope/nodes/seeds/expand — 🎯T57), \
-        validate. Replaces separate list/get/\
+        validate. target/frontier accept format=json for complete structured records; \
+        frontier accepts model_class=economy|standard|frontier as the available executor's capability. Replaces separate list/get/\
         frontier/summary/graph/validate/startup_context calls for new agents."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct QueryTool {
+    /// Available executor capability for view=frontier: economy | standard | frontier.
+    /// Includes targets whose minimum class is at most this class, and targets with no execution preference.
+    #[serde(default)]
+    pub model_class: Option<String>,
+
+    /// text (default) | json. JSON is available for target and frontier views.
+    #[serde(default)]
+    pub format: Option<String>,
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
@@ -108,7 +117,11 @@ pub struct QueryTool {
         assign (mark owned-by-another: id + owner + reason — excludes from frontier without \
         unblocking dependents), unassign (clear ownership exclusion), \
         postpone (hide from the frontier until postponed_until and/or postpone_predicate), \
-        wake (clear a postponement). Set or clear a calendar deadline with track + `due` \
+        wake (clear a postponement), migrate-model-tags (ledger-wide conversion of legacy \
+        model:/review: families, preserving historical metadata). track accepts models \
+        as a YAML/JSON execute/review block; an empty string clears it. First adoption \
+        requires adopt_model_preferences=true after every consumer supports schema v7. \
+        Set or clear a calendar deadline with track + `due` \
         (YYYY-MM-DD; empty string clears) — due never gates the frontier. \
         Successful results include a structured header (ok, op, ids, changed, frontier, file). \
         On track create, the allocated ID is knowable ONLY from that header (`ids:`) — never \
@@ -121,10 +134,18 @@ pub struct QueryTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct CommitTool {
+    /// Executor/reviewer preference block as YAML or JSON, for op=track.
+    /// `{execute: {class: frontier, effort: high, pins: {claude: opus}}}`.
+    #[serde(default)]
+    pub models: Option<String>,
+
+    /// Acknowledge v7 rollout cost before introducing the first models block or migrating model tags.
+    #[serde(default)]
+    pub adopt_model_preferences: bool,
     /// Working directory to discover bullseye.yaml from.
     pub cwd: String,
 
-    /// track | block | split | achieve | defer | reopen | assign | unassign | postpone | wake | rehash
+    /// track | block | split | achieve | defer | reopen | assign | unassign | postpone | wake | rehash | migrate-model-tags
     pub op: String,
 
     /// Target ID (achieve/defer/reopen/block/patch; optional on track create).
@@ -1044,13 +1065,15 @@ pub struct SyncPrioritiesTool {
         beginning with `_` allocates an ID, reported back in the `ids:` header (never \
         predict the next ID by scanning the file). Optional top-level `base: sha256:…` is \
         a CAS token: a mismatch is code=conflict, meaning the ledger moved under you. \
-        Patchable fields: name, status, value, cost, actual_cost, acceptance, checks, context, \
+        Patchable fields: name, status, value, cost, actual_cost, acceptance, checks, models, context, \
         context_append, context_replace, tags, depends_on, blocks, origin, child_of, attestation, reason, owner, \
         postponed_until, postpone_predicate, due (calendar deadline YYYY-MM-DD; never gates \
         the frontier), `clear` (a list of fields to reset to empty — \
         omitting a field means leave it alone, so `clear` is how a field becomes nothing), \
         and `if_status` (a precondition: refuse unless the target currently has that \
-        status). \
+        status). models replaces the whole execute/review block; clear: [models] removes it. \
+        The first models block requires top-level adopt_model_preferences: true after \
+        upgrading every consumer to schema v7. \
         Evidence required: status→achieved needs attestation; status→set_aside, reopening \
         an achieved target, and any owner change need reason. \
         Prefer this over bullseye_commit and the put/retire/set_aside/revert/subdivide \
