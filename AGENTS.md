@@ -61,7 +61,8 @@ gatecheck.rs           — Cited gate/attestation validation at achieve time
 github.rs / github_issues.rs — GitHub issue integrations
 bounded.rs / cache.rs / repo_guard.rs — Bounds, caching and repo guardrails
 repo_identity.rs       — Remote-derived repo identity for external ledgers
-t3_plugin.rs           — Opt-in T3 panel WebSocket at /plugins/t3 (🎯T114)
+t3_plugin.rs           — Opt-in T3 panel WebSocket + probe at /plugins/t3 (🎯T114)
+t3_discovery.rs        — Advertises that endpoint to T3 Code's plugin discovery
 import.rs / version.rs — Markdown import and version support
 ```
 
@@ -141,14 +142,22 @@ MCP discovery but never performs the path-keyed → repo-keyed move.
 Local-only by construction: startup refuses a non-loopback `--addr`, and
 any request with an `Origin` header gets 403. Bounds: 1 MiB frames, 2000
 rows, 16 connections, 128 subscriptions per connection; malformed frames
-close the socket with 1008 (the protocol has no error frame). T3 side:
-`panel-plugins.json` entry `{"id":"bullseye","connection":{"kind":"server",
-"baseUrl":"http://127.0.0.1:18743/plugins/t3"}}`. Supervised daemon:
+close the socket with 1008 (the protocol has no error frame). A plain GET
+of the route (no `Upgrade`) is a context-free probe returning
+`{"protocol":1,"id":"bullseye","name":"Bullseye"}` plus an
+`x-bullseye-instance` header. Discovery (`src/t3_discovery.rs`): once the
+probe shows this process owns the listener, the daemon atomically writes
+`$XDG_DATA_HOME/t3code/plugins/bullseye-<port>.json` (home fallback
+`~/.local/share`, relative XDG ignored; file 0600, dir 0700) and removes
+it on SIGINT/SIGTERM and return, only if its content is still what it
+wrote. The T3 side consents per user; T3 owns that UI and persistence,
+Bullseye owns the manifest and probe. Supervised daemon:
 `BULLSEYE_T3_PLUGIN=1 supervisor/install.sh` renders the variable into
 `supervisor.d/bullseye.ini` (omit it and a re-render turns the endpoint
 off). Tests: `tests/t3_plugin_test.rs` boots the binary with
-`BULLSEYE_DATA_DIR`/`HOME` in a tempdir on a free port and mutates
-ledgers with the real CLI; it runs under `make gate` via `cargo test`.
+`BULLSEYE_DATA_DIR`/`HOME` in a tempdir on a free port, mutates
+ledgers with the real CLI and checks manifest publication, probe,
+withdrawal and multi-daemon isolation; it runs under `make gate` via `cargo test`.
 
 `--default-location` is process-wide, so under the daemon it is a
 machine-wide default rather than a per-invocation choice.

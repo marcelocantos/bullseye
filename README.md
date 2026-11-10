@@ -129,18 +129,38 @@ listener as `/mcp`; there is no second port and no adapter process.
 Re-running `supervisor/install.sh` without the variable renders the
 daemon with the endpoint off again.
 
-Point T3 at it by adding a server entry to `panel-plugins.json` in the T3
-environment's userdata folder (the URL is resolved on the machine that
-hosts the T3 server):
+### Discovery
+
+With the endpoint on, the daemon advertises itself to T3 Code. Once it is
+listening, it writes a small manifest into T3's per-user plugin directory,
+`$XDG_DATA_HOME/t3code/plugins/` (`~/.local/share/t3code/plugins/` when
+`XDG_DATA_HOME` is unset or not an absolute path):
 
 ```json
-[
-  {
-    "id": "bullseye",
-    "connection": { "kind": "server", "baseUrl": "http://127.0.0.1:18743/plugins/t3" }
-  }
-]
+{"protocol":1,"id":"bullseye","name":"Bullseye","connection":{"kind":"server","baseUrl":"http://127.0.0.1:18743/plugins/t3"}}
 ```
+
+The file is `bullseye-<port>.json`, so daemons on different ports never
+share one. It is written atomically (temporary file, then rename) with
+mode `0600` in a `0700` directory, only after this process is answering
+on the port, and removed on `SIGINT`/`SIGTERM` or normal exit, but only
+if it still holds what this daemon wrote. A daemon that loses the bind
+race advertises nothing and removes nothing. A killed daemon leaves a
+stale file, which T3 ignores because nothing answers the probe.
+
+A plain `GET` of that URL (no `Upgrade`, no `Origin`) is a context-free
+compatibility probe. It returns
+`{"protocol":1,"id":"bullseye","name":"Bullseye"}` and involves no
+thread, workspace or ledger; the same URL's WebSocket upgrade is the
+panel itself. T3 then asks its user before connecting: open a thread's
+details in a T3 build with plugin support and choose **Enable**. Nothing
+is configured by hand, and Bullseye never starts or configures T3.
+
+The manifest contract is documented for plugin authors in T3 Code's
+`docs/operations/panel-plugins.md` (Discovery). A hand-written
+`panel-plugins.json` entry
+`{"id":"bullseye","connection":{"kind":"server","baseUrl":"http://127.0.0.1:18743/plugins/t3"}}`
+in the T3 environment's userdata folder still works and takes precedence.
 
 Each open thread shows the ledger for its workspace: the **frontier** by
 default, with **active** and **all** one click away. The ledger is found

@@ -18,12 +18,13 @@ local clean rebuilds of the MCP core; see
 ## Installation
 
 For T3 Code sidebar panels, use a T3 build with external panel support and
-Bullseye 0.59.0 or later. Enable the endpoint with `bullseye serve --t3-plugin`,
+Bullseye 0.59.0 or later (self-advertising needs a later release). Enable the endpoint with `bullseye serve --t3-plugin`,
 or configure the supervised daemon with
 `BULLSEYE_T3_PLUGIN=1 supervisor/install.sh`. The same listener then serves
 `/mcp` and `/plugins/t3`; the panel endpoint is disabled by default.
-Configure T3's `panel-plugins.json` with
-`[{"id":"bullseye","connection":{"kind":"server","baseUrl":"http://127.0.0.1:18743/plugins/t3"}}]`.
+Bullseye then advertises itself to T3 Code (a manifest in
+`$XDG_DATA_HOME/t3code/plugins/`, removed on exit); the T3 user chooses **Enable**
+in thread details, so no hand-written configuration is needed.
 T3 connects to Bullseye directly; no adapter or additional Node runtime is needed.
 The address is local to the T3 server's machine.
 

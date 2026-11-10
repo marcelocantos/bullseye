@@ -10,6 +10,10 @@
 //! external ledger root (🎯T102). Ledgers are mutated by the real CLI
 //! in a separate process — the way an agent or a human would — never
 //! through the daemon, which is exactly the case polling exists for.
+//!
+//! The same daemons are checked for what T3 Code's plugin discovery
+//! relies on: the advertised manifest, the context-free probe, and
+//! withdrawal of the manifest on exit.
 
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -58,6 +62,7 @@ impl Daemon {
         cmd.args(["serve", "--addr", &format!("127.0.0.1:{port}")])
             .args(args)
             .env_remove("BULLSEYE_T3_PLUGIN")
+            .env_remove("XDG_DATA_HOME")
             .env("BULLSEYE_DATA_DIR", sandbox.path().join("data"))
             .env("HOME", sandbox.path())
             .stdout(Stdio::null())
@@ -726,4 +731,240 @@ fn subscriptions_per_connection_are_bounded_and_survivable() {
     assert_eq!(client.snapshot()["subscriptionId"], "s0");
     client.subscribe("s128", "th", &none, None);
     client.expect_close(CloseCode::Policy);
+}
+
+// ---- T3 Code plugin discovery -------------------------------------------
+
+const MANIFEST_DEADLINE: Duration = Duration::from_secs(15);
+
+/// The directory discovery reads, under a `HOME` with no `XDG_DATA_HOME`.
+fn manifest_dir_under(home: &Path) -> PathBuf {
+    home.join(".local/share/t3code/plugins")
+}
+
+fn manifest_path(daemon: &Daemon) -> PathBuf {
+    manifest_dir_under(daemon.sandbox.path()).join(format!("bullseye-{}.json", daemon.port))
+}
+
+fn expected_manifest(port: u16) -> String {
+    format!(
+        "{{\"protocol\":1,\"id\":\"bullseye\",\"name\":\"Bullseye\",\"connection\":{{\"kind\":\"server\",\"baseUrl\":\"http://127.0.0.1:{port}/plugins/t3\"}}}}\n"
+    )
+}
+
+fn wait_for_file(path: &Path) -> String {
+    let deadline = Instant::now() + MANIFEST_DEADLINE;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{} never appeared",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn dir_entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Plain HTTP GET with optional extra headers; returns status, lowercased
+/// header lines and body.
+fn http_get(port: u16, path: &str, extra: &[(&str, &str)]) -> (u16, String, String) {
+    use std::io::{Read, Write};
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("tcp");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let mut request =
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n");
+    for (k, v) in extra {
+        request.push_str(&format!("{k}: {v}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes()).expect("write");
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).expect("read");
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("status");
+    (status, head.to_ascii_lowercase(), body.to_string())
+}
+
+/// Ask the daemon to stop the way a supervisor does, and wait for exit.
+fn terminate(child: &mut Child) {
+    let status = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(status.success());
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while child.try_wait().expect("wait").is_none() {
+        assert!(Instant::now() < deadline, "daemon ignored SIGTERM");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn disabled_endpoint_advertises_nothing_and_has_no_probe() {
+    let daemon = Daemon::start(&[], &[]);
+    let (status, _, _) = http_get(daemon.port, "/plugins/t3", &[]);
+    assert_eq!(status, 404);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!manifest_dir_under(daemon.sandbox.path()).exists());
+}
+
+#[test]
+fn enabled_daemon_advertises_the_agreed_manifest_and_answers_the_probe() {
+    let daemon = Daemon::start(&["--t3-plugin"], &[]);
+    let path = manifest_path(&daemon);
+    assert_eq!(wait_for_file(&path), expected_manifest(daemon.port));
+    // Atomic publication leaves no temporary files behind.
+    assert_eq!(
+        dir_entries(path.parent().expect("dir")),
+        [format!("bullseye-{}.json", daemon.port)]
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(path.parent().expect("dir")), 0o700);
+    }
+
+    let (status, head, body) = http_get(daemon.port, "/plugins/t3", &[]);
+    assert_eq!(status, 200);
+    assert!(head.contains("content-type: application/json"), "{head}");
+    assert_eq!(body, r#"{"protocol":1,"id":"bullseye","name":"Bullseye"}"#);
+
+    // A browser's request is refused, probe or not.
+    let (status, _, _) = http_get(
+        daemon.port,
+        "/plugins/t3",
+        &[("Origin", "http://evil.example")],
+    );
+    assert_eq!(status, 403);
+
+    // The panel WebSocket is unaffected by the probe.
+    let ledger = daemon.ledger("ws", 1);
+    let mut client = daemon.connect();
+    client.subscribe("s1", "th1", &ledger, None);
+    assert_eq!(row_ids(&client.snapshot()), ["T1"]);
+}
+
+#[test]
+fn a_broken_upgrade_is_rejected_rather_than_probed() {
+    let daemon = Daemon::start(&["--t3-plugin"], &[]);
+    let (status, _, body) = http_get(
+        daemon.port,
+        "/plugins/t3",
+        &[("Connection", "Upgrade"), ("Upgrade", "websocket")],
+    );
+    assert_eq!(status, 400);
+    assert!(!body.contains("\"protocol\""), "{body}");
+}
+
+#[test]
+fn xdg_data_home_is_honoured_and_a_relative_one_is_ignored() {
+    let xdg = TempDir::new().expect("xdg");
+    let daemon = Daemon::start(
+        &["--t3-plugin"],
+        &[("XDG_DATA_HOME", xdg.path().to_str().expect("utf8"))],
+    );
+    let path = xdg
+        .path()
+        .join(format!("t3code/plugins/bullseye-{}.json", daemon.port));
+    assert_eq!(wait_for_file(&path), expected_manifest(daemon.port));
+    assert!(!manifest_dir_under(daemon.sandbox.path()).exists());
+
+    let relative = Daemon::start(&["--t3-plugin"], &[("XDG_DATA_HOME", "relative/data")]);
+    assert_eq!(
+        wait_for_file(&manifest_path(&relative)),
+        expected_manifest(relative.port)
+    );
+}
+
+#[test]
+fn termination_withdraws_the_manifest() {
+    let mut daemon = Daemon::start(&["--t3-plugin"], &[]);
+    let path = manifest_path(&daemon);
+    wait_for_file(&path);
+    // An open panel connection must not delay withdrawal.
+    let _client = daemon.connect();
+    terminate(&mut daemon.child);
+    assert!(!path.exists(), "manifest survived a graceful shutdown");
+}
+
+#[test]
+fn withdrawal_leaves_a_file_this_daemon_did_not_write() {
+    let mut daemon = Daemon::start(&["--t3-plugin"], &[]);
+    let path = manifest_path(&daemon);
+    wait_for_file(&path);
+    std::fs::write(&path, "somebody else's\n").expect("replace");
+    terminate(&mut daemon.child);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("still there"),
+        "somebody else's\n"
+    );
+}
+
+#[test]
+fn daemons_advertise_independently() {
+    // Daemons on distinct ports share one directory without colliding.
+    let shared = TempDir::new().expect("shared");
+    let env = [("XDG_DATA_HOME", shared.path().to_str().expect("utf8"))];
+    let mut a = Daemon::start(&["--t3-plugin"], &env);
+    let b = Daemon::start(&["--t3-plugin"], &env);
+    let dir = shared.path().join("t3code/plugins");
+    wait_for_file(&dir.join(format!("bullseye-{}.json", a.port)));
+    wait_for_file(&dir.join(format!("bullseye-{}.json", b.port)));
+    terminate(&mut a.child);
+    assert_eq!(dir_entries(&dir), [format!("bullseye-{}.json", b.port)]);
+}
+
+#[test]
+fn a_daemon_that_loses_the_port_neither_advertises_nor_withdraws() {
+    let owner = Daemon::start(&["--t3-plugin"], &[]);
+    let path = manifest_path(&owner);
+    wait_for_file(&path);
+    let before = std::fs::read_to_string(&path).expect("manifest");
+
+    let mut loser = Command::new(BIN)
+        .args([
+            "serve",
+            "--t3-plugin",
+            "--addr",
+            &format!("127.0.0.1:{}", owner.port),
+        ])
+        .env("HOME", owner.sandbox.path())
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("BULLSEYE_T3_PLUGIN")
+        .env("BULLSEYE_DATA_DIR", owner.data_dir())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn loser");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = loser.try_wait().expect("wait") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "second daemon never gave up");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(!status.success(), "binding a taken port must fail");
+    assert_eq!(std::fs::read_to_string(&path).expect("manifest"), before);
 }

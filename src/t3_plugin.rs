@@ -34,6 +34,11 @@
 //! this daemon, and the parse cache already makes an unchanged poll a
 //! `stat` plus one header-line read.
 //!
+//! **Discovery.** The same path answers a plain `GET` with a
+//! context-free probe, and the daemon advertises itself to T3 Code
+//! through [`crate::t3_discovery`]; T3 never needs hand-written
+//! configuration, only its user's consent.
+//!
 //! A malformed request closes the connection with 1008: the protocol
 //! has no error frame, and T3 treats any unknown frame as fatal anyway.
 
@@ -43,6 +48,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -610,13 +616,48 @@ fn upgrade(headers: &HeaderMap, ws: WebSocketUpgrade, slots: Arc<Semaphore>) -> 
         .on_upgrade(move |socket| serve_connection(socket, slot))
 }
 
+/// Context-free compatibility probe: a plain `GET` (no `Upgrade`) names
+/// the service and protocol and nothing else. T3 Code uses it to check a
+/// discovered manifest before it asks its user anything; no thread,
+/// workspace or ledger is involved. The instance header lets the daemon
+/// that advertises the endpoint confirm it is the one listening.
+fn probe(headers: &HeaderMap) -> Response {
+    if headers.contains_key(header::ORIGIN) {
+        return (StatusCode::FORBIDDEN, "browser origins are not allowed\n").into_response();
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+            (
+                header::HeaderName::from_static(crate::t3_discovery::INSTANCE_HEADER),
+                crate::t3_discovery::instance_token(),
+            ),
+        ],
+        crate::t3_discovery::probe_body(),
+    )
+        .into_response()
+}
+
 /// The route to mount at [`PATH`] via `HyperServer::with_route`.
 pub fn route() -> MethodRouter {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
-    get(move |headers: HeaderMap, ws: WebSocketUpgrade| {
-        let slots = Arc::clone(&slots);
-        async move { upgrade(&headers, ws, slots) }
-    })
+    get(
+        move |headers: HeaderMap, ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>| {
+            let slots = Arc::clone(&slots);
+            async move {
+                match ws {
+                    Ok(ws) => upgrade(&headers, ws, slots),
+                    // A request that asked to upgrade but did so wrongly
+                    // gets axum's rejection; anything else is the probe.
+                    Err(rejection) if headers.contains_key(header::UPGRADE) => {
+                        rejection.into_response()
+                    }
+                    Err(_) => probe(&headers),
+                }
+            }
+        },
+    )
 }
 
 #[cfg(test)]

@@ -1329,15 +1329,28 @@ async fn serve_http(addr: &str, t3_plugin: bool) -> SdkResult<()> {
         server_details(),
         TargetHandler.to_mcp_server_handler(),
         HyperServerOptions {
-            host,
+            host: host.clone(),
             port,
             ..Default::default()
         },
     );
-    if t3_plugin {
+    // The advertiser publishes only once this process answers its own
+    // probe, and withdraws on SIGINT/SIGTERM; dropping it covers a
+    // normal return. A bind failure returns before anything is published.
+    let advertisement = if t3_plugin {
         server = server.with_route(bullseye::t3_plugin::PATH, bullseye::t3_plugin::route());
+        bullseye::t3_discovery::spawn_advertiser(&host, port)
+    } else {
+        None
+    };
+    let result = server.start().await;
+    if let Some(advertisement) = advertisement {
+        advertisement
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .withdraw();
     }
-    server.start().await
+    result
 }
 
 #[cfg(test)]
