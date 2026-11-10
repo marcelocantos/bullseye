@@ -764,14 +764,12 @@ fn manifest_dir_under(home: &Path) -> PathBuf {
     home.join(".local/share/t3code/plugins")
 }
 
-/// Manifest file name for the daemon on `port`: the canonical id with `/`
-/// written as `+`, then the port as the instance.
-fn manifest_name(port: u16) -> String {
-    format!("github.com+marcelocantos+bullseye+{port}.json")
-}
+/// Manifest file name: the canonical id with `/` written as `+`. The port
+/// lives only in the manifest's `baseUrl`.
+const MANIFEST_NAME: &str = "github.com+marcelocantos+bullseye.json";
 
 fn manifest_path(daemon: &Daemon) -> PathBuf {
-    manifest_dir_under(daemon.sandbox.path()).join(manifest_name(daemon.port))
+    manifest_dir_under(daemon.sandbox.path()).join(MANIFEST_NAME)
 }
 
 fn expected_manifest(port: u16) -> String {
@@ -789,6 +787,18 @@ fn wait_for_file(path: &Path) -> String {
         assert!(
             Instant::now() < deadline,
             "{} never appeared",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_content(path: &Path, want: &str) {
+    let deadline = Instant::now() + MANIFEST_DEADLINE;
+    while std::fs::read_to_string(path).ok().as_deref() != Some(want) {
+        assert!(
+            Instant::now() < deadline,
+            "{} never held the expected manifest",
             path.display()
         );
         std::thread::sleep(Duration::from_millis(25));
@@ -861,10 +871,7 @@ fn enabled_daemon_advertises_the_agreed_manifest_and_answers_the_probe() {
     let path = manifest_path(&daemon);
     assert_eq!(wait_for_file(&path), expected_manifest(daemon.port));
     // Atomic publication leaves no temporary files behind.
-    assert_eq!(
-        dir_entries(path.parent().expect("dir")),
-        [manifest_name(daemon.port)]
-    );
+    assert_eq!(dir_entries(path.parent().expect("dir")), [MANIFEST_NAME]);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -915,10 +922,7 @@ fn xdg_data_home_is_honoured_and_a_relative_one_is_ignored() {
         &["--t3-plugin"],
         &[("XDG_DATA_HOME", xdg.path().to_str().expect("utf8"))],
     );
-    let path = xdg
-        .path()
-        .join("t3code/plugins")
-        .join(manifest_name(daemon.port));
+    let path = xdg.path().join("t3code/plugins").join(MANIFEST_NAME);
     assert_eq!(wait_for_file(&path), expected_manifest(daemon.port));
     assert!(!manifest_dir_under(daemon.sandbox.path()).exists());
 
@@ -954,17 +958,27 @@ fn withdrawal_leaves_a_file_this_daemon_did_not_write() {
 }
 
 #[test]
-fn daemons_advertise_independently() {
-    // Daemons on distinct ports share one directory without colliding.
+fn the_latest_publisher_owns_the_single_manifest_slot() {
+    // Daemons on distinct ports sharing one data directory share one file;
+    // the latest successful publisher wins, and an earlier daemon's
+    // shutdown must not remove the newer advertisement.
     let shared = TempDir::new().expect("shared");
     let env = [("XDG_DATA_HOME", shared.path().to_str().expect("utf8"))];
+    let path = shared.path().join("t3code/plugins").join(MANIFEST_NAME);
     let mut a = Daemon::start(&["--t3-plugin"], &env);
-    let b = Daemon::start(&["--t3-plugin"], &env);
-    let dir = shared.path().join("t3code/plugins");
-    wait_for_file(&dir.join(manifest_name(a.port)));
-    wait_for_file(&dir.join(manifest_name(b.port)));
+    assert_eq!(wait_for_file(&path), expected_manifest(a.port));
+    let mut b = Daemon::start(&["--t3-plugin"], &env);
+    wait_for_content(&path, &expected_manifest(b.port));
+
     terminate(&mut a.child);
-    assert_eq!(dir_entries(&dir), [manifest_name(b.port)]);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("newer advertisement survives"),
+        expected_manifest(b.port)
+    );
+    assert_eq!(dir_entries(path.parent().expect("dir")), [MANIFEST_NAME]);
+
+    terminate(&mut b.child);
+    assert!(!path.exists(), "the owner's shutdown removes the slot");
 }
 
 #[test]

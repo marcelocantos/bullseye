@@ -23,7 +23,7 @@ or configure the supervised daemon with
 `BULLSEYE_T3_PLUGIN=1 supervisor/install.sh`. The same listener then serves
 `/mcp` and `/plugins/t3`; the panel endpoint is disabled by default.
 Bullseye then advertises itself to T3 Code (a manifest in
-`$XDG_DATA_HOME/t3code/plugins/`, removed on exit); the T3 user chooses **Enable**
+`$XDG_DATA_HOME/t3code/plugins/github.com+marcelocantos+bullseye.json`, one slot where the latest daemon wins; removed on exit); the T3 user chooses **Enable**
 in thread details, so no hand-written configuration is needed.
 T3 connects to Bullseye directly; no adapter or additional Node runtime is needed.
 The address is local to the T3 server's machine.

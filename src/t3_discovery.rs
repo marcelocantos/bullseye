@@ -12,11 +12,13 @@
 //! **Location.** `$XDG_DATA_HOME/t3code/plugins/` when `XDG_DATA_HOME` is
 //! set to an absolute path, else `$HOME/.local/share/t3code/plugins/` (a
 //! relative `XDG_DATA_HOME` is ignored, as the XDG specification says).
-//! The file is `github.com+marcelocantos+bullseye+<port>.json`: the
-//! identity with `/` written as `+` (which never occurs inside an
-//! identity segment, so the name decodes exactly), then the listening
-//! port as the instance, so several daemons never share a file. T3
-//! ignores a manifest whose name does not match its `id`.
+//! The file is `github.com+marcelocantos+bullseye.json`: the identity
+//! with `/` written as `+` (which never occurs inside an identity
+//! segment, so the name decodes exactly). There is no instance suffix
+//! (T3 accepts an optional `+<instance>`; Bullseye does not use one), so
+//! the file is a single slot: the port appears only in `baseUrl`, and
+//! the latest daemon to publish wins. T3 ignores a manifest whose name
+//! does not match its `id`.
 //!
 //! **Contract (protocol 1).** Exactly this object, compact JSON:
 //!
@@ -37,8 +39,11 @@
 //! that lost the bind race never advertises or deletes another's file),
 //! is written atomically (temp file in the same directory, then rename),
 //! and is removed on SIGINT/SIGTERM and on normal return — but only if it
-//! still holds what this process wrote. A killed daemon leaves a stale
-//! file; T3 discards manifests whose service does not answer the probe.
+//! is still the very file this process renamed into place (device, inode,
+//! mtime) with the contents it wrote, so a newer daemon's advertisement,
+//! even one for the same endpoint, survives an older daemon's exit. A
+//! killed daemon leaves a stale file; T3 discards manifests whose service
+//! does not answer the probe.
 
 use std::fs;
 use std::io::Write;
@@ -99,10 +104,11 @@ fn manifest_dir_from_env() -> Option<PathBuf> {
     )
 }
 
-/// The manifest file name for the daemon on `port`: the identity with `/`
-/// encoded as `+`, then the port as the instance.
-pub fn manifest_file_name(port: u16) -> String {
-    format!("{}+{port}.json", PLUGIN_ID.replace('/', "+"))
+/// The manifest file name: the identity with `/` encoded as `+`. T3 also
+/// accepts a trailing `+<instance>`; Bullseye does not use one, so the
+/// file is a single slot and the latest publisher wins.
+pub fn manifest_file_name() -> String {
+    format!("{}.json", PLUGIN_ID.replace('/', "+"))
 }
 
 /// The manifest text for a daemon listening on `host:port`.
@@ -131,7 +137,41 @@ pub fn probe_body() -> String {
 pub struct Advertisement {
     path: PathBuf,
     contents: String,
-    published: bool,
+    /// Identity of the file this process renamed into place; `None` until
+    /// published. Contents alone cannot prove ownership: a restarted daemon
+    /// on the same endpoint writes identical bytes.
+    published: Option<FileIdentity>,
+}
+
+/// Device, inode and modification time. A successor's publish is a new
+/// temp file renamed over ours, so it differs in at least one of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FileIdentity {
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+    #[cfg(unix)]
+    mtime: (i64, i64),
+}
+
+impl FileIdentity {
+    fn of(meta: &fs::Metadata) -> FileIdentity {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            FileIdentity {
+                dev: meta.dev(),
+                ino: meta.ino(),
+                mtime: (meta.mtime(), meta.mtime_nsec()),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            FileIdentity {}
+        }
+    }
 }
 
 impl Advertisement {
@@ -143,11 +183,15 @@ impl Advertisement {
             return None;
         }
         let dir = manifest_dir_from_env()?;
-        Some(Advertisement {
-            path: dir.join(manifest_file_name(port)),
+        Some(Advertisement::in_dir(&dir, host, port))
+    }
+
+    fn in_dir(dir: &Path, host: &str, port: u16) -> Advertisement {
+        Advertisement {
+            path: dir.join(manifest_file_name()),
             contents: manifest_contents(host, port),
-            published: false,
-        })
+            published: None,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -165,23 +209,35 @@ impl Advertisement {
             name.to_string_lossy(),
             std::process::id()
         ));
+        // The temp file's identity survives the rename.
         let result = write_private(&temp, self.contents.as_bytes())
-            .and_then(|()| fs::rename(&temp, &self.path));
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
-        } else {
-            self.published = true;
+            .and_then(|()| fs::metadata(&temp))
+            .and_then(|meta| {
+                fs::rename(&temp, &self.path)?;
+                Ok(FileIdentity::of(&meta))
+            });
+        match result {
+            Ok(identity) => {
+                self.published = Some(identity);
+                Ok(())
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&temp);
+                Err(e)
+            }
         }
-        result
     }
 
-    /// Remove the manifest if it is still the one this process wrote.
+    /// Remove the manifest if it is still the file this process wrote:
+    /// same identity and same contents. A newer daemon's publish replaces
+    /// the file, so an earlier daemon's shutdown leaves it alone.
     pub fn withdraw(&mut self) {
-        if !self.published {
+        let Some(identity) = self.published.take() else {
             return;
-        }
-        self.published = false;
-        if fs::read_to_string(&self.path).is_ok_and(|now| now == self.contents) {
+        };
+        let ours = fs::metadata(&self.path).is_ok_and(|meta| FileIdentity::of(&meta) == identity)
+            && fs::read_to_string(&self.path).is_ok_and(|now| now == self.contents);
+        if ours {
             let _ = fs::remove_file(&self.path);
         }
     }
@@ -343,11 +399,29 @@ mod tests {
     }
 
     #[test]
-    fn file_name_encodes_the_identity_and_port() {
+    fn file_name_encodes_the_identity_only() {
         assert_eq!(
-            manifest_file_name(18743),
-            "github.com+marcelocantos+bullseye+18743.json"
+            manifest_file_name(),
+            "github.com+marcelocantos+bullseye.json"
         );
+    }
+
+    #[test]
+    fn a_restarted_daemon_on_the_same_endpoint_is_not_removed_by_its_predecessor() {
+        let dir = std::env::temp_dir().join(format!("bullseye-t3-ad-{}", instance_token()));
+        let mut old = Advertisement::in_dir(&dir, "127.0.0.1", 18743);
+        let mut new = Advertisement::in_dir(&dir, "127.0.0.1", 18743);
+        old.publish().expect("old publishes");
+        new.publish().expect("new publishes");
+        // Byte-identical contents: only ownership tells the two apart.
+        old.withdraw();
+        assert!(
+            old.path().exists(),
+            "predecessor removed its successor's file"
+        );
+        new.withdraw();
+        assert!(!new.path().exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -147,17 +147,19 @@ of the route (no `Upgrade`) is a context-free probe returning
 `{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye"}` plus an
 `x-bullseye-instance` header. Discovery (`src/t3_discovery.rs`): once the
 probe shows this process owns the listener, the daemon atomically writes
-`$XDG_DATA_HOME/t3code/plugins/github.com+marcelocantos+bullseye+<port>.json` (home fallback
-`~/.local/share`, relative XDG ignored; file 0600, dir 0700) and removes
-it on SIGINT/SIGTERM and return, only if its content is still what it
-wrote. The T3 side consents per user; T3 owns that UI and persistence,
+`$XDG_DATA_HOME/t3code/plugins/github.com+marcelocantos+bullseye.json` (home fallback
+`~/.local/share`, relative XDG ignored; file 0600, dir 0700; no instance
+suffix, so one slot where the latest publisher wins and the port lives
+only in `baseUrl`; T3 would also accept `+<instance>`) and removes
+it on SIGINT/SIGTERM and return, only if the file is still the one it
+wrote (same device/inode/mtime and contents). The T3 side consents per user; T3 owns that UI and persistence,
 Bullseye owns the manifest and probe. Supervised daemon:
 `BULLSEYE_T3_PLUGIN=1 supervisor/install.sh` renders the variable into
 `supervisor.d/bullseye.ini` (omit it and a re-render turns the endpoint
 off). Tests: `tests/t3_plugin_test.rs` boots the binary with
 `BULLSEYE_DATA_DIR`/`HOME` in a tempdir on a free port, mutates
 ledgers with the real CLI and checks manifest publication, probe,
-withdrawal and multi-daemon isolation; it runs under `make gate` via `cargo test`.
+withdrawal and single-slot takeover; it runs under `make gate` via `cargo test`.
 
 `--default-location` is process-wide, so under the daemon it is a
 machine-wide default rather than a per-invocation choice.

@@ -141,16 +141,18 @@ listening, it writes a small manifest into T3's per-user plugin directory,
 ```
 
 The id is the project's `host/owner/repo`. The file is named after it,
-with `/` written as `+`, followed by the port:
-`github.com+marcelocantos+bullseye+18743.json`, so daemons on different
-ports never share one. T3 ignores a file whose name does not match its
+with `/` written as `+`: `github.com+marcelocantos+bullseye.json`. The
+port appears only in `baseUrl`. The file is a single slot, so when several
+daemons share a data directory the most recent one to start advertises and
+the others are not offered. T3 ignores a file whose name does not match its
 `id`. If you configure the panel by hand in T3 instead, a `bullseye` id
 still works: filter selections for either id are honoured.
 
 The file is written atomically (temporary file, then rename) with
 mode `0600` in a `0700` directory, only after this process is answering
 on the port, and removed on `SIGINT`/`SIGTERM` or normal exit, but only
-if it still holds what this daemon wrote. A daemon that loses the bind
+if it is still the file this daemon wrote, so an earlier daemon exiting
+never removes a newer daemon's advertisement. A daemon that loses the bind
 race advertises nothing and removes nothing. A killed daemon leaves a
 stale file, which T3 ignores because nothing answers the probe.
 
