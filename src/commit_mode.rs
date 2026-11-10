@@ -52,8 +52,11 @@ pub fn persist_enabled() -> bool {
     if let Some(v) = PERSIST_OVERRIDE.get() {
         return v;
     }
-    if PROCESS_COMMIT_MODE.get() == Some(&true) {
-        return true;
+    if let Some(value) = PROCESS_COMMIT_MODE.get() {
+        return *value;
+    }
+    if let Some(settings) = crate::settings::current() {
+        return settings.commit_mode;
     }
     env_truthy(std::env::var(COMMIT_ENV).ok().as_deref())
 }
@@ -101,6 +104,9 @@ pub fn set_persist_override_for_tests(enabled: Option<bool>) {
 
 /// Ref name for commit-mode writes (env override or [`DEFAULT_REF`]).
 pub fn integration_ref_name() -> String {
+    if let Some(settings) = crate::settings::current() {
+        return settings.integration_ref.clone();
+    }
     std::env::var(INTEGRATION_REF_ENV).unwrap_or_else(|_| DEFAULT_REF.to_string())
 }
 

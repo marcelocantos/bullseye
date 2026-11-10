@@ -40,6 +40,7 @@ fn big_ledger(dir: &Path) {
 /// produces. Returns the child's stderr.
 fn stderr_when_reader_closes_early(dir: &Path, view: &str) -> String {
     let mut child = Command::new(BIN)
+        .arg("--no-config")
         .args(["query", "--view", view, "--filter", "all", "--cwd"])
         .arg(dir)
         .stdout(Stdio::piped())
@@ -92,6 +93,7 @@ fn the_fixture_actually_exceeds_one_pipe_buffer() {
     let dir = tempfile::tempdir().expect("tempdir");
     big_ledger(dir.path());
     let out = Command::new(BIN)
+        .arg("--no-config")
         .args(["query", "--view", "list", "--filter", "all", "--cwd"])
         .arg(dir.path())
         .output()
@@ -134,6 +136,7 @@ fn abrupt_client_disconnects_do_not_kill_the_server() {
     let addr = format!("127.0.0.1:{PORT}");
 
     let mut server = Command::new(BIN)
+        .arg("--no-config")
         .args(["serve", "--addr", &addr])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

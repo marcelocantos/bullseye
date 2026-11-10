@@ -63,6 +63,7 @@ impl Daemon {
         let sandbox = TempDir::new().expect("sandbox");
         let port = free_port();
         let mut cmd = Command::new(BIN);
+        cmd.arg("--no-config");
         cmd.args(["serve", "--addr", &format!("127.0.0.1:{port}")])
             .args(args)
             .env_remove("BULLSEYE_T3_PLUGIN")
@@ -122,6 +123,7 @@ impl Daemon {
     /// Run the CLI against a workspace, as a separate process.
     fn cli(&self, cwd: &Path, args: &[&str]) {
         let out = Command::new(BIN)
+            .arg("--no-config")
             .arg(args[0])
             .args(&args[1..])
             .arg("--cwd")
@@ -332,6 +334,7 @@ fn http_status(err: tungstenite::Error) -> u16 {
 /// Run `serve` args that must fail before binding; returns stderr.
 fn serve_fails(args: &[&str], env: &[(&str, &str)]) -> String {
     let mut cmd = Command::new(BIN);
+    cmd.arg("--no-config");
     cmd.arg("serve").args(args).env_remove("BULLSEYE_T3_PLUGIN");
     for (k, v) in env {
         cmd.env(k, v);
@@ -993,6 +996,7 @@ fn a_daemon_that_loses_the_port_neither_advertises_nor_withdraws() {
     let before = std::fs::read_to_string(&path).expect("manifest");
 
     let mut loser = Command::new(BIN)
+        .arg("--no-config")
         .args([
             "serve",
             "--t3-plugin",

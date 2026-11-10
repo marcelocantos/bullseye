@@ -83,6 +83,7 @@ fn ledger_dir() -> tempfile::TempDir {
 
 fn run(dir: &std::path::Path, args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .arg("--no-config")
         .args(args)
         .arg("--cwd")
         .arg(dir)
@@ -435,6 +436,7 @@ targets:
     .unwrap();
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .arg("--no-config")
         .args(["run-checks", "--all", "--cwd"])
         .arg(tmp.path())
         .env(bullseye::ops::CHECK_RUNNER_MARKER, "1")
@@ -536,6 +538,7 @@ targets:
     // check reported a confident red.
     let elsewhere = tempfile::tempdir().unwrap();
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .arg("--no-config")
         .args(["run-checks", "--all", "--cwd"])
         .arg(repo.path())
         .current_dir(elsewhere.path())
@@ -587,6 +590,7 @@ targets:
 
     let elsewhere = tempfile::tempdir().unwrap();
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .arg("--no-config")
         .args(["run-checks", "--all", "--cwd"])
         .arg(repo.path())
         .current_dir(elsewhere.path())
@@ -628,6 +632,7 @@ targets:
     .unwrap();
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_bullseye"))
+        .arg("--no-config")
         .args(["apply", "--file"])
         .arg(&frag)
         .arg("--cwd")

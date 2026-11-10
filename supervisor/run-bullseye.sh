@@ -11,7 +11,6 @@ if [ -z "${HOME:-}" ]; then
 fi
 export USER="${USER:-$(id -un)}"
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:${HOME}/.cargo/bin:${HOME}/.local/bin:${HOME}/.py/bin:${HOME}/go/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export BULLSEYE_ADDR="${BULLSEYE_ADDR:-127.0.0.1:18743}"
 
 if [ -n "${BULLSEYE_BIN:-}" ]; then
   BIN="$BULLSEYE_BIN"
@@ -36,5 +35,5 @@ if [ "${1:-}" = "--print-bin" ]; then
   exit 0
 fi
 
-echo "bullseye: running $BIN serve (BULLSEYE_ADDR=$BULLSEYE_ADDR)" >&2
-exec "$BIN" serve
+echo "bullseye: running $BIN serve" >&2
+exec "$BIN" serve "$@"

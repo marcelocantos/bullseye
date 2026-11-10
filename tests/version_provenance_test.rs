@@ -20,6 +20,7 @@ const UNKNOWN: &str = "unknown";
 /// Run the binary and return stdout+stderr, asserting a clean exit.
 fn run(args: &[&str]) -> String {
     let out = Command::new(BIN)
+        .arg("--no-config")
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("failed to run {BIN} {args:?}: {e}"));

@@ -89,6 +89,7 @@ fn start(port: u16) -> Server {
 
 fn start_with_gate_home(port: u16, gate_home: Option<&std::path::Path>) -> Server {
     let mut cmd = Command::new(BIN);
+    cmd.arg("--no-config");
     if let Some(home) = gate_home {
         cmd.env("JEVONS_HOME", home);
     }
@@ -173,6 +174,7 @@ fn model_preferences_cli_and_live_mcp_share_persistence_and_filtering() {
     std::fs::create_dir(&cwd).unwrap();
     let cli = |args: &[&str]| {
         Command::new(BIN)
+            .arg("--no-config")
             .args(args)
             .arg("--cwd")
             .arg(&cwd)
@@ -218,6 +220,7 @@ fn model_preferences_cli_and_live_mcp_share_persistence_and_filtering() {
         .port();
     let mut server = Server(
         Command::new(BIN)
+            .arg("--no-config")
             .args(["serve", "--addr", &format!("127.0.0.1:{port}")])
             .env("BULLSEYE_DATA_DIR", tmp.path().join("data"))
             .env("HOME", tmp.path())
@@ -302,6 +305,7 @@ fn model_preferences_cli_and_live_mcp_share_persistence_and_filtering() {
 #[test]
 fn serve_rejects_a_malformed_address_rather_than_binding_something_unexpected() {
     let out = Command::new(BIN)
+        .arg("--no-config")
         .args(["serve", "--addr", "127.0.0.1:not-a-port"])
         .output()
         .expect("runs");
@@ -313,6 +317,7 @@ fn serve_rejects_a_malformed_address_rather_than_binding_something_unexpected() 
 #[test]
 fn serve_rejects_an_unrecognised_flag() {
     let out = Command::new(BIN)
+        .arg("--no-config")
         .args(["serve", "--not-a-flag", "1"])
         .output()
         .expect("runs");
@@ -363,6 +368,7 @@ fn retire_gate_cli_and_http_refuse_bad_evidence_and_persist_risk_marker() {
     let expected = format!("{}: {reason}", bullseye::gatecheck::ACCEPTED_RISK_MARKER);
     let cli = |cwd: &std::path::Path, args: &[&str]| {
         Command::new(BIN)
+            .arg("--no-config")
             .env("JEVONS_HOME", gates.path())
             .args(args)
             .arg("--cwd")

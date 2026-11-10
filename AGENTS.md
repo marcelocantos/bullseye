@@ -93,6 +93,12 @@ Tests are split between unit tests in modules (`portfolio`, `import`) and integr
 
 ## Transport
 
+`src/settings.rs` resolves process settings once: defaults < YAML file <
+environment < CLI. The default file is `$XDG_CONFIG_HOME/bullseye/config.yaml`
+(fallback `~/.config/bullseye/config.yaml`); `--config FILE` selects one and
+`--no-config` bypasses files. See `docs/configuration.md`. Executable tests
+use `--no-config` except for the isolated config journey.
+
 HTTP is the only MCP transport (🎯T81): `bullseye serve [--addr HOST:PORT]`
 serves `/mcp`, default `127.0.0.1:18743`, env `BULLSEYE_ADDR`. Agents reach
 it through an mcpbridge `url` entry; supervisord owns the process.
@@ -180,8 +186,8 @@ it on SIGINT/SIGTERM and return, only if the file is still the one it
 wrote (same device/inode/mtime and contents). The T3 side consents per user; T3 owns that UI and persistence,
 Bullseye owns the manifest and probe. Supervised daemon:
 `BULLSEYE_T3_PLUGIN=1 supervisor/install.sh` renders the variable into
-`supervisor.d/bullseye.ini` (omit it and a re-render turns the endpoint
-off). Tests: `tests/t3_plugin_test.rs` boots the binary with
+`supervisor.d/bullseye.ini` as an override. Without that variable the daemon
+uses `t3_plugin` from its YAML configuration. Tests: `tests/t3_plugin_test.rs` boots the binary with
 `BULLSEYE_DATA_DIR`/`HOME` in a tempdir on a free port, mutates
 ledgers with the real CLI and through row actions, and checks panels,
 surfaces, results, manifest publication, probe, withdrawal and

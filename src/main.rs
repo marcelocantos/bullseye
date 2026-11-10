@@ -46,7 +46,7 @@ fn restore_default_sigpipe() {
 /// Loopback address the HTTP MCP daemon binds by default (🎯T78).
 /// Loopback only, deliberately: the ledger is a local artifact and the
 /// server has no authentication of its own.
-const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:18743";
+const DEFAULT_SERVE_ADDR: &str = bullseye::settings::DEFAULT_ADDR;
 
 /// The MCP server identity and capability advertisement.
 ///
@@ -89,10 +89,12 @@ fn server_details() -> InitializeResult {
 #[tokio::main]
 async fn main() -> SdkResult<()> {
     let args: Vec<String> = std::env::args().collect();
-    // Server create default (🎯T61) may appear as a global flag before any
-    // subcommand, or alone when starting MCP: `bullseye --default-location external`.
-    let (server_flags, rest) = split_server_flags(&args[1..]);
-    apply_server_flags(&server_flags);
+    let mut overrides = bullseye::settings::Overrides::default();
+    let rest =
+        bullseye::settings::peel_args(&args[1..], &mut overrides, true).unwrap_or_else(|e| {
+            eprintln!("configuration: {e}");
+            process::exit(1)
+        });
 
     // `serve` starts the HTTP transport and never returns; it is handled
     // before the subcommand table because it is async and the table's
@@ -101,15 +103,22 @@ async fn main() -> SdkResult<()> {
         let serve_args = &rest[1..];
         if has_flag(serve_args, "--help") {
             println!(
-                "bullseye serve [--addr HOST:PORT] [--t3-plugin]\n\
+                "bullseye serve [--config FILE | --no-config] [--addr HOST:PORT] [--t3-plugin | --no-t3-plugin]\n\
                  \n\
                  Start the HTTP MCP server. Endpoint: /mcp\n\
-                 Default address: {DEFAULT_SERVE_ADDR} (override with --addr or BULLSEYE_ADDR)\n\
+                 Configuration: $XDG_CONFIG_HOME/bullseye/config.yaml (fallback ~/.config/bullseye/config.yaml).\n\
+                 Precedence: built-in defaults < YAML file < environment < command line.\n\
+                 --config FILE (or BULLSEYE_CONFIG) selects a file; --no-config bypasses files.\n\
+                 Default address: {DEFAULT_SERVE_ADDR} (addr / BULLSEYE_ADDR / --addr)\n\
                  --t3-plugin (or BULLSEYE_T3_PLUGIN=1) also serves the T3 Code sidebar\n\
                  panel WebSocket at /plugins/t3 on the same listener (off by default;\n\
                  loopback only).\n\
+                 --no-t3-plugin disables a configured plugin; --t3-plugin=false also works.\n\
                  Commit mode (process-wide): BULLSEYE_COMMIT=1 and optional\n\
-                 BULLSEYE_INTEGRATION_REF=refs/heads/master, or --commit-mode before serve.\n\
+                 BULLSEYE_INTEGRATION_REF=refs/heads/master, or --commit-mode / --no-commit-mode.\n\
+                 Other startup overrides: --data-dir PATH, --default-location in_repo|external,\n\
+                 --integration-ref refs/heads/master, --cache-ttl-secs N.\n\
+                 --print-addr prints the effective listener address and exits without starting a daemon.\n\
                  \n\
                  This is the only MCP transport; a bare `bullseye` invocation is a\n\
                  stale stdio registration and exits with instructions.\n\
@@ -120,22 +129,33 @@ async fn main() -> SdkResult<()> {
             );
             process::exit(0);
         }
-        if let Err(msg) = reject_unknown_flags(serve_args, SERVE_FLAGS, "serve") {
+        let remainder = bullseye::settings::peel_args(serve_args, &mut overrides, false)
+            .unwrap_or_else(|e| {
+                eprintln!("configuration: {e}");
+                process::exit(1)
+            });
+        if let Err(msg) = reject_unknown_flags(&remainder, SERVE_FLAGS, "serve") {
             eprintln!("{msg}");
             process::exit(1);
         }
-        let addr = flag_value(serve_args, "--addr")
-            .or_else(|| std::env::var("BULLSEYE_ADDR").ok())
-            .unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_string());
-        let t3_plugin = has_flag(serve_args, "--t3-plugin")
-            || match bullseye::t3_plugin::enabled_from_env() {
-                Ok(on) => on,
-                Err(msg) => {
-                    eprintln!("serve: {msg}");
-                    process::exit(1);
-                }
-            };
-        return serve_http(&addr, t3_plugin).await;
+        if remainder.iter().any(|a| !a.starts_with('-')) {
+            eprintln!("serve: unexpected positional argument");
+            process::exit(1);
+        }
+        let settings = configure(overrides);
+        if has_flag(&remainder, "--print-addr") {
+            println!("{}", settings.addr);
+            return Ok(());
+        }
+        return serve_http(&settings.addr, settings.t3_plugin).await;
+    }
+
+    // Help/version and stale stdio registrations remain diagnosable even with a broken config.
+    if rest
+        .first()
+        .is_some_and(|s| !matches!(s.as_str(), "--help" | "--help-agent" | "--version"))
+    {
+        configure(overrides);
     }
 
     // 🎯T77: from here down we are a CLI, so behave like one when a
@@ -267,52 +287,19 @@ async fn main() -> SdkResult<()> {
     process::exit(2);
 }
 
-/// Peel global server flags from argv. Recognises
-/// `--default-location VALUE` and `--default-location=VALUE` (🎯T61).
-fn split_server_flags(args: &[String]) -> (Vec<String>, Vec<String>) {
-    let mut flags = Vec::new();
-    let mut rest = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
-        if a == "--default-location" {
-            flags.push(a.clone());
-            if let Some(v) = args.get(i + 1) {
-                flags.push(v.clone());
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(rest_eq) = a.strip_prefix("--default-location=") {
-            flags.push("--default-location".to_string());
-            flags.push(rest_eq.to_string());
-            i += 1;
-            continue;
-        }
-        if a == "--commit-mode" {
-            flags.push(a.clone());
-            i += 1;
-            continue;
-        }
-        // First non-server-flag token starts the subcommand / remaining args.
-        rest.extend_from_slice(&args[i..]);
-        break;
+fn configure(overrides: bullseye::settings::Overrides) -> &'static bullseye::settings::Settings {
+    let settings = bullseye::settings::load(overrides).unwrap_or_else(|e| {
+        eprintln!("configuration: {e}");
+        process::exit(1)
+    });
+    if let Some(file) = &settings.file {
+        eprintln!("bullseye: configuration {}", file.display());
     }
-    (flags, rest)
-}
-
-fn apply_server_flags(flags: &[String]) {
-    if let Some(val) = flag_value(flags, "--default-location")
-        && let Err(e) = bullseye::config::set_process_default_location(&val)
-    {
-        eprintln!("--default-location: {e}");
-        process::exit(1);
-    }
-    if flags.iter().any(|f| f == "--commit-mode") {
-        bullseye::commit_mode::set_process_commit_mode(true);
-    }
+    bullseye::settings::install(settings).unwrap_or_else(|e| {
+        eprintln!("configuration: {e}");
+        process::exit(1)
+    });
+    bullseye::settings::current().expect("settings installed")
 }
 
 fn print_help() {
@@ -322,6 +309,11 @@ fn print_help() {
     );
     println!();
     println!("USAGE:");
+    println!("    bullseye [--config FILE | --no-config] [startup overrides] <command>");
+    println!(
+        "    Default config: $XDG_CONFIG_HOME/bullseye/config.yaml or ~/.config/bullseye/config.yaml"
+    );
+    println!("    Precedence: defaults < config file < environment < command line");
     println!("    bullseye serve [--addr HOST:PORT] [--t3-plugin]");
     println!("                               Start the HTTP MCP server (default 127.0.0.1:18743,");
     println!("                               endpoint /mcp; env BULLSEYE_ADDR). --t3-plugin or");
@@ -1298,26 +1290,15 @@ fn cli_apply(args: &[String]) -> Result<String, String> {
 }
 
 /// Flags `bullseye serve` accepts.
-const SERVE_FLAGS: &[(&str, bool)] = &[("--addr", true), ("--t3-plugin", false), ("--help", false)];
+const SERVE_FLAGS: &[(&str, bool)] = &[("--print-addr", false), ("--help", false)];
 
 /// Run the HTTP MCP server until terminated (🎯T78).
 ///
 /// Same handler and same `server_details` as the stdio path — only the
 /// transport differs, which is what keeps the two surfaces honest.
 async fn serve_http(addr: &str, t3_plugin: bool) -> SdkResult<()> {
-    let (host, port) = match addr.rsplit_once(':') {
-        Some((h, p)) => match p.parse::<u16>() {
-            Ok(port) => (h.to_string(), port),
-            Err(_) => {
-                eprintln!("serve: --addr expects HOST:PORT, got `{addr}` (port not a number)");
-                process::exit(1);
-            }
-        },
-        None => {
-            eprintln!("serve: --addr expects HOST:PORT, got `{addr}`");
-            process::exit(1);
-        }
-    };
+    let (host, port) = bullseye::settings::parse_addr(addr).expect("startup validated address");
+    let host = host.to_owned();
 
     // 🎯T114: the panel endpoint serves an unauthenticated local ledger, so
     // refuse to pair it with a non-loopback listener rather than expose it.

@@ -27,6 +27,7 @@ pub mod repo_identity;
 pub mod resolve;
 pub mod restore;
 pub mod schema;
+pub mod settings;
 pub mod store;
 pub mod t3_discovery;
 pub mod t3_panels;

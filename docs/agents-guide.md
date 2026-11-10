@@ -18,9 +18,9 @@ local clean rebuilds of the MCP core; see
 ## Installation
 
 For T3 Code sidebar panels, use a T3 build with external panel support and
-Bullseye 0.59.0 or later (self-advertising needs a later release). Enable the endpoint with `bullseye serve --t3-plugin`,
-or configure the supervised daemon with
-`BULLSEYE_T3_PLUGIN=1 supervisor/install.sh`. The same listener then serves
+Bullseye with panel support. Set `t3_plugin: true` in
+`~/.config/bullseye/config.yaml`, then run `bullseye serve` or
+`supervisor/install.sh`. The same listener then serves
 `/mcp` and `/plugins/t3`; the panel endpoint is disabled by default.
 Bullseye then advertises itself to T3 Code (a manifest in
 `$XDG_DATA_HOME/t3code/plugins/github.com+marcelocantos+bullseye.json`, one slot where the latest daemon wins; removed on exit); the T3 user chooses **Enable**
@@ -32,6 +32,12 @@ reopened, and handed to the thread's agent; every such change is an ordinary
 ledger mutation.
 T3 connects to Bullseye directly; no adapter or additional Node runtime is needed.
 The address is local to the T3 server's machine.
+
+Startup settings use **defaults < YAML file < environment < CLI**. The file
+is `$XDG_CONFIG_HOME/bullseye/config.yaml` with the usual `~/.config` fallback.
+`--config FILE` selects another file and `--no-config` bypasses files.
+`--no-t3-plugin` and `--no-commit-mode` can disable configured booleans.
+See [configuration](configuration.md) for every key and override.
 
 Bullseye runs as an MCP server. Installation is a **multi-step
 process** — the install is not complete until every step has

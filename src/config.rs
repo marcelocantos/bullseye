@@ -122,6 +122,9 @@ pub fn external_root() -> PathBuf {
     if let Some(dir) = DATA_DIR_OVERRIDE.with(|o| o.borrow().clone()) {
         return dir;
     }
+    if let Some(settings) = crate::settings::current() {
+        return settings.data_dir.clone();
+    }
     if let Ok(dir) = std::env::var("BULLSEYE_DATA_DIR") {
         return PathBuf::from(dir);
     }
@@ -140,6 +143,9 @@ pub fn default_location() -> Option<Location> {
     }
     if let Some(loc) = PROCESS_DEFAULT_LOCATION.get() {
         return Some(*loc);
+    }
+    if let Some(settings) = crate::settings::current() {
+        return settings.default_location;
     }
     match std::env::var(DEFAULT_LOCATION_ENV) {
         Ok(s) => Location::parse(s.trim()).ok(),

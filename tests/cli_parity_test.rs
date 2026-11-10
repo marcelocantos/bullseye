@@ -31,6 +31,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_bullseye");
 /// Run the binary and return (exit code, stdout+stderr).
 fn run(args: &[&str]) -> (i32, String) {
     let out = Command::new(BIN)
+        .arg("--no-config")
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("failed to run {BIN} {args:?}: {e}"));
@@ -537,6 +538,7 @@ fn cli_split_creates_children_from_a_yaml_list() {
 
     // And the stdin route, which is what an agent piping a heredoc uses.
     let mut child = std::process::Command::new(BIN)
+        .arg("--no-config")
         .args([
             "commit",
             "--op",
@@ -622,6 +624,7 @@ fn every_cli_only_subcommand_is_declared_with_a_reason() {
 fn issues_poll_dispatch_is_feature_aware_and_never_networks() {
     assert!(bullseye::cli::is_cli_only("issues-poll"));
     let out = Command::new(BIN)
+        .arg("--no-config")
         .arg("issues-poll")
         .env_remove("BULLSEYE_ISSUEPIPE_URL")
         .env_remove("BULLSEYE_ISSUEPIPE_TOKEN")

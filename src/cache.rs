@@ -57,6 +57,9 @@ pub const TTL_ENV: &str = "BULLSEYE_CACHE_TTL_SECS";
 /// by the directory walks and git subprocesses it guards, and memoising
 /// it would make the override untestable in-process.
 pub fn ttl() -> Duration {
+    if let Some(settings) = crate::settings::current() {
+        return Duration::from_secs(settings.cache_ttl_secs);
+    }
     std::env::var(TTL_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())

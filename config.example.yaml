@@ -1,0 +1,11 @@
+# Copy to ~/.config/bullseye/config.yaml, then run: bullseye serve
+# Environment overrides this file; command-line options override both.
+t3_plugin: true
+
+# Optional settings (built-in defaults shown):
+# addr: 127.0.0.1:18743
+# data_dir: ~/.local/share/bullseye
+# default_location: external  # unset by default: creation asks for a location
+# commit_mode: false
+# integration_ref: refs/heads/master
+# cache_ttl_secs: 300

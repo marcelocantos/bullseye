@@ -112,22 +112,36 @@ claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
 grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
 ```
 
+## Configuration
+
+Persistent settings default to `~/.config/bullseye/config.yaml` (or
+`$XDG_CONFIG_HOME/bullseye/config.yaml`). For example:
+
+```yaml
+t3_plugin: true
+```
+
+Start with `bullseye serve`. Precedence is **defaults < config file <
+environment < command line**. `--config FILE` selects another file;
+`--no-config` bypasses files. See [all settings and overrides](docs/configuration.md)
+or [the example file](config.example.yaml).
+
 ## T3 Code sidebar panel (opt-in)
 
 The daemon can also supply a live **Bullseye** section to the thread
 sidebar of a [T3 Code](https://github.com/pingdotgg/t3code) build that
-supports panel plugins. It is off by default. Enable it with a flag or
-an environment variable, then restart the daemon:
+supports panel plugins. Set `t3_plugin: true` in the configuration file,
+then start or restart the daemon:
 
 ```bash
-bullseye serve --t3-plugin                 # or: BULLSEYE_T3_PLUGIN=1 bullseye serve
-BULLSEYE_T3_PLUGIN=1 supervisor/install.sh # supervised daemon: bakes the variable into supervisor.d/bullseye.ini
+bullseye serve
+supervisor/install.sh # supervised daemon: reads the same config file
 ```
 
 The panel is a WebSocket at `ws://127.0.0.1:18743/plugins/t3` on the same
 listener as `/mcp`; there is no second port and no adapter process.
-Re-running `supervisor/install.sh` without the variable renders the
-daemon with the endpoint off again.
+Environment and command-line settings remain available as overrides;
+`bullseye serve --no-t3-plugin` disables it for one invocation.
 
 ### Discovery
 

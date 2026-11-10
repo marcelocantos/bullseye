@@ -35,6 +35,7 @@ fn query_cli_and_mcp_select_same_bounded_and_full_projection() {
             args.push(flag);
         }
         let output = Command::new(env!("CARGO_BIN_EXE_bullseye"))
+            .arg("--no-config")
             .args(args)
             .output()
             .unwrap();

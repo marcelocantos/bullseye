@@ -44,6 +44,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 /// would be.
 fn bullseye(repo: &Path, args: &[&str]) -> String {
     let out = Command::new(BIN)
+        .arg("--no-config")
         .args(args)
         .arg("--cwd")
         .arg(repo)
