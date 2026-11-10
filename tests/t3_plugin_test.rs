@@ -7,13 +7,17 @@
 //! Node server does: a plain WebSocket with no `Origin`. Every daemon
 //! runs on its own free loopback port with `BULLSEYE_DATA_DIR` and
 //! `HOME` pointed into a tempdir, so nothing here can reach the real
-//! external ledger root (🎯T102). Ledgers are mutated by the real CLI
-//! in a separate process — the way an agent or a human would — never
-//! through the daemon, which is exactly the case polling exists for.
+//! external ledger root (🎯T102). Ledgers are mostly mutated by the
+//! real CLI in a separate process — the way an agent or a human would —
+//! which is exactly the case polling exists for.
 //!
 //! The same daemons are checked for what T3 Code's plugin discovery
 //! relies on: the advertised manifest, the context-free probe, and
 //! withdrawal of the manifest on exit.
+//!
+//! Row actions and surfaces (🎯T116) are driven through the socket the
+//! way T3's server sends them, and their writes are checked by loading
+//! the ledger file itself, not by trusting the reply.
 
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -885,7 +889,7 @@ fn enabled_daemon_advertises_the_agreed_manifest_and_answers_the_probe() {
     assert!(head.contains("content-type: application/json"), "{head}");
     assert_eq!(
         body,
-        r#"{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye"}"#
+        r#"{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye","scopes":["thread","environment"]}"#
     );
 
     // A browser's request is refused, probe or not.
@@ -1013,4 +1017,570 @@ fn a_daemon_that_loses_the_port_neither_advertises_nor_withdraws() {
     };
     assert!(!status.success(), "binding a taken port must fail");
     assert_eq!(std::fs::read_to_string(&path).expect("manifest"), before);
+}
+
+// ---- Row actions, surfaces and the environment panel (🎯T116) ------------
+
+fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+fn days(n: i64) -> String {
+    (today() + chrono::Duration::days(n)).to_string()
+}
+
+fn load(dir: &Path) -> bullseye::schema::TargetsFile {
+    bullseye::store::load(&dir.join("bullseye.yaml")).expect("load ledger")
+}
+
+impl Client {
+    /// Send a request and read until its `result`, returning it with any
+    /// snapshots that arrived first.
+    fn request(&mut self, frame: Value) -> (Value, Vec<Value>) {
+        let id = frame["requestId"].clone();
+        self.send(&frame);
+        let mut panels = Vec::new();
+        loop {
+            let f = self.snapshot();
+            if f["type"] == "result" {
+                assert_eq!(f["requestId"], id, "results answer their own request");
+                return (f, panels);
+            }
+            panels.push(f);
+        }
+    }
+
+    /// A snapshot for `sub` satisfying `pred`, reading past others.
+    fn await_frame(&mut self, sub: &str, pred: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + CHANGE_DEADLINE;
+        while Instant::now() < deadline {
+            let f = self.snapshot();
+            if f["subscriptionId"] == sub && pred(&f) {
+                return f;
+            }
+        }
+        panic!("no matching snapshot for {sub}");
+    }
+}
+
+fn rows(frame: &Value) -> Vec<Value> {
+    frame["panels"][0]["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn row<'a>(rows: &'a [Value], id: &str) -> &'a Value {
+    rows.iter()
+        .find(|r| r["id"] == id)
+        .unwrap_or_else(|| panic!("no row {id} in {rows:?}"))
+}
+
+fn labels(v: &Value, key: &str, field: &str) -> Vec<String> {
+    v[key]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|x| x[field].as_str().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A thread-scope request about `row` of the `targets` panel in `cwd`.
+fn thread_req(n: u32, cwd: &Path, row: &str, body: Value) -> Value {
+    let mut frame = json!({
+        "requestId": format!("r{n}"), "scope": "thread", "threadId": "th", "cwd": cwd,
+        "panelId": "targets", "rowId": row,
+    });
+    for (k, v) in body.as_object().expect("body") {
+        frame[k] = v.clone();
+    }
+    frame
+}
+
+fn action(n: u32, cwd: &Path, row: &str, action: &str, value: Value) -> Value {
+    thread_req(
+        n,
+        cwd,
+        row,
+        json!({"type": "action", "actionId": action, "value": value}),
+    )
+}
+
+fn assert_ok(result: &Value) {
+    assert_eq!(result["ok"], true, "{result}");
+}
+
+fn assert_err(result: &Value, needle: &str) {
+    assert_eq!(result["ok"], false, "{result}");
+    let error = result["error"].as_str().expect("error text");
+    assert!(error.contains(needle), "`{error}` lacks `{needle}`");
+}
+
+#[test]
+fn thread_row_actions_write_the_ledger_and_refresh_at_once() {
+    let daemon = Daemon::start(&["--t3-plugin"], &[]);
+    let ws = daemon.ledger("ws", 2);
+    let mut client = daemon.connect();
+    client.subscribe("s", "th", &ws, Some("all"));
+    let first = client.snapshot();
+    let t1 = row(&rows(&first), "T1").clone();
+    assert_eq!(t1["primaryActionId"], "work");
+    assert_eq!(t1["hoverSurfaceId"], "details");
+    assert_eq!(
+        labels(&t1, "actions", "id"),
+        ["work", "due", "defer", "park", "abandon", "dependencies"]
+    );
+    assert_eq!(t1["actions"][0]["kind"], "agent");
+    assert!(
+        t1["actions"][0]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("Work on 🎯T1: T1.")
+    );
+
+    // Due date: set, shown, cleared.
+    let due = days(3);
+    let (result, _) = client.request(action(1, &ws, "T1", "due", json!(due)));
+    assert_ok(&result);
+    assert_eq!(load(&ws).targets["T1"].due.unwrap().to_string(), due);
+    let shown = client.await_frame("s", |f| row(&rows(f), "T1")["actions"][1]["value"] == due);
+    assert!(
+        labels(row(&rows(&shown), "T1"), "badges", "label")
+            .iter()
+            .any(|l| l.starts_with("Due ")),
+        "{shown}"
+    );
+    let (result, _) = client.request(action(2, &ws, "T1", "due", Value::Null));
+    assert_ok(&result);
+    assert!(load(&ws).targets["T1"].due.is_none());
+
+    // Defer until: set, then clear.
+    let wake = days(5);
+    assert_ok(&client.request(action(3, &ws, "T1", "defer", json!(wake))).0);
+    assert_eq!(
+        load(&ws).targets["T1"].postponed_until.unwrap().to_string(),
+        wake
+    );
+    let deferred = client.await_frame("s", |f| {
+        labels(row(&rows(f), "T1"), "badges", "label")
+            .iter()
+            .any(|l| l.starts_with("Deferred to "))
+    });
+    assert_eq!(row(&rows(&deferred), "T1")["actions"][2]["value"], wake);
+    assert_ok(&client.request(action(4, &ws, "T1", "defer", Value::Null)).0);
+    assert!(load(&ws).targets["T1"].postponed_until.is_none());
+
+    // Park hides the agent action; unpark restores it.
+    assert_ok(&client.request(action(5, &ws, "T1", "park", Value::Null)).0);
+    assert_eq!(
+        load(&ws).targets["T1"].postpone_predicate.as_deref(),
+        Some("Parked in T3 Code")
+    );
+    let parked = client.await_frame("s", |f| {
+        row(&rows(f), "T1").get("primaryActionId").is_none()
+    });
+    assert!(labels(row(&rows(&parked), "T1"), "badges", "label").contains(&"Parked".into()));
+    assert!(labels(row(&rows(&parked), "T1"), "actions", "id").contains(&"unpark".into()));
+    assert_ok(
+        &client
+            .request(action(6, &ws, "T1", "unpark", Value::Null))
+            .0,
+    );
+    assert!(load(&ws).targets["T1"].postpone_predicate.is_none());
+
+    // Abandon needs a reason; it then sets the target aside and closes the dialog.
+    let abandon = |n, value| {
+        let mut f = action(n, &ws, "T1", "abandon", value);
+        f["surfaceId"] = json!("abandon");
+        f
+    };
+    assert_err(
+        &client.request(abandon(7, json!({"reason": "  "}))).0,
+        "reason",
+    );
+    let (result, _) = client.request(abandon(8, json!({"reason": "no longer needed"})));
+    assert_ok(&result);
+    assert_eq!(result["close"], true);
+    let t = &load(&ws).targets["T1"];
+    assert_eq!(t.status, bullseye::schema::Status::SetAside);
+    assert_eq!(t.set_aside_reason.as_deref(), Some("no longer needed"));
+    let gone = client.await_frame("s", |f| {
+        labels(row(&rows(f), "T1"), "badges", "label").contains(&"Abandoned".into())
+    });
+    assert_eq!(
+        labels(row(&rows(&gone), "T1"), "actions", "id"),
+        ["reopen", "dependencies"]
+    );
+
+    // Reopen returns it to identified.
+    assert_ok(
+        &client
+            .request(action(9, &ws, "T1", "reopen", Value::Null))
+            .0,
+    );
+    assert_eq!(
+        load(&ws).targets["T1"].status,
+        bullseye::schema::Status::Identified
+    );
+    assert_err(
+        &client
+            .request(action(10, &ws, "T1", "reopen", Value::Null))
+            .0,
+        "not abandoned",
+    );
+
+    // Errors are results, and the socket stays usable.
+    assert_err(
+        &client
+            .request(action(11, &ws, "T99", "park", Value::Null))
+            .0,
+        "Unknown target",
+    );
+    assert_err(
+        &client
+            .request(action(12, &ws, "T1", "explode", Value::Null))
+            .0,
+        "Unknown action",
+    );
+    assert_err(
+        &client
+            .request(action(13, &ws, "T1", "due", json!("12/11/2026")))
+            .0,
+        "YYYY-MM-DD",
+    );
+    let mut wrong_panel = action(14, &ws, "T1", "park", Value::Null);
+    wrong_panel["panelId"] = json!("due");
+    assert_err(&client.request(wrong_panel).0, "Unknown panel");
+    let mut malformed = action(15, &ws, "T1", "park", Value::Null);
+    malformed["actionId"] = json!(7);
+    assert_err(&client.request(malformed).0, "actionId");
+    let none = daemon.dir("no-ledger");
+    assert_err(
+        &client
+            .request(action(16, &none, "T1", "park", Value::Null))
+            .0,
+        "no Bullseye ledger",
+    );
+    client.subscribe("s2", "th", &ws, None);
+    assert!(!row_ids(&client.await_snapshot_for("s2")).is_empty());
+}
+
+#[test]
+fn surfaces_answer_hovercards_dependencies_and_dialogs() {
+    let daemon = Daemon::start(&["--t3-plugin"], &[]);
+    let ws = daemon.ledger("ws", 3);
+    daemon.cli(
+        &ws,
+        &["commit", "--op", "block", "--id", "T1", "--blocks", "T2"],
+    );
+    daemon.cli(
+        &ws,
+        &["commit", "--op", "track", "--id", "T2", "--due", &days(-2)],
+    );
+    let mut client = daemon.connect();
+    let surface = |n: u32, row: &str, id: &str, item: Option<&str>| {
+        let mut body = json!({"type": "surface", "surfaceId": id});
+        if let Some(item) = item {
+            body["itemId"] = json!(item);
+        }
+        thread_req(n, &ws, row, body)
+    };
+
+    let (details, _) = client.request(surface(1, "T2", "details", None));
+    assert_ok(&details);
+    let card = &details["surface"];
+    assert_eq!(card["title"], "🎯T2 T2");
+    let blocks = card["blocks"].as_array().unwrap();
+    let fields = labels(&blocks[0], "items", "label");
+    assert_eq!(fields, ["Status", "Due", "Blocked by"]);
+    assert_eq!(blocks[0]["items"][1]["tone"], "danger");
+    let deps = blocks.last().unwrap();
+    assert_eq!(deps["items"][0]["id"], "T1");
+    assert_eq!(deps["items"][0]["surfaceId"], "details");
+    assert!(
+        blocks
+            .iter()
+            .any(|b| b["type"] == "list" && b["items"][0]["label"] == "a"),
+        "acceptance list: {card}"
+    );
+
+    // The dependency item opens the same card for that target.
+    let (child, _) = client.request(surface(2, "T2", "details", Some("T1")));
+    assert_ok(&child);
+    assert_eq!(child["surface"]["title"], "🎯T1 T1");
+    assert_err(
+        &client.request(surface(3, "T2", "details", Some("T42"))).0,
+        "Unknown target",
+    );
+
+    let (deps, _) = client.request(surface(4, "T1", "dependencies", None));
+    assert_ok(&deps);
+    let blocks = deps["surface"]["blocks"].as_array().unwrap();
+    assert_eq!(blocks[0]["text"], "Depends on");
+    assert_eq!(blocks[1]["text"], "None");
+    assert_eq!(blocks[2]["text"], "Needed by");
+    assert_eq!(blocks[3]["items"][0]["id"], "T2");
+
+    let (dialog, _) = client.request(surface(5, "T3", "abandon", None));
+    assert_ok(&dialog);
+    let form = dialog["surface"]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "form")
+        .expect("form")
+        .clone();
+    assert_eq!(form["actionId"], "abandon");
+    assert_eq!(form["fields"][0]["id"], "reason");
+    assert_eq!(form["fields"][0]["kind"], "textarea");
+    assert_eq!(form["fields"][0]["required"], true);
+
+    assert_err(
+        &client.request(surface(6, "T1", "galaxy", None)).0,
+        "Unknown surface",
+    );
+    client.assert_quiet("surfaces never write");
+}
+
+fn project(id: &str, title: &str, cwd: &Path) -> Value {
+    json!({"projectId": id, "title": title, "cwd": cwd})
+}
+
+fn env_subscribe(client: &mut Client, sub: &str, projects: &[Value], filter: Option<&str>) {
+    let filters: Vec<Value> = filter
+        .map(|f| json!({"pluginId": CANONICAL_ID, "panelId": "due", "filter": f}))
+        .into_iter()
+        .collect();
+    client.send(&json!({
+        "type": "subscribe", "protocol": 1, "scope": "environment",
+        "subscriptionId": sub, "projects": projects, "filters": filters,
+    }));
+}
+
+/// `(ledger key, target id)` for each row, in order.
+fn env_rows(frame: &Value) -> Vec<(String, String)> {
+    row_ids(frame)
+        .into_iter()
+        .map(|id| {
+            let (key, target) = id.split_once(':').expect("ledger-qualified id");
+            (key.to_string(), target.to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn environment_panel_dedups_ledgers_and_orders_by_due_date() {
+    let daemon = Daemon::start(&["--t3-plugin"], &[]);
+    let a = daemon.ledger("a", 3);
+    let b = daemon.ledger("b", 3);
+    // A subdirectory of B is a second project on B's ledger.
+    let b_sub = b.join("sub");
+    std::fs::create_dir_all(&b_sub).expect("mkdir");
+    let none = daemon.dir("no-ledger");
+    let set = |dir: &Path, args: &[&str]| daemon.cli(dir, args);
+    set(
+        &a,
+        &["commit", "--op", "track", "--id", "T1", "--due", &days(2)],
+    );
+    set(
+        &a,
+        &["commit", "--op", "track", "--id", "T2", "--due", &days(-1)],
+    );
+    set(
+        &a,
+        &[
+            "commit",
+            "--op",
+            "postpone",
+            "--id",
+            "T2",
+            "--postponed-until",
+            &days(10),
+        ],
+    );
+    set(
+        &a,
+        &[
+            "commit",
+            "--op",
+            "postpone",
+            "--id",
+            "T3",
+            "--postponed-until",
+            &days(5),
+        ],
+    );
+    set(
+        &b,
+        &["commit", "--op", "track", "--id", "T1", "--due", &days(1)],
+    );
+    set(
+        &b,
+        &[
+            "commit",
+            "--op",
+            "postpone",
+            "--id",
+            "T3",
+            "--postpone-predicate",
+            "later",
+        ],
+    );
+    set(
+        &b,
+        &["commit", "--op", "defer", "--id", "T2", "--reason", "x"],
+    );
+    set(
+        &b,
+        &[
+            "commit",
+            "--op",
+            "track",
+            "--id",
+            "T4",
+            "--name",
+            "T4",
+            "--acceptance",
+            "a",
+        ],
+    );
+
+    let projects = [
+        project("pa", "Alpha", &a),
+        project("pb", "Beta", &b),
+        project("pb2", "Beta sub", &b_sub),
+        project("pn", "None", &none),
+    ];
+    let mut client = daemon.connect();
+    env_subscribe(&mut client, "env", &projects, None);
+    let frame = client.snapshot();
+    assert_eq!(frame["subscriptionId"], "env");
+    let panel = &frame["panels"][0];
+    assert_eq!(panel["id"], "due");
+    assert_eq!(panel["title"], "Targets by due date");
+    assert_eq!(panel["filter"], "upcoming");
+    assert_eq!(
+        labels(panel, "filters", "id"),
+        ["upcoming", "deferred", "all"]
+    );
+
+    let order = env_rows(&frame);
+    let ka = order[0].0.clone();
+    let kb = order[1].0.clone();
+    assert_ne!(ka, kb);
+    // Overdue first (even though deferred), then by due date, then undated;
+    // B's targets appear once although two projects share its ledger.
+    let want = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, t)| (k.to_string(), t.to_string()))
+            .collect()
+    };
+    assert_eq!(
+        order,
+        want(&[(&ka, "T2"), (&kb, "T1"), (&ka, "T1"), (&kb, "T4")])
+    );
+    let rs = rows(&frame);
+    let b1 = row(&rs, &format!("{kb}:T1"));
+    assert_eq!(b1["label"], "Beta, Beta sub · 🎯T1 T1");
+    assert_eq!(b1["navigate"]["projectIds"], json!(["pb", "pb2"]));
+    assert_eq!(
+        row(&rs, &format!("{ka}:T2"))["navigate"]["projectIds"],
+        json!(["pa"])
+    );
+    assert!(
+        b1.get("primaryActionId").is_none(),
+        "no agent in the environment panel"
+    );
+    assert!(!labels(b1, "actions", "id").contains(&"work".to_string()));
+    assert_eq!(b1["hoverSurfaceId"], "details");
+    assert_eq!(labels(b1, "badges", "label"), ["Due tomorrow"]);
+    assert!(
+        rs.iter()
+            .all(|r| r["id"].as_str().unwrap().encode_utf16().count() <= 128)
+    );
+
+    // Re-subscribing the same id replaces its view.
+    env_subscribe(&mut client, "env", &projects, Some("deferred"));
+    let deferred = client.snapshot();
+    assert_eq!(deferred["subscriptionId"], "env");
+    assert_eq!(
+        env_rows(&deferred),
+        want(&[(&ka, "T3"), (&ka, "T2"), (&kb, "T3")])
+    );
+    env_subscribe(&mut client, "env", &projects, Some("all"));
+    assert_eq!(
+        env_rows(&client.snapshot()),
+        want(&[
+            (&ka, "T2"),
+            (&kb, "T1"),
+            (&ka, "T1"),
+            (&ka, "T3"),
+            (&kb, "T3"),
+            (&kb, "T4"),
+        ])
+    );
+    client.assert_quiet("replaced subscriptions do not linger");
+
+    // Actions and surfaces route to the ledger the row id names.
+    let env_req = |n: u32, row: &str, body: Value| {
+        let mut frame = json!({
+            "requestId": format!("e{n}"), "scope": "environment", "projects": projects,
+            "panelId": "due", "rowId": row,
+        });
+        for (k, v) in body.as_object().expect("body") {
+            frame[k] = v.clone();
+        }
+        frame
+    };
+    let due = days(4);
+    let (result, _) = client.request(env_req(
+        1,
+        &format!("{kb}:T4"),
+        json!({"type": "action", "actionId": "due", "value": due}),
+    ));
+    assert_ok(&result);
+    assert_eq!(load(&b).targets["T4"].due.unwrap().to_string(), due);
+    assert!(!load(&a).targets.contains_key("T4"), "A is untouched");
+    let moved = client.await_frame("env", |f| {
+        env_rows(f)
+            .iter()
+            .position(|r| *r == (kb.clone(), "T4".to_string()))
+            == Some(3)
+    });
+    assert_eq!(env_rows(&moved)[2], (ka.clone(), "T1".to_string()));
+
+    let (card, _) = client.request(env_req(
+        2,
+        &format!("{ka}:T2"),
+        json!({"type": "surface", "surfaceId": "details"}),
+    ));
+    assert_ok(&card);
+    assert_eq!(card["surface"]["title"], "🎯T2 T2");
+    assert_err(
+        &client
+            .request(env_req(
+                3,
+                "deadbeef:T1",
+                json!({"type": "action", "actionId": "park"}),
+            ))
+            .0,
+        "not in any project",
+    );
+    assert_err(
+        &client
+            .request(env_req(
+                4,
+                "T1",
+                json!({"type": "action", "actionId": "park"}),
+            ))
+            .0,
+        "Unknown row",
+    );
+
+    // An environment without any ledger has no panel.
+    env_subscribe(&mut client, "empty", &[project("pn", "None", &none)], None);
+    assert_eq!(client.await_snapshot_for("empty")["panels"], json!([]));
 }

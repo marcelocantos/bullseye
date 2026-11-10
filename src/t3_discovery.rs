@@ -126,10 +126,12 @@ pub fn manifest_contents(host: &str, port: u16) -> String {
     )
 }
 
-/// The body a probe of [`PATH`] returns.
+/// The body a probe of [`PATH`] returns. `scopes` names the panel
+/// scopes served (🎯T116); T3 treats its absence as thread only.
 pub fn probe_body() -> String {
     format!(
-        "{{\"protocol\":{MANIFEST_PROTOCOL},\"id\":\"{PLUGIN_ID}\",\"name\":\"{PLUGIN_NAME}\"}}"
+        "{{\"protocol\":{MANIFEST_PROTOCOL},\"id\":\"{PLUGIN_ID}\",\"name\":\"{PLUGIN_NAME}\",\
+         \"scopes\":[\"thread\",\"environment\"]}}"
     )
 }
 

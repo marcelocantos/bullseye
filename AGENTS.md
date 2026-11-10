@@ -62,6 +62,7 @@ github.rs / github_issues.rs — GitHub issue integrations
 bounded.rs / cache.rs / repo_guard.rs — Bounds, caching and repo guardrails
 repo_identity.rs       — Remote-derived repo identity for external ledgers
 t3_plugin.rs           — Opt-in T3 panel WebSocket + probe at /plugins/t3 (🎯T114)
+t3_panels.rs           — T3 panel rows, surfaces and row actions (🎯T116)
 t3_discovery.rs        — Advertises that endpoint to T3 Code's plugin discovery
 import.rs / version.rs — Markdown import and version support
 ```
@@ -127,25 +128,49 @@ Deliberately keyed on elapsed time rather than on client lifecycle:
 MCP2 is stateless, so there will be no session whose end could carry an
 invalidation.
 
-**T3 panel endpoint (🎯T114, opt-in).** `bullseye serve --t3-plugin` or
+**T3 panel endpoint (🎯T114, 🎯T116, opt-in).** `bullseye serve --t3-plugin` or
 `BULLSEYE_T3_PLUGIN=1` mounts a WebSocket at `/plugins/t3` on the same
 listener (via `HyperServer::with_route`; no second port, no subprocess).
-It speaks T3 Code's panel-plugin protocol v1 (`docs/operations/panel-plugins.md`
-in the t3code repo): `subscribe`/`unsubscribe` in, complete `panels`
-replacements out — one immediately, then one per observed change. Rows are
-built from the graph (`graph::frontier_tolerant`/`rank_frontier`), not CLI
-text; `frontier` is the default view, `active` and `all` are selectable.
-Changes are found by a 1 s poll per connection because the CLI, other
-agents and hand edits write ledgers outside this process. Read-only: it
-uses `store::discover_anywhere_readonly`, which finds the same ledger as
-MCP discovery but never performs the path-keyed → repo-keyed move.
-Local-only by construction: startup refuses a non-loopback `--addr`, and
-any request with an `Origin` header gets 403. Bounds: 1 MiB frames, 2000
-rows, 16 connections, 128 subscriptions per connection; malformed frames
-close the socket with 1008 (the protocol has no error frame). A plain GET
-of the route (no `Upgrade`) is a context-free probe returning
-`{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye"}` plus an
-`x-bullseye-instance` header. Discovery (`src/t3_discovery.rs`): once the
+It speaks T3 Code's panel-plugin protocol v1 (contract:
+`packages/contracts/src/panelPlugins.ts` in the t3code repo).
+`src/t3_plugin.rs` owns the wire and socket; `src/t3_panels.rs` owns rows,
+surfaces and actions. Two scopes: a *thread* subscribe (`threadId` + `cwd`,
+no `scope`) gets panel `targets` (filters `frontier` default, `active`,
+`all`) built from the graph (`graph::frontier_tolerant`/`rank_frontier`),
+not CLI text; an *environment* subscribe (`scope: "environment"`,
+`projects: [{projectId,title,cwd}]`) gets panel `due`, "Targets by due
+date" (filters `upcoming` default, `deferred`, `all`) over the projects'
+ledgers, deduplicated by canonical path, ordered overdue → due ascending →
+undated. Environment row ids are `<8-hex sha256 of ledger path>:<target>`,
+which is how their actions find the ledger again. Re-subscribing an id
+replaces it. Rows carry badges (status, due, deferral, parked, abandoned),
+a `details` hovercard, and actions: `work` (agent prompt; thread panel,
+active unparked targets), `due` and `defer` (date), `park`/`unpark`,
+`abandon` (modal form → `defer` with reason) / `reopen`, and a
+`dependencies` surface. `action` and `surface` frames get one `result`
+each. Vocabulary maps onto existing state: due = `Target::due`; defer =
+`postponed_until` (`op=postpone`, cleared by `op=wake`); park =
+`op=postpone` with only the predicate `Parked in T3 Code` (any predicate
+shows as parked); abandon = set_aside; reopen = apply
+`set_aside → identified`. Every write is a `handler::handle_commit` /
+`handle_apply` call built from MCP-shaped JSON, so locks, CAS retries,
+validation and repo guards are the MCP ones — never ad-hoc YAML — and a
+successful write refreshes that connection's subscriptions at once.
+Subscriptions read through `store::discover_anywhere_readonly`, which
+finds the same ledger as MCP discovery but never performs the path-keyed →
+repo-keyed move (a write, being an MCP-path call, may). Changes made
+elsewhere are found by a 1 s poll per connection because the CLI, other
+agents and hand edits write ledgers outside this process. Local-only by
+construction: startup refuses a non-loopback `--addr`, and any request
+with an `Origin` header gets 403 — that refusal also guards the write
+path. Bounds: 1 MiB frames, 2000 rows, 16 connections, 128 subscriptions
+per connection, 1000 projects per environment frame; oversized panels and
+surface lists truncate with a "more" item. Malformed frames close the
+socket with 1008, except a request with a usable `requestId`, which gets
+an error result. A plain GET of the route (no `Upgrade`) is a context-free
+probe returning
+`{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye","scopes":["thread","environment"]}`
+plus an `x-bullseye-instance` header. Discovery (`src/t3_discovery.rs`): once the
 probe shows this process owns the listener, the daemon atomically writes
 `$XDG_DATA_HOME/t3code/plugins/github.com+marcelocantos+bullseye.json` (home fallback
 `~/.local/share`, relative XDG ignored; file 0600, dir 0700; no instance
@@ -158,8 +183,9 @@ Bullseye owns the manifest and probe. Supervised daemon:
 `supervisor.d/bullseye.ini` (omit it and a re-render turns the endpoint
 off). Tests: `tests/t3_plugin_test.rs` boots the binary with
 `BULLSEYE_DATA_DIR`/`HOME` in a tempdir on a free port, mutates
-ledgers with the real CLI and checks manifest publication, probe,
-withdrawal and single-slot takeover; it runs under `make gate` via `cargo test`.
+ledgers with the real CLI and through row actions, and checks panels,
+surfaces, results, manifest publication, probe, withdrawal and
+single-slot takeover; it runs under `make gate` via `cargo test`.
 
 `--default-location` is process-wide, so under the daemon it is a
 machine-wide default rather than a per-invocation choice.

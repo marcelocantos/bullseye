@@ -25,6 +25,11 @@ or configure the supervised daemon with
 Bullseye then advertises itself to T3 Code (a manifest in
 `$XDG_DATA_HOME/t3code/plugins/github.com+marcelocantos+bullseye.json`, one slot where the latest daemon wins; removed on exit); the T3 user chooses **Enable**
 in thread details, so no hand-written configuration is needed.
+Besides the thread's **Bullseye** panel, the endpoint serves an environment
+panel, **Targets by due date**, across every project of the T3 environment.
+Rows can be scheduled (due date), deferred, parked, abandoned with a reason,
+reopened, and handed to the thread's agent; every such change is an ordinary
+ledger mutation.
 T3 connects to Bullseye directly; no adapter or additional Node runtime is needed.
 The address is local to the T3 server's machine.
 
@@ -238,6 +243,11 @@ line reminds callers that new IDs come **only** from `ids:` (🎯T55).
 string). Future-dated postponements leave the frontier; predicates stay
 off the frontier until `op=wake` clears them (bullseye never evaluates
 the predicate).
+
+**Due dates (🎯T116):** `op=track` with `id` and `due` (YYYY-MM-DD) sets a
+calendar deadline; `due: ""` clears it (CLI: `--due`). A due date never
+gates the frontier — postpone does that — it only flags and orders work,
+for example in T3 Code's "Targets by due date" panel.
 
 **Rehash (🎯T41):** After an **authorized** direct file edit, `op=rehash`
 with non-empty `reason` recomputes `content_hash`. Prefer mutation tools;
