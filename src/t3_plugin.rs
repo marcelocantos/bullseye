@@ -65,8 +65,13 @@ use crate::store;
 pub const ENV_FLAG: &str = "BULLSEYE_T3_PLUGIN";
 /// Path served on the daemon's listener while enabled.
 pub const PATH: &str = "/plugins/t3";
-/// `pluginId` T3 addresses this panel provider by.
-pub const PLUGIN_ID: &str = "bullseye";
+/// The identity Bullseye advertises: the `host/owner/repo` of its project.
+/// T3 uses it as the plugin id of a discovered panel, so it is also the
+/// `pluginId` of that panel's filter selections.
+pub const PLUGIN_ID: &str = "github.com/marcelocantos/bullseye";
+/// The id a hand-written `panel-plugins.json` entry (and every build before
+/// the canonical identity) uses. Filter selections naming it still apply.
+pub const LEGACY_PLUGIN_ID: &str = "bullseye";
 /// The one panel this provider supplies.
 pub const PANEL_ID: &str = "targets";
 
@@ -259,7 +264,7 @@ pub fn parse_client_message(text: &str) -> Result<ClientMessage, String> {
                 let plugin = string_field(entry, "pluginId")?;
                 let panel = string_field(entry, "panelId")?;
                 let selected = string_field(entry, "filter")?;
-                if plugin == PLUGIN_ID && panel == PANEL_ID {
+                if (plugin == PLUGIN_ID || plugin == LEGACY_PLUGIN_ID) && panel == PANEL_ID {
                     filter = PanelFilter::parse(selected)
                         .ok_or_else(|| format!("unknown filter `{}`", clip(selected, 64)))?;
                 }
@@ -702,18 +707,29 @@ mod tests {
     #[test]
     fn filter_selection_applies_only_to_this_panel() {
         let other = r#"{"pluginId":"other","panelId":"targets","filter":"nonsense"}"#;
-        let ours = r#"{"pluginId":"bullseye","panelId":"targets","filter":"all"}"#;
-        let msg = parse_client_message(&subscribe(&format!("{other},{ours}"))).unwrap();
+        // The canonical id (a discovered panel) and the short id (a
+        // hand-written configuration) both select this panel's filter.
+        for id in [PLUGIN_ID, LEGACY_PLUGIN_ID] {
+            let ours = format!(r#"{{"pluginId":"{id}","panelId":"targets","filter":"all"}}"#);
+            let msg = parse_client_message(&subscribe(&format!("{other},{ours}"))).unwrap();
+            let ClientMessage::Subscribe(s) = msg else {
+                panic!()
+            };
+            assert_eq!(s.filter, PanelFilter::All, "{id}");
+        }
+        let lookalike =
+            r#"{"pluginId":"github.com/other/bullseye","panelId":"targets","filter":"nonsense"}"#;
+        let msg = parse_client_message(&subscribe(lookalike)).unwrap();
         let ClientMessage::Subscribe(s) = msg else {
             panic!()
         };
-        assert_eq!(s.filter, PanelFilter::All);
+        assert_eq!(s.filter, PanelFilter::Frontier);
     }
 
     #[test]
     fn malformed_requests_are_rejected() {
         let ours =
-            |f: &str| format!(r#"{{"pluginId":"bullseye","panelId":"targets","filter":{f}}}"#);
+            |f: &str| format!(r#"{{"pluginId":"{PLUGIN_ID}","panelId":"targets","filter":{f}}}"#);
         let long = "x".repeat(MAX_ID_UNITS + 1);
         let cases: Vec<(String, &str)> = vec![
             ("not json".into(), "invalid JSON"),
@@ -742,7 +758,10 @@ mod tests {
             (subscribe("3"), "object"),
             (subscribe(&ours("\"bogus\"")), "unknown filter"),
             (subscribe(&ours("1")), "filter"),
-            (subscribe(r#"{"pluginId":"bullseye"}"#), "panelId"),
+            (
+                subscribe(&format!(r#"{{"pluginId":"{PLUGIN_ID}"}}"#)),
+                "panelId",
+            ),
         ];
         for (text, needle) in cases {
             let err = parse_client_message(&text).expect_err(&text);

@@ -137,11 +137,17 @@ listening, it writes a small manifest into T3's per-user plugin directory,
 `XDG_DATA_HOME` is unset or not an absolute path):
 
 ```json
-{"protocol":1,"id":"bullseye","name":"Bullseye","connection":{"kind":"server","baseUrl":"http://127.0.0.1:18743/plugins/t3"}}
+{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye","connection":{"kind":"server","baseUrl":"http://127.0.0.1:18743/plugins/t3"}}
 ```
 
-The file is `bullseye-<port>.json`, so daemons on different ports never
-share one. It is written atomically (temporary file, then rename) with
+The id is the project's `host/owner/repo`. The file is named after it,
+with `/` written as `+`, followed by the port:
+`github.com+marcelocantos+bullseye+18743.json`, so daemons on different
+ports never share one. T3 ignores a file whose name does not match its
+`id`. If you configure the panel by hand in T3 instead, a `bullseye` id
+still works: filter selections for either id are honoured.
+
+The file is written atomically (temporary file, then rename) with
 mode `0600` in a `0700` directory, only after this process is answering
 on the port, and removed on `SIGINT`/`SIGTERM` or normal exit, but only
 if it still holds what this daemon wrote. A daemon that loses the bind
@@ -150,7 +156,7 @@ stale file, which T3 ignores because nothing answers the probe.
 
 A plain `GET` of that URL (no `Upgrade`, no `Origin`) is a context-free
 compatibility probe. It returns
-`{"protocol":1,"id":"bullseye","name":"Bullseye"}` and involves no
+`{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye"}` and involves no
 thread, workspace or ledger; the same URL's WebSocket upgrade is the
 panel itself. T3 then asks its user before connecting: open a thread's
 details in a T3 build with plugin support and choose **Enable**. Nothing

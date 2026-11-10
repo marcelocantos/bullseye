@@ -144,10 +144,10 @@ any request with an `Origin` header gets 403. Bounds: 1 MiB frames, 2000
 rows, 16 connections, 128 subscriptions per connection; malformed frames
 close the socket with 1008 (the protocol has no error frame). A plain GET
 of the route (no `Upgrade`) is a context-free probe returning
-`{"protocol":1,"id":"bullseye","name":"Bullseye"}` plus an
+`{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye"}` plus an
 `x-bullseye-instance` header. Discovery (`src/t3_discovery.rs`): once the
 probe shows this process owns the listener, the daemon atomically writes
-`$XDG_DATA_HOME/t3code/plugins/bullseye-<port>.json` (home fallback
+`$XDG_DATA_HOME/t3code/plugins/github.com+marcelocantos+bullseye+<port>.json` (home fallback
 `~/.local/share`, relative XDG ignored; file 0600, dir 0700) and removes
 it on SIGINT/SIGTERM and return, only if its content is still what it
 wrote. The T3 side consents per user; T3 owns that UI and persistence,

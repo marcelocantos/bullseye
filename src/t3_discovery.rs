@@ -12,18 +12,22 @@
 //! **Location.** `$XDG_DATA_HOME/t3code/plugins/` when `XDG_DATA_HOME` is
 //! set to an absolute path, else `$HOME/.local/share/t3code/plugins/` (a
 //! relative `XDG_DATA_HOME` is ignored, as the XDG specification says).
-//! The file is `bullseye-<port>.json`: one file per listening port, so
-//! several daemons never share a file.
+//! The file is `github.com+marcelocantos+bullseye+<port>.json`: the
+//! identity with `/` written as `+` (which never occurs inside an
+//! identity segment, so the name decodes exactly), then the listening
+//! port as the instance, so several daemons never share a file. T3
+//! ignores a manifest whose name does not match its `id`.
 //!
 //! **Contract (protocol 1).** Exactly this object, compact JSON:
 //!
 //! ```json
-//! {"protocol":1,"id":"bullseye","name":"Bullseye",
+//! {"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye",
 //!  "connection":{"kind":"server","baseUrl":"http://127.0.0.1:18743/plugins/t3"}}
 //! ```
 //!
 //! `baseUrl` is the endpoint's own URL. A plain `GET` of it (no
-//! `Upgrade`) returns `{"protocol":1,"id":"bullseye","name":"Bullseye"}`
+//! `Upgrade`) returns
+//! `{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye"}`
 //! and is how T3 checks, without sending any workspace or thread, that a
 //! compatible service is really there. A `GET` that upgrades is the panel
 //! WebSocket.
@@ -95,6 +99,12 @@ fn manifest_dir_from_env() -> Option<PathBuf> {
     )
 }
 
+/// The manifest file name for the daemon on `port`: the identity with `/`
+/// encoded as `+`, then the port as the instance.
+pub fn manifest_file_name(port: u16) -> String {
+    format!("{}+{port}.json", PLUGIN_ID.replace('/', "+"))
+}
+
 /// The manifest text for a daemon listening on `host:port`.
 pub fn manifest_contents(host: &str, port: u16) -> String {
     let bare = host.trim_start_matches('[').trim_end_matches(']');
@@ -134,7 +144,7 @@ impl Advertisement {
         }
         let dir = manifest_dir_from_env()?;
         Some(Advertisement {
-            path: dir.join(format!("{PLUGIN_ID}-{port}.json")),
+            path: dir.join(manifest_file_name(port)),
             contents: manifest_contents(host, port),
             published: false,
         })
@@ -333,10 +343,18 @@ mod tests {
     }
 
     #[test]
+    fn file_name_encodes_the_identity_and_port() {
+        assert_eq!(
+            manifest_file_name(18743),
+            "github.com+marcelocantos+bullseye+18743.json"
+        );
+    }
+
+    #[test]
     fn manifest_has_the_agreed_shape() {
         assert_eq!(
             manifest_contents("127.0.0.1", 18743),
-            "{\"protocol\":1,\"id\":\"bullseye\",\"name\":\"Bullseye\",\"connection\":{\"kind\":\"server\",\"baseUrl\":\"http://127.0.0.1:18743/plugins/t3\"}}\n"
+            "{\"protocol\":1,\"id\":\"github.com/marcelocantos/bullseye\",\"name\":\"Bullseye\",\"connection\":{\"kind\":\"server\",\"baseUrl\":\"http://127.0.0.1:18743/plugins/t3\"}}\n"
         );
         assert!(manifest_contents("[::1]", 9).contains("http://[::1]:9/plugins/t3"));
         assert!(manifest_contents("LocalHost", 9).contains("http://localhost:9/plugins/t3"));

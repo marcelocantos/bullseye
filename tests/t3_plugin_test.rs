@@ -207,8 +207,21 @@ impl Client {
     }
 
     fn subscribe(&mut self, id: &str, thread: &str, cwd: &Path, filter: Option<&str>) {
+        self.subscribe_as(CANONICAL_ID, id, thread, cwd, filter);
+    }
+
+    /// Subscribe addressing the panel by `plugin_id`, as T3 does with the id
+    /// of the configuration the panel came from.
+    fn subscribe_as(
+        &mut self,
+        plugin_id: &str,
+        id: &str,
+        thread: &str,
+        cwd: &Path,
+        filter: Option<&str>,
+    ) {
         let filters: Vec<Value> = filter
-            .map(|f| json!({"pluginId": "bullseye", "panelId": "targets", "filter": f}))
+            .map(|f| json!({"pluginId": plugin_id, "panelId": "targets", "filter": f}))
             .into_iter()
             .collect();
         self.send(&json!({
@@ -419,7 +432,7 @@ fn malformed_requests_close_the_connection() {
     };
     let bad_filter = with(
         "filters",
-        json!([{"pluginId": "bullseye", "panelId": "targets", "filter": "bogus"}]),
+        json!([{"pluginId": CANONICAL_ID, "panelId": "targets", "filter": "bogus"}]),
     );
     let cases = [
         json!("not an object"),
@@ -505,6 +518,12 @@ fn snapshots_follow_the_requested_filter_and_the_wire_shape() {
     let switched = client.snapshot();
     assert_eq!(switched["subscriptionId"], "front");
     assert_eq!(row_ids(&switched), ["T1", "T2", "T3"]);
+
+    // A hand-written configuration named `bullseye` addresses the same panel.
+    client.subscribe_as("bullseye", "front", "th", &ws, Some("frontier"));
+    let legacy = client.snapshot();
+    assert_eq!(legacy["panels"][0]["filter"], "frontier");
+    assert_eq!(row_ids(&legacy), ["T1"]);
 }
 
 #[test]
@@ -735,6 +754,9 @@ fn subscriptions_per_connection_are_bounded_and_survivable() {
 
 // ---- T3 Code plugin discovery -------------------------------------------
 
+/// The plugin id a discovered Bullseye panel is addressed by.
+const CANONICAL_ID: &str = "github.com/marcelocantos/bullseye";
+
 const MANIFEST_DEADLINE: Duration = Duration::from_secs(15);
 
 /// The directory discovery reads, under a `HOME` with no `XDG_DATA_HOME`.
@@ -742,13 +764,19 @@ fn manifest_dir_under(home: &Path) -> PathBuf {
     home.join(".local/share/t3code/plugins")
 }
 
+/// Manifest file name for the daemon on `port`: the canonical id with `/`
+/// written as `+`, then the port as the instance.
+fn manifest_name(port: u16) -> String {
+    format!("github.com+marcelocantos+bullseye+{port}.json")
+}
+
 fn manifest_path(daemon: &Daemon) -> PathBuf {
-    manifest_dir_under(daemon.sandbox.path()).join(format!("bullseye-{}.json", daemon.port))
+    manifest_dir_under(daemon.sandbox.path()).join(manifest_name(daemon.port))
 }
 
 fn expected_manifest(port: u16) -> String {
     format!(
-        "{{\"protocol\":1,\"id\":\"bullseye\",\"name\":\"Bullseye\",\"connection\":{{\"kind\":\"server\",\"baseUrl\":\"http://127.0.0.1:{port}/plugins/t3\"}}}}\n"
+        "{{\"protocol\":1,\"id\":\"github.com/marcelocantos/bullseye\",\"name\":\"Bullseye\",\"connection\":{{\"kind\":\"server\",\"baseUrl\":\"http://127.0.0.1:{port}/plugins/t3\"}}}}\n"
     )
 }
 
@@ -835,7 +863,7 @@ fn enabled_daemon_advertises_the_agreed_manifest_and_answers_the_probe() {
     // Atomic publication leaves no temporary files behind.
     assert_eq!(
         dir_entries(path.parent().expect("dir")),
-        [format!("bullseye-{}.json", daemon.port)]
+        [manifest_name(daemon.port)]
     );
     #[cfg(unix)]
     {
@@ -848,7 +876,10 @@ fn enabled_daemon_advertises_the_agreed_manifest_and_answers_the_probe() {
     let (status, head, body) = http_get(daemon.port, "/plugins/t3", &[]);
     assert_eq!(status, 200);
     assert!(head.contains("content-type: application/json"), "{head}");
-    assert_eq!(body, r#"{"protocol":1,"id":"bullseye","name":"Bullseye"}"#);
+    assert_eq!(
+        body,
+        r#"{"protocol":1,"id":"github.com/marcelocantos/bullseye","name":"Bullseye"}"#
+    );
 
     // A browser's request is refused, probe or not.
     let (status, _, _) = http_get(
@@ -886,7 +917,8 @@ fn xdg_data_home_is_honoured_and_a_relative_one_is_ignored() {
     );
     let path = xdg
         .path()
-        .join(format!("t3code/plugins/bullseye-{}.json", daemon.port));
+        .join("t3code/plugins")
+        .join(manifest_name(daemon.port));
     assert_eq!(wait_for_file(&path), expected_manifest(daemon.port));
     assert!(!manifest_dir_under(daemon.sandbox.path()).exists());
 
@@ -929,10 +961,10 @@ fn daemons_advertise_independently() {
     let mut a = Daemon::start(&["--t3-plugin"], &env);
     let b = Daemon::start(&["--t3-plugin"], &env);
     let dir = shared.path().join("t3code/plugins");
-    wait_for_file(&dir.join(format!("bullseye-{}.json", a.port)));
-    wait_for_file(&dir.join(format!("bullseye-{}.json", b.port)));
+    wait_for_file(&dir.join(manifest_name(a.port)));
+    wait_for_file(&dir.join(manifest_name(b.port)));
     terminate(&mut a.child);
-    assert_eq!(dir_entries(&dir), [format!("bullseye-{}.json", b.port)]);
+    assert_eq!(dir_entries(&dir), [manifest_name(b.port)]);
 }
 
 #[test]
