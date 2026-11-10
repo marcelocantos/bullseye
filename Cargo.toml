@@ -35,6 +35,10 @@ regex = "1"
 rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
 ureq = { version = "2.12.1", optional = true, default-features = true }
 rust-mcp-sdk = { version = "0.9.0", default-features = false, features = ["server", "macros", "hyper-server"] }
+# 🎯T114: the opt-in T3 panel endpoint is a WebSocket route on the SDK's
+# own axum router (HyperServer::with_route). The SDK already enables axum
+# with its defaults; this adds only the `ws` feature (tokio-tungstenite).
+axum = { version = "0.8", default-features = false, features = ["ws", "http1", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml_ng = "0.10.0"
@@ -56,6 +60,11 @@ tokio = { version = "1.50.0", default-features = false, features = [
     "signal",
     "net",
 ] }
+
+[dev-dependencies]
+# 🎯T114: synchronous WebSocket client for the T3 panel endpoint tests.
+# Already in the tree via axum's `ws` feature; adds no crate.
+tungstenite = "0.29"
 
 # 🎯T47: trim tokio features in rust-mcp-sdk / rust-mcp-transport.
 # Drop when upstream no longer enables features=["full"].

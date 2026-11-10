@@ -61,6 +61,7 @@ gatecheck.rs           — Cited gate/attestation validation at achieve time
 github.rs / github_issues.rs — GitHub issue integrations
 bounded.rs / cache.rs / repo_guard.rs — Bounds, caching and repo guardrails
 repo_identity.rs       — Remote-derived repo identity for external ledgers
+t3_plugin.rs           — Opt-in T3 panel WebSocket at /plugins/t3 (🎯T114)
 import.rs / version.rs — Markdown import and version support
 ```
 
@@ -124,6 +125,30 @@ fingerprint and an mtime), so there the TTL only bounds memory.
 Deliberately keyed on elapsed time rather than on client lifecycle:
 MCP2 is stateless, so there will be no session whose end could carry an
 invalidation.
+
+**T3 panel endpoint (🎯T114, opt-in).** `bullseye serve --t3-plugin` or
+`BULLSEYE_T3_PLUGIN=1` mounts a WebSocket at `/plugins/t3` on the same
+listener (via `HyperServer::with_route`; no second port, no subprocess).
+It speaks T3 Code's panel-plugin protocol v1 (`docs/operations/panel-plugins.md`
+in the t3code repo): `subscribe`/`unsubscribe` in, complete `panels`
+replacements out — one immediately, then one per observed change. Rows are
+built from the graph (`graph::frontier_tolerant`/`rank_frontier`), not CLI
+text; `frontier` is the default view, `active` and `all` are selectable.
+Changes are found by a 1 s poll per connection because the CLI, other
+agents and hand edits write ledgers outside this process. Read-only: it
+uses `store::discover_anywhere_readonly`, which finds the same ledger as
+MCP discovery but never performs the path-keyed → repo-keyed move.
+Local-only by construction: startup refuses a non-loopback `--addr`, and
+any request with an `Origin` header gets 403. Bounds: 1 MiB frames, 2000
+rows, 16 connections, 128 subscriptions per connection; malformed frames
+close the socket with 1008 (the protocol has no error frame). T3 side:
+`panel-plugins.json` entry `{"id":"bullseye","connection":{"kind":"server",
+"baseUrl":"http://127.0.0.1:18743/plugins/t3"}}`. Supervised daemon:
+`BULLSEYE_T3_PLUGIN=1 supervisor/install.sh` renders the variable into
+`supervisor.d/bullseye.ini` (omit it and a re-render turns the endpoint
+off). Tests: `tests/t3_plugin_test.rs` boots the binary with
+`BULLSEYE_DATA_DIR`/`HOME` in a tempdir on a free port and mutates
+ledgers with the real CLI; it runs under `make gate` via `cargo test`.
 
 `--default-location` is process-wide, so under the daemon it is a
 machine-wide default rather than a per-invocation choice.

@@ -112,6 +112,44 @@ claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
 grok mcp add --transport http bullseye http://127.0.0.1:18743/mcp
 ```
 
+## T3 Code sidebar panel (opt-in)
+
+The daemon can also supply a live **Bullseye** section to the thread
+sidebar of a [T3 Code](https://github.com/pingdotgg/t3code) build that
+supports panel plugins. It is off by default. Enable it with a flag or
+an environment variable, then restart the daemon:
+
+```bash
+bullseye serve --t3-plugin                 # or: BULLSEYE_T3_PLUGIN=1 bullseye serve
+BULLSEYE_T3_PLUGIN=1 supervisor/install.sh # supervised daemon: bakes the variable into supervisor.d/bullseye.ini
+```
+
+The panel is a WebSocket at `ws://127.0.0.1:18743/plugins/t3` on the same
+listener as `/mcp`; there is no second port and no adapter process.
+Re-running `supervisor/install.sh` without the variable renders the
+daemon with the endpoint off again.
+
+Point T3 at it by adding a server entry to `panel-plugins.json` in the T3
+environment's userdata folder (the URL is resolved on the machine that
+hosts the T3 server):
+
+```json
+[
+  {
+    "id": "bullseye",
+    "connection": { "kind": "server", "baseUrl": "http://127.0.0.1:18743/plugins/t3" }
+  }
+]
+```
+
+Each open thread shows the ledger for its workspace: the **frontier** by
+default, with **active** and **all** one click away. The ledger is found
+by the usual discovery (in-repo, then external by `origin` identity), and
+the panel follows changes made by the CLI, other agents or hand edits
+within about a second. The endpoint is read-only, loopback-only (the
+daemon refuses to start with `--t3-plugin` on a non-loopback `--addr`),
+and refuses any request that carries a browser `Origin` header.
+
 ## Storage locations
 
 **Create vs discover** (🎯T61): discovery finds existing files only;

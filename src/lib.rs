@@ -27,6 +27,7 @@ pub mod resolve;
 pub mod restore;
 pub mod schema;
 pub mod store;
+pub mod t3_plugin;
 pub mod tools;
 pub mod version;
 

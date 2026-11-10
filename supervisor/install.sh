@@ -19,8 +19,15 @@ mkdir -p "$CONF_DIR"
 mkdir -p "$HOME/.local/var/log"
 chmod +x "$REPO/supervisor/run-bullseye.sh" "$REPO/supervisor/install.sh"
 
+# Opt-in T3 panel endpoint (🎯T114): pass BULLSEYE_T3_PLUGIN=1 to enable it in
+# the supervised daemon. Anything else renders it off.
+EXTRA_ENV=""
+case "${BULLSEYE_T3_PLUGIN:-}" in
+  1|true|TRUE|yes|on) EXTRA_ENV=',BULLSEYE_T3_PLUGIN="1"' ;;
+esac
+
 rm -f "$DEST"
-sed "s|@REPO@|$REPO|g" "$TEMPLATE" >"$DEST"
+sed -e "s|@REPO@|$REPO|g" -e "s|@EXTRA_ENV@|$EXTRA_ENV|g" "$TEMPLATE" >"$DEST"
 echo "rendered $DEST (from $TEMPLATE)"
 
 if [ "${SUPERVISOR_SKIP_CTL:-}" = 1 ]; then

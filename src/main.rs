@@ -101,10 +101,13 @@ async fn main() -> SdkResult<()> {
         let serve_args = &rest[1..];
         if has_flag(serve_args, "--help") {
             println!(
-                "bullseye serve [--addr HOST:PORT]\n\
+                "bullseye serve [--addr HOST:PORT] [--t3-plugin]\n\
                  \n\
                  Start the HTTP MCP server. Endpoint: /mcp\n\
                  Default address: {DEFAULT_SERVE_ADDR} (override with --addr or BULLSEYE_ADDR)\n\
+                 --t3-plugin (or BULLSEYE_T3_PLUGIN=1) also serves the T3 Code sidebar\n\
+                 panel WebSocket at /plugins/t3 on the same listener (off by default;\n\
+                 loopback only).\n\
                  Commit mode (process-wide): BULLSEYE_COMMIT=1 and optional\n\
                  BULLSEYE_INTEGRATION_REF=refs/heads/master, or --commit-mode before serve.\n\
                  \n\
@@ -124,7 +127,15 @@ async fn main() -> SdkResult<()> {
         let addr = flag_value(serve_args, "--addr")
             .or_else(|| std::env::var("BULLSEYE_ADDR").ok())
             .unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_string());
-        return serve_http(&addr).await;
+        let t3_plugin = has_flag(serve_args, "--t3-plugin")
+            || match bullseye::t3_plugin::enabled_from_env() {
+                Ok(on) => on,
+                Err(msg) => {
+                    eprintln!("serve: {msg}");
+                    process::exit(1);
+                }
+            };
+        return serve_http(&addr, t3_plugin).await;
     }
 
     // 🎯T77: from here down we are a CLI, so behave like one when a
@@ -311,9 +322,12 @@ fn print_help() {
     );
     println!();
     println!("USAGE:");
-    println!("    bullseye serve [--addr HOST:PORT]");
+    println!("    bullseye serve [--addr HOST:PORT] [--t3-plugin]");
     println!("                               Start the HTTP MCP server (default 127.0.0.1:18743,");
-    println!("                               endpoint /mcp; env BULLSEYE_ADDR)");
+    println!("                               endpoint /mcp; env BULLSEYE_ADDR). --t3-plugin or");
+    println!(
+        "                               BULLSEYE_T3_PLUGIN=1 adds the T3 panel at /plugins/t3"
+    );
     println!(
         "    bullseye --commit-mode serve   # or BULLSEYE_COMMIT=1 — process-wide commit mode"
     );
@@ -1267,13 +1281,13 @@ fn cli_apply(args: &[String]) -> Result<String, String> {
 }
 
 /// Flags `bullseye serve` accepts.
-const SERVE_FLAGS: &[(&str, bool)] = &[("--addr", true), ("--help", false)];
+const SERVE_FLAGS: &[(&str, bool)] = &[("--addr", true), ("--t3-plugin", false), ("--help", false)];
 
 /// Run the HTTP MCP server until terminated (🎯T78).
 ///
 /// Same handler and same `server_details` as the stdio path — only the
 /// transport differs, which is what keeps the two surfaces honest.
-async fn serve_http(addr: &str) -> SdkResult<()> {
+async fn serve_http(addr: &str, t3_plugin: bool) -> SdkResult<()> {
     let (host, port) = match addr.rsplit_once(':') {
         Some((h, p)) => match p.parse::<u16>() {
             Ok(port) => (h.to_string(), port),
@@ -1288,6 +1302,13 @@ async fn serve_http(addr: &str) -> SdkResult<()> {
         }
     };
 
+    // 🎯T114: the panel endpoint serves an unauthenticated local ledger, so
+    // refuse to pair it with a non-loopback listener rather than expose it.
+    if t3_plugin && let Err(msg) = bullseye::t3_plugin::require_loopback(&host) {
+        eprintln!("serve: {msg}");
+        process::exit(1);
+    }
+
     // 🎯T35 event-path consumer.
     #[cfg(feature = "github-issues")]
     bullseye::github_issues::http::maybe_spawn_background_from_env();
@@ -1296,9 +1317,15 @@ async fn serve_http(addr: &str) -> SdkResult<()> {
         "bullseye {} serving MCP on http://{host}:{port}/mcp",
         bullseye::version::VERSION
     );
+    if t3_plugin {
+        eprintln!(
+            "bullseye T3 panel endpoint enabled on ws://{host}:{port}{}",
+            bullseye::t3_plugin::PATH
+        );
+    }
     eprintln!("{}", bullseye::commit_mode::startup_status_line());
 
-    let server = hyper_server::create_server(
+    let mut server = hyper_server::create_server(
         server_details(),
         TargetHandler.to_mcp_server_handler(),
         HyperServerOptions {
@@ -1307,6 +1334,9 @@ async fn serve_http(addr: &str) -> SdkResult<()> {
             ..Default::default()
         },
     );
+    if t3_plugin {
+        server = server.with_route(bullseye::t3_plugin::PATH, bullseye::t3_plugin::route());
+    }
     server.start().await
 }
 

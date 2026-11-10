@@ -375,6 +375,11 @@ fn walk_up_within(start: PathBuf, stop: &Path) -> Option<PathBuf> {
 /// shadow tree. A path-keyed ledger belonging to a single repo is moved
 /// to the repo-keyed location when found (see [`adopt_path_keyed`]).
 pub fn discover_external(root: &Path, cwd: &Path) -> Option<PathBuf> {
+    find_external(root, cwd, true)
+}
+
+/// [`discover_external`] with the adoption step switched by `adopt`.
+fn find_external(root: &Path, cwd: &Path, adopt: bool) -> Option<PathBuf> {
     let ident = repo_identity::identify(cwd);
     if let Some(ident) = &ident
         && let Some(found) =
@@ -384,8 +389,8 @@ pub fn discover_external(root: &Path, cwd: &Path) -> Option<PathBuf> {
     }
     let legacy = walk_up_within(shadow_path(root, cwd), root)?;
     match &ident {
-        Some(ident) => Some(adopt_path_keyed(root, ident, cwd, legacy)),
-        None => Some(legacy),
+        Some(ident) if adopt => Some(adopt_path_keyed(root, ident, cwd, legacy)),
+        _ => Some(legacy),
     }
 }
 
@@ -492,6 +497,15 @@ pub fn discover_anywhere(cwd: &Path) -> Option<PathBuf> {
         return Some(p);
     }
     discover_external(&external_root(), cwd)
+}
+
+/// [`discover_anywhere`] for observers that must not write (🎯T114).
+///
+/// Finds the same ledger, but a path-keyed ledger is reported where it
+/// lies instead of being moved to its repo-keyed home; the next
+/// mutating tool call performs that tidy-up.
+pub fn discover_anywhere_readonly(cwd: &Path) -> Option<PathBuf> {
+    discover(cwd).or_else(|| find_external(&external_root(), cwd, false))
 }
 
 /// Target path for a *new* targets file at the requested location.
