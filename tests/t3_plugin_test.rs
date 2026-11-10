@@ -14,6 +14,7 @@
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -28,6 +29,9 @@ const BIN: &str = env!("CARGO_BIN_EXE_bullseye");
 const CHANGE_DEADLINE: Duration = Duration::from_secs(15);
 /// Long enough for several polls to have passed unnoticed.
 const QUIET_WINDOW: Duration = Duration::from_millis(2500);
+
+// Reserve a free address through child bind; parallel launches must not reuse the released port.
+static START_LOCK: Mutex<()> = Mutex::new(());
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -47,6 +51,7 @@ struct Daemon {
 impl Daemon {
     /// `args` follow `serve --addr 127.0.0.1:<port>`; `env` is extra.
     fn start(args: &[&str], env: &[(&str, &str)]) -> Daemon {
+        let _startup = START_LOCK.lock().expect("startup lock");
         let sandbox = TempDir::new().expect("sandbox");
         let port = free_port();
         let mut cmd = Command::new(BIN);
@@ -56,18 +61,24 @@ impl Daemon {
             .env("BULLSEYE_DATA_DIR", sandbox.path().join("data"))
             .env("HOME", sandbox.path())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(std::fs::File::create(sandbox.path().join("daemon.log")).expect("log"));
         for (k, v) in env {
             cmd.env(k, v);
         }
         let child = cmd.spawn().expect("spawn bullseye serve");
-        let daemon = Daemon {
+        let mut daemon = Daemon {
             child,
             port,
             sandbox,
         };
         let deadline = Instant::now() + Duration::from_secs(20);
         while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(
+                daemon.child.try_wait().expect("child status").is_none(),
+                "daemon exited before listening: {}",
+                std::fs::read_to_string(daemon.sandbox.path().join("daemon.log"))
+                    .unwrap_or_default()
+            );
             assert!(Instant::now() < deadline, "daemon never listened");
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -137,7 +148,13 @@ impl Daemon {
     }
 
     fn connect(&self) -> Client {
-        Client::connect(self.port, None).expect("handshake")
+        Client::connect(self.port, None).unwrap_or_else(|error| {
+            panic!(
+                "handshake on {}: {error}; daemon log: {}",
+                self.port,
+                std::fs::read_to_string(self.sandbox.path().join("daemon.log")).unwrap_or_default()
+            );
+        })
     }
 }
 
