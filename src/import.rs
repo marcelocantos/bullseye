@@ -168,6 +168,7 @@ pub fn parse_markdown(input: &str) -> Result<TargetsFile, String> {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             };
 
             if let Some(ref parent_id) = fields.parent_ref {

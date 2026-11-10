@@ -137,6 +137,7 @@ pub fn target_from_issue(issue: &MasterIssue, today: NaiveDate) -> (String, Targ
         owned_by: None,
         postponed_until: None,
         postpone_predicate: None,
+        due: None,
     };
     (id, t)
 }

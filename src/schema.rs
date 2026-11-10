@@ -327,6 +327,13 @@ pub struct Target {
     /// surfaces it but never interprets it. 🎯T50.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postpone_predicate: Option<String>,
+
+    /// Calendar date the target is due (🎯T116). A deadline, not a
+    /// gate: it never affects the frontier, only how views flag and
+    /// order work. Legal on any status — on a terminal target it is
+    /// history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due: Option<NaiveDate>,
 }
 
 /// A cross-repo edge — a link from a target in this repo to a target

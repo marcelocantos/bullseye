@@ -254,6 +254,7 @@ fn summary_stale_parent_all_children_achieved() {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
     }
@@ -300,6 +301,7 @@ fn summary_shows_grouped_children() {
             owned_by: None,
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
         },
     );
     file.targets.get_mut("T1").unwrap().depends_on = vec!["T1.1".to_string()];

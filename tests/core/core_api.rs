@@ -45,6 +45,7 @@ fn t45_commit_track_returns_envelope_and_frontier() {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     })
     .expect("commit track should succeed");
     let out = text_from_call_result(result);
@@ -160,6 +161,7 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     })
     .expect("track");
     let created_text = text_from_call_result(created);
@@ -194,6 +196,7 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     })
     .expect("achieve");
     assert!(text_from_call_result(achieved).contains("op: achieve"));
@@ -227,6 +230,7 @@ fn t45_commit_achieve_and_reopen_roundtrip() {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     })
     .expect("reopen");
     assert!(text_from_call_result(reopened).contains("op: reopen"));

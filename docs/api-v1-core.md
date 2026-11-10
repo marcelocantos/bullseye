@@ -134,7 +134,7 @@ Two rules that are load-bearing rather than incidental:
 Patchable fields: `name`, `status`, `value`, `cost`, `actual_cost`,
 `acceptance`, `context`, `tags`, `depends_on`, `blocks`, `origin`,
 `child_of`, `attestation`, `reason`, `owner`, `postponed_until`,
-`postpone_predicate`, plus `clear` (a list of fields to reset — omission
+`postpone_predicate`, `due` (calendar deadline, 🎯T116), plus `clear` (a list of fields to reset — omission
 means "leave alone", so `clear` is how a field becomes nothing) and
 `if_status` (a precondition: refuse unless the target has that status).
 

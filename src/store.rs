@@ -568,6 +568,7 @@ fn write_starter_file(path: &Path, project_name: &str) -> Result<(), String> {
             owned_by: None,
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
         },
     );
 
@@ -1487,6 +1488,7 @@ mod header_tests {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
         TargetsFile {
@@ -1609,6 +1611,7 @@ mod t41_hash_tests {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
         TargetsFile {

@@ -201,6 +201,7 @@ mod tests {
             owned_by: None,
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
             achieved: None,
         }
     }

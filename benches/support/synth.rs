@@ -355,6 +355,7 @@ pub fn ledger(seed: u64, shape: &Shape) -> TargetsFile {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
     }

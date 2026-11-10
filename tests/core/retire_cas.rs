@@ -130,6 +130,7 @@ fn achieve_with_stale_base_refuses_and_leaves_target_identified() {
         tail: None,
         owner: None,
         base: Some(stale_base.into()),
+        due: None,
     })
     .expect_err("stale base must refuse");
 

@@ -159,6 +159,7 @@ fn concurrent_mutations_do_not_lose_updates() {
                                 owned_by: None,
                                 postponed_until: None,
                                 postpone_predicate: None,
+                                due: None,
                             },
                         );
                         Ok(())
@@ -243,6 +244,7 @@ fn load_serves_fresh_disk_after_concurrent_achieve() {
                         owned_by: None,
                         postponed_until: None,
                         postpone_predicate: None,
+                        due: None,
                     },
                 );
                 Ok::<(), String>(())

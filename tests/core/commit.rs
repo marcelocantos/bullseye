@@ -504,6 +504,7 @@ fn retire_refuses_open_dependencies_same_as_achieve() {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     })
     .expect_err("op=achieve must refuse an open blocker");
     let achieve_msg = format!("{achieve:?}");
@@ -937,6 +938,7 @@ fn achieve_requires_and_persists_attestation() {
             tail: None,
             owner: None,
             base: None,
+            due: None,
         });
         assert!(
             result.is_err(),
@@ -1895,4 +1897,55 @@ fn t74_14_revert_of_non_achieved_target_yields_validation_not_invalid_args() {
     );
 
     config::set_external_root_override(None);
+}
+
+/// 🎯T116: a due date is set, rejected when malformed, cleared with an
+/// empty string through `commit op=track`, and reachable through `apply`
+/// (`due` / `clear: [due]`). It never gates the frontier.
+#[test]
+fn t116_due_date_round_trips_through_track_and_apply() {
+    use bullseye::handler::{handle_apply, handle_commit};
+
+    let (_tmp, _shadow, path, cwd) = t64_repo("t116-due");
+    let due_of = || store::load(&path).unwrap().targets["T1"].due;
+
+    let mut set = t64_commit(&cwd, "track");
+    set.id = Some("T1".into());
+    set.due = Some("2026-12-24".into());
+    handle_commit(set).expect("setting due should succeed");
+    assert_eq!(due_of(), chrono::NaiveDate::from_ymd_opt(2026, 12, 24));
+    assert!(
+        graph::frontier(&store::load(&path).unwrap())
+            .iter()
+            .any(|t| t.id == "T1"),
+        "a due date is not a postponement",
+    );
+
+    let mut bad = t64_commit(&cwd, "track");
+    bad.id = Some("T1".into());
+    bad.due = Some("24/12/2026".into());
+    let err = handle_commit(bad).expect_err("malformed due must be refused");
+    assert!(err.to_string().contains("YYYY-MM-DD"), "{err}");
+    assert_eq!(due_of(), chrono::NaiveDate::from_ymd_opt(2026, 12, 24));
+
+    let mut clear = t64_commit(&cwd, "track");
+    clear.id = Some("T1".into());
+    clear.due = Some(String::new());
+    handle_commit(clear).expect("clearing due should succeed");
+    assert_eq!(due_of(), None);
+
+    let apply = |fragment: &str| {
+        handle_apply(bullseye::tools::ApplyTool {
+            cwd: cwd.clone(),
+            fragment: fragment.into(),
+            base: None,
+            reason: None,
+        })
+    };
+    apply("targets: {T1: {due: 2027-01-02}}").expect("apply due");
+    assert_eq!(due_of(), chrono::NaiveDate::from_ymd_opt(2027, 1, 2));
+    apply("targets: {T1: {clear: [due]}}").expect("apply clear due");
+    assert_eq!(due_of(), None);
+
+    bullseye::config::set_external_root_override(None);
 }

@@ -234,6 +234,7 @@ fn mutation_does_not_create_yaml_only_git_commit() {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     })
     .expect("track must succeed");
     let text = text_from_call_result(result);

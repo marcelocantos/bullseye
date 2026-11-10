@@ -336,6 +336,7 @@ fn validate_flags_active_parent_missing_dotted_child() {
             owned_by: None,
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
         },
     );
 

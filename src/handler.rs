@@ -480,24 +480,27 @@ fn require_id(id: Option<String>, op: &str) -> Result<String, CallToolError> {
 /// Unified mutation path: the named verbs, each sugar over `apply`.
 pub fn handle_commit(t: crate::tools::CommitTool) -> ToolResult {
     match t.op.as_str() {
-        "track" => handle_put(crate::tools::PutTool {
-            reason: t.reason.clone(),
-            cwd: t.cwd,
-            id: t.id,
-            child_of: t.child_of,
-            name: t.name,
-            value: t.value,
-            cost: t.cost,
-            acceptance: t.acceptance,
-            checks: t.checks,
-            adopt_command_checks: t.adopt_command_checks,
-            context: t.context,
-            status: t.status,
-            depends_on: t.depends_on,
-            blocks: t.blocks,
-            origin: t.origin,
-            tags: t.tags,
-        }),
+        "track" => handle_put_due(
+            crate::tools::PutTool {
+                reason: t.reason.clone(),
+                cwd: t.cwd,
+                id: t.id,
+                child_of: t.child_of,
+                name: t.name,
+                value: t.value,
+                cost: t.cost,
+                acceptance: t.acceptance,
+                checks: t.checks,
+                adopt_command_checks: t.adopt_command_checks,
+                context: t.context,
+                status: t.status,
+                depends_on: t.depends_on,
+                blocks: t.blocks,
+                origin: t.origin,
+                tags: t.tags,
+            },
+            t.due.as_deref(),
+        ),
         "block" => {
             let id = t.id.ok_or_else(|| {
                 tool_err(api::format_error(
@@ -878,6 +881,9 @@ pub fn handle_list(t: crate::tools::ListTool) -> ToolResult {
                     ));
                 }
             }
+            if let Some(due) = target.due {
+                out.push_str(&format!("  due: {due}\n"));
+            }
             if let Some(reason) = &target.set_aside_reason {
                 out.push_str(&format!("  reason: {reason}\n"));
             }
@@ -957,6 +963,13 @@ fn handle_get(t: crate::tools::GetTool) -> ToolResult {
 }
 
 pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
+    handle_put_due(t, None)
+}
+
+/// `track` with the commit-only `due` parameter (🎯T116): `None` leaves
+/// the date alone, an empty string clears it, anything else must be a
+/// calendar date.
+fn handle_put_due(t: crate::tools::PutTool, due: Option<&str>) -> ToolResult {
     // Sugar over `apply` (🎯T76). `track` was always an upsert; the
     // engine is now the only thing that knows how to perform one, so
     // this reduces to naming the target and forwarding the fields.
@@ -991,6 +1004,21 @@ pub fn handle_put(t: crate::tools::PutTool) -> ToolResult {
         reason: t.reason,
         ..Default::default()
     };
+    let mut frag = frag;
+    match due.map(str::trim) {
+        None => {}
+        Some("") => frag.clear = Some(vec!["due".to_string()]),
+        Some(s) => {
+            frag.due = Some(
+                chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+                    tool_err(api::format_error(
+                        api::ErrorCode::InvalidArgs,
+                        format!("due must be YYYY-MM-DD: {e}"),
+                    ))
+                })?,
+            )
+        }
+    }
     commit_sugar_adopting(&t.cwd, key, frag, "track", t.adopt_command_checks, None)
 }
 
@@ -2393,6 +2421,7 @@ targets:
             tail: None,
             owner: None,
             base: None,
+            due: None,
         })
         .expect_err("re-achieve with a new attestation must be refused");
         let msg = format!("{err:?}");
@@ -2699,6 +2728,7 @@ targets:
             owned_by: None,
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
         };
         let err = check_target_no_envelope_leaks("T99", &target).unwrap_err();
         assert!(err.contains("T99.cross_depends[0].note"), "got: {err}");
@@ -2826,6 +2856,7 @@ targets:
             tail: None,
             owner: None,
             base: None,
+            due: None,
         })
     }
 

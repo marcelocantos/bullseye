@@ -350,6 +350,7 @@ pub fn subdivide_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
     }
@@ -479,6 +480,7 @@ pub fn t28_repo_with_branched_id() -> tempfile::TempDir {
                     owned_by: None,
                     postponed_until: None,
                     postpone_predicate: None,
+                    due: None,
                 },
             );
         }
@@ -542,6 +544,7 @@ pub fn t64_commit(cwd: &str, op: &str) -> bullseye::tools::CommitTool {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     }
 }
 

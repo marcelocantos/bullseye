@@ -39,6 +39,7 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
             }),
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
         },
     );
     targets.insert(
@@ -66,6 +67,7 @@ fn t43_owned_by_excludes_from_frontier_but_blocks_dependents() {
             owned_by: None,
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
         },
     );
     let file = TargetsFile {
@@ -144,6 +146,7 @@ fn t43_assign_and_unassign_via_commit() {
         tail: None,
         owner: Some("bob".to_string()),
         base: None,
+        due: None,
     })
     .expect("assign");
     let out = text_from_call_result(assign);
@@ -182,6 +185,7 @@ fn t43_assign_and_unassign_via_commit() {
         tail: None,
         owner: None,
         base: None,
+        due: None,
     })
     .expect("unassign");
     assert!(text_from_call_result(unassign).contains("op: unassign"));

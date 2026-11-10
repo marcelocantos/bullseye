@@ -98,6 +98,8 @@ pub struct Fragment {
     pub postponed_until: Option<NaiveDate>,
     /// Opaque agent-evaluated wake condition.
     pub postpone_predicate: Option<String>,
+    /// Calendar due date (🎯T116). A deadline, not a frontier gate.
+    pub due: Option<NaiveDate>,
     /// Precondition: refuse unless the target currently has this
     /// status. Complements the file-level `base` hash with a
     /// per-target check, and lets a verb like `reopen` insist that it
@@ -115,6 +117,7 @@ pub const CLEARABLE_FIELDS: &[&str] = &[
     "owner",
     "postponed_until",
     "postpone_predicate",
+    "due",
     "actual_cost",
     "context",
     "tags",
@@ -209,6 +212,10 @@ pub const FIELD_HELP: &[FieldHelp] = &[
     FieldHelp {
         name: "postpone_predicate",
         blurb: "opaque agent-evaluated wake condition",
+    },
+    FieldHelp {
+        name: "due",
+        blurb: "calendar due date (YYYY-MM-DD); a deadline, not a frontier gate",
     },
     FieldHelp {
         name: "if_status",
@@ -675,6 +682,9 @@ fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
     if frag.checks.as_ref().is_some_and(|v| v != &target.checks) {
         return true;
     }
+    if frag.due.is_some_and(|v| target.due != Some(v)) {
+        return true;
+    }
     if frag
         .context_append
         .as_ref()
@@ -725,6 +735,7 @@ fn fragment_changes_content(target: &Target, frag: &Fragment) -> bool {
                 "owner" => target.owned_by.is_some(),
                 "postponed_until" => target.postponed_until.is_some(),
                 "postpone_predicate" => target.postpone_predicate.is_some(),
+                "due" => target.due.is_some(),
                 "actual_cost" => target.actual_cost.is_some(),
                 "context" => !target.context.is_empty(),
                 "tags" => !target.tags.is_empty(),
@@ -970,6 +981,7 @@ pub fn apply_with_gate(
                 owned_by: None,
                 postponed_until: frag.postponed_until,
                 postpone_predicate: frag.postpone_predicate.clone(),
+                due: frag.due,
             };
             if to == Status::Achieved
                 && let Some(note) = target.attestation.clone()
@@ -1051,6 +1063,9 @@ pub fn apply_with_gate(
             if let Some(v) = &frag.postpone_predicate {
                 target.postpone_predicate = Some(v.clone());
             }
+            if let Some(v) = frag.due {
+                target.due = Some(v);
+            }
             if let Some(owner) = &frag.owner {
                 if !owner.trim().is_empty() && to.is_terminal() {
                     return Err(ApplyError::new(
@@ -1077,6 +1092,7 @@ pub fn apply_with_gate(
                         "owner" => target.owned_by = None,
                         "postponed_until" => target.postponed_until = None,
                         "postpone_predicate" => target.postpone_predicate = None,
+                        "due" => target.due = None,
                         "actual_cost" => target.actual_cost = None,
                         "context" => target.context = String::new(),
                         "tags" => target.tags.clear(),

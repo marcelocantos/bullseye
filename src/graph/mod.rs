@@ -66,6 +66,7 @@ pub(crate) mod test_support {
             owned_by: None,
             postponed_until: None,
             postpone_predicate: None,
+            due: None,
         }
     }
 }

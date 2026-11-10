@@ -43,6 +43,7 @@ fn classified_fields(target: &Target) -> ([&'static str; 6], Vec<&'static str>) 
         owned_by: _,
         postponed_until: _,
         postpone_predicate: _,
+        due: _,
     } = target;
     let scoped = [
         "set_aside_reason",
@@ -68,6 +69,7 @@ fn classified_fields(target: &Target) -> ([&'static str; 6], Vec<&'static str>) 
         "strategy",
         "origin",
         "discovered",
+        "due",
     ];
     (scoped, stable)
 }
@@ -102,6 +104,7 @@ fn all_persisted_fields_classified_and_status_fields_share_the_schema_table() {
     });
     target.postponed_until = target.achieved;
     target.postpone_predicate = Some("wake".into());
+    target.due = target.achieved;
     target.checks = vec![]; // Empty is an intentional default; the field is still classified.
     let (scoped, stable) = classified_fields(target);
     let table: HashSet<_> = STATUS_SCOPED_FIELDS.iter().map(|f| f.name).collect();

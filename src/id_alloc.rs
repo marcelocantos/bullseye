@@ -606,6 +606,7 @@ mod top_level_id_tests {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
         let id = next_top_level_id(&file, &HashSet::new());

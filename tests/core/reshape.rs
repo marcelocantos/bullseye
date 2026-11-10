@@ -155,6 +155,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     owned_by: None,
                     postponed_until: None,
                     postpone_predicate: None,
+                    due: None,
                 },
             );
         }
@@ -184,6 +185,7 @@ fn reshape_choke_point_hoisting_via_blocks_listing_multiple_downstreams() {
                     owned_by: None,
                     postponed_until: None,
                     postpone_predicate: None,
+                    due: None,
                 },
             );
         }

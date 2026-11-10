@@ -245,6 +245,7 @@ fn id_alloc_memoises_until_refs_move() {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
         store::save(&yaml, &file).unwrap();
@@ -320,6 +321,7 @@ fn id_alloc_deleted_targets_remain_reserved() {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
         store::save(&path, &file).unwrap();
@@ -438,6 +440,7 @@ fn id_history_incremental_scan_after_new_commit() {
                 owned_by: None,
                 postponed_until: None,
                 postpone_predicate: None,
+                due: None,
             },
         );
         store::save(&yaml, &file).unwrap();

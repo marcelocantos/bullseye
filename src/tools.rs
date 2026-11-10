@@ -106,7 +106,10 @@ pub struct QueryTool {
         achieve (retire with required attestation), defer (set_aside with reason), \
         reopen (revert achieved), \
         assign (mark owned-by-another: id + owner + reason — excludes from frontier without \
-        unblocking dependents), unassign (clear ownership exclusion). \
+        unblocking dependents), unassign (clear ownership exclusion), \
+        postpone (hide from the frontier until postponed_until and/or postpone_predicate), \
+        wake (clear a postponement). Set or clear a calendar deadline with track + `due` \
+        (YYYY-MM-DD; empty string clears) — due never gates the frontier. \
         Successful results include a structured header (ok, op, ids, changed, frontier, file). \
         On track create, the allocated ID is knowable ONLY from that header (`ids:`) — never \
         predict the next ID by scanning the file (TOCTOU under concurrency). \
@@ -249,6 +252,11 @@ pub struct CommitTool {
     /// the same way as `bullseye_apply`'s `base` (🎯T96).
     #[serde(default)]
     pub base: Option<String>,
+    /// Due date (YYYY-MM-DD) for op=track (🎯T116); an empty string
+    /// clears it. A deadline shown and ordered by views, never a
+    /// frontier gate — use op=postpone to hide a target until a date.
+    #[serde(default)]
+    pub due: Option<String>,
 }
 
 /// Emit a sawmill verification plan for a target's checks (does not run them).
@@ -1038,7 +1046,8 @@ pub struct SyncPrioritiesTool {
         a CAS token: a mismatch is code=conflict, meaning the ledger moved under you. \
         Patchable fields: name, status, value, cost, actual_cost, acceptance, checks, context, \
         context_append, context_replace, tags, depends_on, blocks, origin, child_of, attestation, reason, owner, \
-        postponed_until, postpone_predicate, `clear` (a list of fields to reset to empty — \
+        postponed_until, postpone_predicate, due (calendar deadline YYYY-MM-DD; never gates \
+        the frontier), `clear` (a list of fields to reset to empty — \
         omitting a field means leave it alone, so `clear` is how a field becomes nothing), \
         and `if_status` (a precondition: refuse unless the target currently has that \
         status). \
