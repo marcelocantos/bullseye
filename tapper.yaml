@@ -23,4 +23,6 @@ push:
   skip_checksum: true
   update_readme_table: true
 test: 'system bin/"bullseye", "--version"'
-install: 'bin.install "bullseye" => "bullseye"'
+install: |
+  bin.install "bullseye" => "bullseye"
+  prefix.install "THIRDPARTY.txt"
