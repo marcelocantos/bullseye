@@ -11,6 +11,7 @@ VERSION="$(release_version)"
 DIST="$ROOT/dist"
 STAGE="$DIST/stage"
 use_rustup_toolchain
+uv run --script scripts/bundle-licenses.py --check
 
 rm -rf "$DIST"
 mkdir -p "$STAGE"
@@ -23,7 +24,7 @@ build_one() {
 	cargo "$builder" --release --target "$triple"
 
 	cp "target/${triple}/release/bullseye" "$STAGE/bullseye"
-	tar -czf "$DIST/$asset" -C "$STAGE" bullseye -C "$ROOT" LICENSE NOTICE README.md
+	tar -czf "$DIST/$asset" -C "$STAGE" bullseye -C "$ROOT" LICENSE NOTICE THIRDPARTY.txt README.md
 	rm -f "$STAGE/bullseye"
 	echo "wrote dist/$asset"
 }

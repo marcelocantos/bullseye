@@ -10,15 +10,15 @@ cargo build --no-default-features   # slim: skips bundled libsqlite3-sys
 ```
 
 Default features enable `sqlite` (rusqlite + bundled SQLite) for
-`bullseye sync-priorities` / `bullseye_sync_priorities`. Homebrew and
-CI always use defaults. Use `--no-default-features` only for faster
+`bullseye sync-priorities` / `bullseye_sync_priorities`. Release packages and
+Homebrew use defaults. Use `--no-default-features` only for faster
 local clean rebuilds of the MCP core; see
 `docs/build-perf-2026-04-11.md`.
 
 ## Installation
 
 For T3 Code sidebar panels, use a T3 build with external panel support and
-Bullseye with panel support. Set `t3_plugin: true` in
+Bullseye v0.61.0+ for YAML startup configuration. Set `t3_plugin: true` in
 `~/.config/bullseye/config.yaml`, then run `bullseye serve` or
 `supervisor/install.sh`. The same listener then serves
 `/mcp` and `/plugins/t3`; the panel endpoint is disabled by default.
@@ -54,6 +54,10 @@ but no MCP client can talk to it.
    supervisor/install.sh     # from a clone; renders supervisor.d/bullseye.ini
    lsof -iTCP:18743 -sTCP:LISTEN    # confirm it is listening
    ```
+   These examples use the default address. If `addr` is customized in
+   your configuration file, get it with `bullseye serve --print-addr`
+   and use that address/port for verification and every client URL below.
+   `BULLSEYE_PORT` remains an explicit installer override.
    **Do not probe `/mcp` with bare `curl`.** MCP answers JSON-RPC
    POSTs, so a plain GET returns nothing and looks like a dead server.
    This step is not optional: HTTP is the only transport.
@@ -85,8 +89,8 @@ but no MCP client can talk to it.
 4. **Restart the agent session.** MCP server registration only takes
    effect on the next session start. Tools added in this step are not
    visible to the running session.
-5. **Verify end-to-end.** First run `bullseye --version` — a v0.45.0+
-   binary prints `bullseye 0.45.0 (<12-hex>)` (crate version plus
+5. **Verify end-to-end.** First run `bullseye --version` — this release
+   prints `bullseye 0.61.0 (<12-hex>)` (crate version plus
    build provenance). Then in a fresh session call `bullseye_open`
    with `cwd` set to any project — it should return either a context
    summary, an init prompt for repos with no `bullseye.yaml`, or a
@@ -149,8 +153,9 @@ Server-level default for **creating** a new ledger only — not for discovery:
 
 | Source | How |
 |--------|-----|
-| CLI | `bullseye --default-location external` (MCP server start) |
+| Config | `default_location: external` or `in_repo` in the startup YAML |
 | Env | `BULLSEYE_DEFAULT_LOCATION=external` or `in_repo` |
+| CLI | `bullseye serve --default-location external` |
 
 Create tools (`bullseye_init`, `bullseye_open` when missing, `bullseye_import`) resolve location as:
 
@@ -172,7 +177,7 @@ error ending with this prompt — pass it to the user verbatim:
 > - **external** — shadow tree under `~/.local/share/bullseye/` (read-only repo, or personal use of bullseye).
 >
 > Call `bullseye_init` with `location: in_repo` or `location: external`.
-> Or set a server default: `--default-location external|in_repo` / env `BULLSEYE_DEFAULT_LOCATION`.
+> Or set `default_location: external` (or `in_repo`) in the startup config; override with `--default-location` / env `BULLSEYE_DEFAULT_LOCATION`.
 
 After the user answers, call `bullseye_init` with the chosen `location`
 (or rely on `default_location` if the host already set one). Subsequent
@@ -212,13 +217,15 @@ Unified reads. `view` defaults to `context`.
 | `id` | string | — | Required for `view=target` |
 | `filter` | string | `active` | For `view=list` |
 | `recent_days` | int | 14 | For `view=context` |
+| `format` | string | `text` | `json` returns complete typed records for `target` and `frontier` |
+| `model_class` | string | — | Frontier only: available executor capability (`economy`, `standard`, `frontier`) |
 | `momentum` / `frontier_details` | — | — | For `view=summary` |
 | `scope` / `nodes` / `seeds` / `expand` | — | — | For `view=graph` (🎯T57): status scope, explicit IDs, seed expansion — see [bullseye_graph](#bullseye_graph) |
 
 ### bullseye_commit (core)
 
 Unified writes. Ops: `track`, `block`, `split`, `achieve`, `defer`,
-`reopen`, `assign`, `unassign`, `postpone`, `wake`, `rehash`.
+`reopen`, `assign`, `unassign`, `postpone`, `wake`, `rehash`, `migrate-model-tags`.
 On create (`track`), `name` and `acceptance` are required; **value/cost optional**.
 `op=achieve` requires non-empty `attestation` (🎯T58).
 
@@ -234,6 +241,8 @@ direct dotted children of the parent.
 |-----------|------|-------------|
 | `cwd` | string | Working directory |
 | `op` | string | Operation name |
+| `models` | string | YAML/JSON execution/review preferences on track; empty clears |
+| `adopt_model_preferences` | bool | Explicitly acknowledge the first schema-v7 models block |
 | (op-specific) | — | Same fields as the shim tools (`id`, `name`, `acceptance`, `blocks`, `attestation`, `reason`, `parent`, `children`, `postponed_until`, `postpone_predicate`, …) |
 
 **Prose fields** (`name`, `acceptance`, `context`, `attestation`) are
@@ -266,6 +275,12 @@ or JSON in `fragment`). Fields you omit are left alone; targets you
 omit are never removed. Unknown fields are rejected. Full contract:
 [api-v1-core.md](api-v1-core.md#bullseye_apply-t76). `bullseye apply
 --help` lists every patchable field.
+
+`models` is a structured execute/review preference block inside a target's
+fragment; updates replace the entire block. `clear: [models]` inside that
+fragment removes it. The envelope's `adopt_model_preferences: true` is
+required before introducing the first block. CLI structured values use
+`-f FILE` or stdin rather than the scalar `--set` shorthand.
 
 **Prose fields** (`name`, `acceptance`, `context`, `attestation`) are
 markdown. Downstream renderers interpret HTML. Cite tags as entities
@@ -806,7 +821,9 @@ appropriate caution.
 ## bullseye.yaml schema
 
 ```yaml
-schema_version: 5          # required going forward; legacy files
+schema_version: 7          # v7 when models are present, v6 for command checks,
+                           # otherwise v5. Upgrade consumers before adopting.
+                           # Legacy files
                            # without it are accepted and stamped on
                            # next save. Bullseye refuses to load a
                            # file whose schema_version is higher than
@@ -822,6 +839,10 @@ targets:
     value: 8                              # Fibonacci (portfolio-scope input only)
     cost: 3                               # Fibonacci (portfolio-scope input only)
     actual_cost: 5                        # recorded on retirement (optional)
+    due: 2026-11-30                        # optional deadline; never blocks the frontier
+    models:                               # optional; requires schema v7 (v0.61.0+)
+      execute: {class: standard, effort: high}
+      review: {class: frontier}
     attestation: "cargo test green; SHA abc1234"  # required on achieve (🎯T58); free text, not formal proof
     acceptance:                           # verification contract (required):
       - CI green on all platforms         # prose describing what "done" looks like.
@@ -1118,7 +1139,9 @@ the old failure, the installed binary is older than this guide —
   [api-v1-core.md](api-v1-core.md).
 - **Commit mode (opt-in, 🎯T100).** Default is file-mode: mutating
 tools write `bullseye.yaml` and leave it dirty (🎯T73). To opt in for
-a fleet/shared clone, set `BULLSEYE_COMMIT=1` and optionally
+a fleet/shared clone, set `commit_mode: true` and optionally
+`integration_ref: refs/heads/master` in the YAML startup configuration.
+Environment overrides are `BULLSEYE_COMMIT=1` and
 `BULLSEYE_INTEGRATION_REF=refs/heads/master` on the CLI or on
 `bullseye serve` (or `bullseye --commit-mode serve`). Process-wide
 only — there is no per-call commit mode on the MCP API. External
@@ -1203,9 +1226,10 @@ All project tools take `cwd` = project root. Mutation results include
 `ids`, `changed`, and a refreshed `frontier` header. Errors include a
 stable `code=` token.
 ````
+
 ## Executor and reviewer preferences (🎯T107)
 
-Use the optional `models` block for dispatcher-readable preferences:
+With Bullseye v0.61.0+, use the optional `models` block for dispatcher-readable preferences:
 `execute` and `review` each carry `class: economy|standard|frontier`, optional
 `effort: low|medium|high|max`, and optional `pins: {provider: model-id-or-alias}`.
 Bullseye stores these and never routes work. Explicit caller pins win.

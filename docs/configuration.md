@@ -10,7 +10,9 @@ t3_plugin: true
 
 Then start with `bullseye serve`, or run `supervisor/install.sh` for the
 supervised service. The installed binary must support configuration files;
-older releases only understand the environment and flag mechanisms.
+older releases only understand the environment and flag mechanisms. Upgrade
+to v0.61.0 or later before using the updated supervisor installer, which
+requires `serve --print-addr`.
 
 Precedence, lowest to highest: **built-in defaults < YAML file < environment
 < command line**. Settings are read once at startup; restart after edits.

@@ -28,6 +28,10 @@ Then start the daemon. MCP is served over HTTP only — one supervised
 process for every agent on the machine, so startup cost is paid once
 rather than per session.
 
+The examples below use the default port. With a custom `addr` in your
+[configuration file](docs/configuration.md), use that address for client
+registration and listener verification too (`bullseye serve --print-addr`).
+
 ```bash
 supervisor/install.sh          # renders supervisor.d/bullseye.ini and starts it
 claude mcp add --scope user --transport http bullseye http://127.0.0.1:18743/mcp
@@ -125,6 +129,14 @@ Start with `bullseye serve`. Precedence is **defaults < config file <
 environment < command line**. `--config FILE` selects another file;
 `--no-config` bypasses files. See [all settings and overrides](docs/configuration.md)
 or [the example file](config.example.yaml).
+
+## Model preferences
+
+Targets can declare separate execution and review preferences using a
+first-class `models` block: capability class, optional effort and per-provider
+pins. Dispatchers read structured JSON; Bullseye records the preferences.
+See [model preferences and migration](docs/model-preferences.md), including
+the schema-v7 adoption acknowledgement and `--models` CLI flag (v0.61.0+).
 
 ## T3 Code sidebar panel (opt-in)
 
@@ -420,3 +432,5 @@ See [AGENTS.md](AGENTS.md) for architecture details.
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
+Release archives also include [third-party license texts](THIRDPARTY.txt);
+[NOTICE](NOTICE) describes the bundled components and regeneration check.

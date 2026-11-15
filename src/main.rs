@@ -154,6 +154,7 @@ async fn main() -> SdkResult<()> {
     if rest
         .first()
         .is_some_and(|s| !matches!(s.as_str(), "--help" | "--help-agent" | "--version"))
+        && !has_flag(&rest, "--help")
     {
         configure(overrides);
     }
@@ -314,7 +315,7 @@ fn print_help() {
         "    Default config: $XDG_CONFIG_HOME/bullseye/config.yaml or ~/.config/bullseye/config.yaml"
     );
     println!("    Precedence: defaults < config file < environment < command line");
-    println!("    bullseye serve [--addr HOST:PORT] [--t3-plugin]");
+    println!("    bullseye serve [startup overrides] [--print-addr]");
     println!("                               Start the HTTP MCP server (default 127.0.0.1:18743,");
     println!("                               endpoint /mcp; env BULLSEYE_ADDR). --t3-plugin or");
     println!(
@@ -325,13 +326,17 @@ fn print_help() {
     );
     println!("    bullseye open [--cwd DIR] [--location in_repo|external]");
     println!("    bullseye query --view VIEW [--cwd DIR] [--id ID] [--filter F]");
+    println!(
+        "                               [--format json] [--model-class economy|standard|frontier]"
+    );
     println!("    bullseye apply [--cwd DIR] (-f FILE | - | --id ID --set k=v ...)");
+    println!("                               The single write verb — see bullseye apply --help");
     println!("    bullseye restore --from REV --id ID[,ID] --reason TEXT [--cwd DIR]");
     println!(
         "    bullseye repair-context-indent --pre-repair-sha256 HEX --reason TEXT [--cwd DIR] [--dry-run]"
     );
-    println!("                               The single write verb — see bullseye apply --help");
     println!("    bullseye commit --op OP [flags]   # sugar over apply; see commit --help");
+    println!("                               [--models YAML] [--adopt-model-preferences]");
     println!("    bullseye plan-checks --id ID [--cwd DIR]");
     println!(
         "    bullseye convergence [--cwd DIR] [--skip-invariants] [--momentum ID=MULT,...]\n\
@@ -365,14 +370,27 @@ fn print_help() {
     println!("    --version             Print version");
     println!("    --help                Print this help");
     println!("    --help-agent          Print help and agent guide");
+    println!("    --config FILE         Select startup YAML (also BULLSEYE_CONFIG)");
+    println!(
+        "    --no-config           Bypass startup files; retain environment and CLI overrides"
+    );
+    println!("    --addr HOST:PORT      Override listener address");
+    println!("    --t3-plugin / --no-t3-plugin     Enable/disable the T3 panel endpoint");
+    println!("    --commit-mode / --no-commit-mode Enable/disable process-wide commit mode");
+    println!("    --data-dir PATH       Override the external ledger root");
+    println!("    --integration-ref REF Override the commit-mode integration ref");
+    println!("    --cache-ttl-secs N    Override cache lifetime (zero disables caching)");
     println!(
         "    --default-location L  Create default when location omitted (in_repo|external; 🎯T61)"
     );
     println!(
-        "                           Also: env BULLSEYE_DEFAULT_LOCATION. Discovery unchanged."
+        "                           Also: config default_location / env BULLSEYE_DEFAULT_LOCATION."
     );
     println!();
     println!("Core contract: docs/api-v1-core.md");
+    println!(
+        "Startup settings: docs/configuration.md (global flags precede commands; serve accepts them after)"
+    );
 }
 
 fn cli_exit(result: Result<String, String>) -> ! {
@@ -545,7 +563,7 @@ const COMMIT_FLAGS: &[(&str, bool)] = &[
 fn cli_commit(args: &[String]) -> Result<String, String> {
     if has_flag(args, "--help") || args.is_empty() {
         return Ok("bullseye commit --op OP [--cwd DIR] [fields]\n\
-             ops: track|block|split|achieve|defer|reopen|assign|unassign|postpone|wake|rehash\n\
+             ops: track|block|split|achieve|defer|reopen|assign|unassign|postpone|wake|rehash|migrate-model-tags\n\
              track:  --name NAME --acceptance A [--acceptance A2] [--id ID] [--child-of P]\n\
              \x20      [--checks YAML]  (executable checks, e.g.\n\
              \x20      '[{command: {run: cargo test --workspace}}]')\n\
@@ -1073,9 +1091,11 @@ fn apply_help() -> String {
          \x20   T55: {value: 8}         # patch an existing target\n\
          \x20   _new: {name: …, acceptance: [ … ]}   # `_` prefix allocates an ID\n\
          \x20 remove: [T99]\n\
+         \x20 adopt_model_preferences: true  # required for first schema-v7 models block\n\
          \n\
          Flag form:\n\
          \x20 bullseye apply --id T55 --set value=8 --set cost=5\n\
+         \x20 --adopt-model-preferences acknowledges first models adoption in either form\n\
          \n\
          Prose fields (name, acceptance, context, attestation) are markdown.\n\
          Downstream renderers interpret HTML. Cite tags as entities or code\n\

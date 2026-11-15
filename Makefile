@@ -29,6 +29,7 @@ gate:
 	@scripts/gate-attest.sh $(MAKE) --no-print-directory gate-checks
 
 gate-checks:
+	@uv run --script scripts/bundle-licenses.py --check
 	@log=$$(mktemp); \
 	  if cargo fmt --check >"$$log" 2>&1; then echo "✓ fmt"; \
 	  else echo "✗ fmt"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"

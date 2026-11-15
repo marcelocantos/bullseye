@@ -320,6 +320,14 @@ fn configuration_errors_are_actionable_and_can_be_bypassed() {
             .status
             .success()
     );
+    for subcommand in ["serve", "query", "commit", "apply", "run-checks"] {
+        let help = command(home.path())
+            .args([subcommand, "--help"])
+            .output()
+            .unwrap();
+        assert!(help.status.success(), "{subcommand}: {:?}", help.stderr);
+        assert!(String::from_utf8_lossy(&help.stdout).contains(subcommand));
+    }
 }
 
 #[test]

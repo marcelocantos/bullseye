@@ -124,7 +124,7 @@ fi
 if [[ "$SKIP_BREW" == false ]]; then
 	echo "release-publish: brew upgrade …" >&2
 	brew update
-	brew upgrade marcelocantos/tap/bullseye 2>/dev/null ||
+	brew upgrade marcelocantos/tap/bullseye ||
 		brew install marcelocantos/tap/bullseye
 	got="$(bullseye --version 2>/dev/null | awk '{print $2}')"
 	if [[ "$got" != "$VERSION" ]]; then

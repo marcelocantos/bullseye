@@ -81,7 +81,7 @@ pub const LOCATION_PROMPT: &str = "Create bullseye.yaml for this repo where?\n\
     - in_repo — commit bullseye.yaml into the repo (you own it, team uses bullseye).\n\
     - external — shadow tree under ~/.local/share/bullseye/ (read-only repo, or personal use of bullseye).\n\
     Call `bullseye_init` with `location: in_repo` or `location: external`.\n\
-    Or set a server default: `--default-location external|in_repo` / env `BULLSEYE_DEFAULT_LOCATION`.";
+    Or set `default_location: external` (or `in_repo`) in the startup config; override with `--default-location` / env `BULLSEYE_DEFAULT_LOCATION`.";
 
 /// Per-repo storage location. Supplied to create tools on first write;
 /// discovery afterwards is automatic from filesystem state.

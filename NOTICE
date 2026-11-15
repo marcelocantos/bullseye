@@ -4,6 +4,11 @@ Third-party notices
 This file attributes bundled and vendored third-party code shipped with
 bullseye. The project itself is Apache-2.0 (see LICENSE).
 
+The release archives include THIRDPARTY.txt with full dependency license
+texts and copyright notices, including the vendored files referenced below.
+Regenerate it with `uv run --script scripts/bundle-licenses.py` after
+installing cargo-bundle-licenses 5.0.0; the gate and packaging path check it.
+
 Vendored crates
 ---------------
 
@@ -34,9 +39,9 @@ binary. SQLite is in the public domain (https://sqlite.org/copyright.html).
 The amalgamation is not vendored in this tree; it arrives via crates.io
 at build time.
 
-Crate dependencies pulled from crates.io at build time carry their
-own licences in Cargo.lock / crates.io metadata and are not copied
-into this repository.
+Crate dependencies pulled from crates.io are statically linked into the
+binary. Their license texts are reproduced in THIRDPARTY.txt, derived from
+the locked dependency graphs for all three release platforms.
 
 WebSocket dependencies added for the T3 endpoint
 -----------------------------------------------

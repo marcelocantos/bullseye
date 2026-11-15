@@ -19,6 +19,22 @@ Snapshot as of 🎯T39.1 (dotted children are umbrella `depends_on`
 edges) on the T73 / T62–T72 base.
 Changes affecting the interaction surface, newest first:
 
+- **YAML startup configuration** (v0.61.0, 🎯T117). The default file is
+  `$XDG_CONFIG_HOME/bullseye/config.yaml` (fallback `~/.config/bullseye/config.yaml`).
+  Precedence is defaults < file < environment < CLI. `--config` selects a
+  file; `--no-config` bypasses files. Explicit false overrides disable
+  configured booleans. `serve --print-addr` resolves settings without binding.
+  The supervisor installer validates this address before stopping a listener.
+
+- **Structured model preferences** (v0.61.0, 🎯T107). Optional target `models`
+  has independent `execute`/`review` preferences, capability class,
+  optional effort and provider pins. Explicit caller pins win in the
+  dispatcher contract. Target/frontier JSON returns complete records;
+  frontier `model_class` filters minimum execution capability. The first
+  block requires explicit adoption of schema v7; unannotated ledgers retain
+  v5/v6. `migrate-model-tags` converts known legacy tags atomically,
+  preserving family aliases and lifecycle metadata. Bullseye never routes work.
+
 - **Dirty working tree warns instead of failing standing invariants**
   (🎯T75). The recommended `make bullseye` / `mk bullseye` hook treats
   non-ledger dirt as a loud warning (banner + file list, exit 0), not
@@ -778,7 +794,8 @@ Planned additions (not yet implemented):
 
 | Field | Status | Notes |
 |-------|--------|-------|
-| `schema_version` | Stable | New in v0.9.0. Required going forward; current value `5` (🎯T25). Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. v0.19.0 bumped 1→2 for the `observable` → `showcase` rename + retire-demo obligation; v0.20.0 bumped 2→3 for the new `set_aside` status enum value (🎯T18); v0.27.0 bumps 3→4 for the removal of `showcase` and `demonstration` (🎯T23); 🎯T25 bumps 4→5 for the removal of `kind`, `verifies`, `rework`, `retry_budget`, and `retries` (uniform-node model). Pre-v5 yaml files load unchanged — the retired keys are silently dropped on parse and stripped on the next save. |
+| `schema_version` | Stable | New in v0.9.0. Required going forward; maximum supported value `7` (🎯T107); saves use the lowest representable stamp: v5, v6 with command checks, v7 with model preferences. Absent on legacy files (treated as v1 on load and stamped on next save). Bullseye refuses to load files whose `schema_version` exceeds the binary's compiled `CURRENT_SCHEMA_VERSION` and prompts for `brew upgrade`. Incremented only on breaking schema changes. v0.19.0 bumped 1→2 for the `observable` → `showcase` rename + retire-demo obligation; v0.20.0 bumped 2→3 for the new `set_aside` status enum value (🎯T18); v0.27.0 bumps 3→4 for the removal of `showcase` and `demonstration` (🎯T23); 🎯T25 bumps 4→5 for the removal of `kind`, `verifies`, `rework`, `retry_budget`, and `retries` (uniform-node model). Pre-v5 yaml files load unchanged — the retired keys are silently dropped on parse and stripped on the next save. |
+| `models` | Fluid | v0.61.0 (🎯T107): optional execute/review capability, effort and provider pins. Presence requires v7 with explicit first-adoption acknowledgement; absent blocks are omitted. See docs/model-preferences.md. |
 | `targets` (map) | Stable | |
 | `last_evaluated` | Stable | |
 | `name` | Stable | |
@@ -814,6 +831,12 @@ Planned additions:
 | `--version` | Stable | |
 | `--help` | Stable | |
 | `--help-agent` | Stable | |
+| `serve [--addr HOST:PORT] [--t3-plugin]` | Fluid | HTTP MCP at /mcp; optional loopback T3 panel at /plugins/t3. |
+| `--config FILE`, `--no-config` | Fluid | v0.61.0: select/bypass default YAML startup configuration. Defaults < file < env < CLI. |
+| `--no-t3-plugin`, `--no-commit-mode` | Fluid | v0.61.0: explicit false startup overrides. |
+| `serve --print-addr` | Fluid | v0.61.0: print effective listener address without binding. |
+| `--models YAML`, `--adopt-model-preferences` | Fluid | v0.61.0: target preferences and schema-v7 first-adoption acknowledgement. |
+| `query --format json [--model-class CLASS]` | Fluid | v0.61.0: typed target/frontier records; capability filtering is frontier-only. |
 | (no args) | Stable | Bare invocation exits. `bullseye serve` is the only MCP transport |
 | `sync-priorities [--db PATH] [--root PATH] [--horizon STR] [--max-depth N]` | Fluid | New in v0.24.0. Cron-targetable subcommand that scans the workspace and upserts the portfolio frontier into a SQLite `targets_priorities` table. The flag set may evolve once the Protocol-app sync chain is live and real usage clarifies what's needed (e.g. multi-horizon banding, per-repo include/exclude). See 🎯T3.1. |
 | `github sync [--repo owner/name] [--label L] [--assignee A] [--pull-only] [--push-only] [--dry-run] [--cwd DIR]` | Fluid | New in v0.33.0. Mirrors GitHub issues ⇄ bullseye targets via the `gh` CLI: open issues become `GH<n>` targets, and target lifecycle (achieved/set-aside/revert) closes/reopens the issue. Two-way reconcile against a `.bullseye/github-sync.json` sidecar. The flag set may evolve as multi-repo mirroring lands. See 🎯T34. |

@@ -76,11 +76,16 @@ Jevons already consumes the field.
 ```sh
 bullseye commit --op track --id T1 \
   --models '{execute: {class: standard, effort: high}}' --adopt-model-preferences
-bullseye apply --id T1 --set 'models={review: {class: frontier}}'
+bullseye commit --op track --id T1 --models '{review: {class: frontier}}'
 bullseye query --view target --id T1 --format json
 bullseye query --view frontier --model-class standard --format json
-bullseye apply --id T1 --set 'clear=[models]'
+bullseye commit --op track --id T1 --models ''
 ```
+
+For structured apply, use a YAML/JSON fragment (`bullseye apply -f FILE`),
+for example `targets: {T1: {models: {review: {class: frontier}}}}` or
+`targets: {T1: {clear: [models]}}`. The `--set` shorthand accepts scalar
+values; structured blocks and lists belong in the fragment.
 
 MCP uses the same handlers: `bullseye_commit` takes a YAML/JSON string in
 `models`, `bullseye_apply` takes a structured `models` block inside `fragment`,

@@ -23,6 +23,11 @@ cargo build --no-default-features
 
 Rust edition 2024, toolchain 1.94+.
 
+The local gate and release packaging also require `uv` and
+`cargo install --locked cargo-bundle-licenses --version 5.0.0`.
+After dependency changes, regenerate `THIRDPARTY.txt` with
+`uv run --script scripts/bundle-licenses.py`; both paths refuse a stale bundle.
+
 Build-performance notes and tooling thresholds: `docs/build-perf-2026-04-11.md`.
 Tokio is feature-trimmed via `vendor/rust-mcp-sdk` + `vendor/rust-mcp-transport`
 patches (`[patch.crates-io]` in `Cargo.toml`) — see `vendor/README.md`.
